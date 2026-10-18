@@ -16,6 +16,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <cwchar>
+#include <cstdlib>
 #include <initializer_list>
 
 static HMODULE g_real = nullptr;
@@ -32,7 +33,12 @@ static bool g_patchCap = false;
 static bool g_cfg = false;
 static bool g_natives = false;
 static bool g_lpFlag = false;
+struct PokeDef { char cls[48]; unsigned off, val, mask; unsigned id; bool used; };
+static PokeDef g_pokes[8];
+static int g_traceLenFlag = 0;
+static int g_maxPlayers = 0;
 static bool g_forceCharFlag = false;
+static bool g_skipTut = false;
 static char g_findCls[64] = "";
 static bool g_engInfo = false;
 static int g_snap1 = 0, g_snap2 = 0;
@@ -128,6 +134,31 @@ static HANDLE WINAPI h_CMW(LPSECURITY_ATTRIBUTES a, BOOL b, LPCWSTR name) {
     return o_CMW(a, b, name);
 }
 
+
+// ---------------------------------------------------------------- caller discovery for a sent packet
+#define g_traceLen g_traceLenFlag
+static void LogCallers(const char* tag) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    BYTE* textLo = base + 0x1000; BYTE* textHi = base + 0x1000 + 0xf5fc71;
+    DWORD esp_val = 0;
+    __asm { mov esp_val, esp }
+    DWORD* sp = (DWORD*)esp_val;
+    char line[3000]; size_t k = _snprintf_s(line, _TRUNCATE, "callers: %s:", tag);
+    int n = 0;
+    __try {
+        for (int i = 0; i < 2048 && n < 60; i++) {
+            BYTE* v = (BYTE*)sp[i];
+            if (v < textLo || v >= textHi) continue;
+            // plausible return address: preceded by a CALL (E8 rel32 or FF /2)
+            bool call = (v[-5] == 0xE8) || (v[-2] == 0xFF && (v[-1] & 0x38) == 0x10) || (v[-3] == 0xFF && (v[-2] & 0x38) == 0x10) || (v[-6] == 0xFF && (v[-5] & 0x38) == 0x10);
+            if (!call) continue;
+            if (k + 20 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %lx", (unsigned long)(0x470000 + (v - base)));
+            n++;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    Log("%s", line);
+}
+
 static void hexdump(const char* p, int n, char* out, size_t outsz) {
     size_t o = 0;
     for (int i = 0; i < n && o + 3 < outsz; i++) o += _snprintf_s(out + o, outsz - o, _TRUNCATE, "%02x", (unsigned char)p[i]);
@@ -136,6 +167,7 @@ static void hexdump(const char* p, int n, char* out, size_t outsz) {
 
 static int WSAAPI h_sendto(SOCKET s, const char* buf, int len, int flags, const sockaddr* to, int tolen) {
     int r = o_sendto(s, buf, len, flags, to, tolen);
+    if (g_traceLen && len == g_traceLen) { static volatile LONG nTr = 0; if (InterlockedIncrement(&nTr) <= 3) LogCallers("sendto len match"); }
     if (InterlockedIncrement(&g_netLines) < 4000) {
         char hx[200];
         hexdump(buf, len < 80 ? len : 80, hx, sizeof(hx));
@@ -1338,6 +1370,108 @@ static DWORD WINAPI ForceCharThread(LPVOID) {
     return 0;
 }
 
+
+// ---------------------------------------------------------------- GameInfo.MaxPlayers poke
+// GameInfo instance layout in this build (from diffing instances against Default__ objects):
+//   +0x230 MaxPlayers, +0x234 MaxPlayersAllowed (1/1 for TnCampaignGame, 4/4 for TnSurvivalGame), +0x238 NumPlayers,
+//   +0x244 CurrentID. (+0x224/+0x228 are MaxSpectators/MaxSpectatorsAllowed.)
+// FUN_006e00f0 (ghidra) = TnInputOverrideModuleTutorial refresh; its class lookup returns null in a coop campaign
+// session and the host crashes (this=0x10). Turn it into a plain return.
+static DWORD WINAPI SkipTutThread(LPVOID) {
+    Sleep(3000);
+    BYTE* fn = (BYTE*)GetModuleHandleW(nullptr) + 0x2e00f0;
+    __try {
+        if (fn[0] == 0x56 && fn[1] == 0x57 && fn[2] == 0x68) {
+            DWORD old;
+            if (VirtualProtect(fn, 1, PAGE_EXECUTE_READWRITE, &old)) { fn[0] = 0xC3; VirtualProtect(fn, 1, old, &old); Log("skiptut: patched %p", fn); }
+        } else Log("skiptut: unexpected bytes %02x %02x %02x at %p", fn[0], fn[1], fn[2], fn);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { Log("skiptut: faulted"); }
+    return 0;
+}
+
+static DWORD WINAPI MaxPlayersThread(LPVOID) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    static const char* classes[] = {"TnCampaignGame", "TnCampaignGameSolo", "TnSurvivalGame", "TnTeamGame", "TnMultiplayerGame", "TnFreeForAllGame", "TnLobbyGame"};
+    unsigned ids[8] = {0};
+    for (int round = 0; round < 900; round++) {
+        Sleep(1000);
+        __try {
+            TArr* go = (TArr*)(base + kGObjRva);
+            if (go->Num < 1000 || !go->Data) continue;
+            bool need = false;
+            for (int q = 0; q < 7; q++) if (!ids[q]) need = true;
+            if (need && (round % 5 == 0)) {
+                for (int i = 0; i < go->Num; i++) {
+                    BYTE* obj = (BYTE*)go->Data[i];
+                    if (!obj || !Rd(obj, 0x88)) continue;
+                    if ((*(unsigned*)(obj + 0x14) & 0x1fff) != 3) continue;
+                    char nm[80]; unsigned num = 0;
+                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num != 0) continue;
+                    for (int q = 0; q < 7; q++) if (!ids[q] && strcmp(nm, classes[q]) == 0) { unsigned own = *(unsigned*)(obj + 0x84); if (own > 0 && own < 8191) ids[q] = own + 1; }
+                }
+            }
+            for (int i = 0; i < go->Num; i++) {
+                BYTE* obj = (BYTE*)go->Data[i];
+                if (!obj || !Rd(obj, 0x30)) continue;
+                unsigned cid = *(unsigned*)(obj + 0x14) & 0x1fff;
+                int q = -1; for (int k = 0; k < 7; k++) if (ids[k] && ids[k] == cid) q = k;
+                if (q < 0) continue;
+                char nm[80]; unsigned num = 0;
+                if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;       // skip class + Default__ objects
+                if (!Rd(obj, 0x300)) continue;
+                int* mp = (int*)(obj + 0x230); int* mpa = (int*)(obj + 0x234);
+                if (*mpa < 1 || *mpa > 64 || *mp < 0 || *mp > 64) continue;           // sanity
+                if (*mpa < g_maxPlayers && *mp >= g_maxPlayers) continue;
+                if (*mp < g_maxPlayers) {
+                    Log("maxplayers: %s_%u at %p: MaxPlayers %d (allowed %d) -> %d", nm, num - 1, obj, *mp, *mpa, g_maxPlayers);
+                    *mp = g_maxPlayers;
+                    if (*mpa < g_maxPlayers) *mpa = g_maxPlayers;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- generic pokes: poke1..poke8 = "Class,offsetHex,valueHex,maskHex"
+static DWORD WINAPI PokeThread(LPVOID) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    for (int round = 0; round < 1200; round++) {
+        Sleep(1000);
+        __try {
+            TArr* go = (TArr*)(base + kGObjRva);
+            if (go->Num < 1000 || !go->Data) continue;
+            bool need = false;
+            for (auto& p : g_pokes) if (p.used && !p.id) need = true;
+            if (need && round % 5 == 0) {
+                for (int i = 0; i < go->Num; i++) {
+                    BYTE* obj = (BYTE*)go->Data[i];
+                    if (!obj || !Rd(obj, 0x88) || (*(unsigned*)(obj + 0x14) & 0x1fff) != 3) continue;
+                    char nm[80]; unsigned num = 0;
+                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num != 0) continue;
+                    for (auto& p : g_pokes) if (p.used && !p.id && strcmp(nm, p.cls) == 0) { unsigned own = *(unsigned*)(obj + 0x84); if (own > 0 && own < 8191) p.id = own + 1; }
+                }
+            }
+            for (int i = 0; i < go->Num; i++) {
+                BYTE* obj = (BYTE*)go->Data[i];
+                if (!obj || !Rd(obj, 0x30)) continue;
+                unsigned cid = *(unsigned*)(obj + 0x14) & 0x1fff;
+                for (auto& p : g_pokes) {
+                    if (!p.used || p.id != cid) continue;
+                    char nm[80]; unsigned num = 0;
+                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;
+                    if (!Rd(obj, p.off + 4)) continue;
+                    unsigned* w = (unsigned*)(obj + p.off);
+                    unsigned nv = (*w & ~p.mask) | (p.val & p.mask);
+                    if (nv != *w) { Log("poke: %s_%u +0x%x: %x -> %x", nm, num - 1, p.off, *w, nv); *w = nv; }
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    return 0;
+}
+
 static void InstallHooks() {
     o_ODSA = (PFN_ODSA)Resolve("kernel32.dll", "OutputDebugStringA");
     o_ODSW = (PFN_ODSW)Resolve("kernel32.dll", "OutputDebugStringW");
@@ -1377,6 +1511,9 @@ static void InstallHooks() {
     if (g_engInfo) CreateThread(nullptr, 0, EngineThread, nullptr, 0, nullptr);
     if (g_findCls[0]) CreateThread(nullptr, 0, FindClsThread, nullptr, 0, nullptr);
     if (g_forceCharFlag) CreateThread(nullptr, 0, ForceCharThread, nullptr, 0, nullptr);
+    if (g_maxPlayers > 0) CreateThread(nullptr, 0, MaxPlayersThread, nullptr, 0, nullptr);
+    if (g_skipTut) CreateThread(nullptr, 0, SkipTutThread, nullptr, 0, nullptr);
+    { bool any = false; for (auto& p : g_pokes) if (p.used) any = true; if (any) CreateThread(nullptr, 0, PokeThread, nullptr, 0, nullptr); }
     if (g_snap1 > 0 || g_snap2 > 0) CreateThread(nullptr, 0, SnapThread, nullptr, 0, nullptr);
     Log("IAT patched: ODSA=%d ODSW=%d CMA=%d CMW=%d sendto=%d recvfrom=%d wsock32 sendto=%d recvfrom=%d", a, b, c, d, e, f, g, h);
 }
@@ -1390,6 +1527,25 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         char name[MAX_PATH] = "?";
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &m)) GetModuleFileNameA(m, name, MAX_PATH);
         Log("EXCEPTION %08lx at %p in %s (base %p) info0=%p info1=%p", code, addr, name, m, (void*)ep->ExceptionRecord->ExceptionInformation[0], (void*)ep->ExceptionRecord->ExceptionInformation[1]);
+        if (code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord) {
+            CONTEXT* c = ep->ContextRecord;
+            Log("REGS eax=%08lx ebx=%08lx ecx=%08lx edx=%08lx esi=%08lx edi=%08lx ebp=%08lx esp=%08lx", c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+            BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+            DWORD* sp = (DWORD*)c->Esp;
+            char line[3000]; size_t k = _snprintf_s(line, _TRUNCATE, "CRASHSTACK:");
+            int n = 0;
+            __try {
+                for (int i = 0; i < 4096 && n < 50; i++) {
+                    BYTE* v = (BYTE*)sp[i];
+                    if (v < base + 0x1000 || v >= base + 0x1000 + 0xf5fc71) continue;
+                    bool call = (v[-5] == 0xE8) || (v[-2] == 0xFF && (v[-1] & 0x38) == 0x10) || (v[-3] == 0xFF && (v[-2] & 0x38) == 0x10) || (v[-6] == 0xFF && (v[-5] & 0x38) == 0x10);
+                    if (!call) continue;
+                    if (k + 24 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %d:%lx", i, (unsigned long)(0x470000 + (v - base)));
+                    n++;
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+            Log("%s", line);
+        }
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -1416,7 +1572,22 @@ static void LoadConfig(const wchar_t* dir) {
         g_cfg = GetPrivateProfileIntW(L"foc_coop", L"cfg", 0, ini2) != 0;
         g_natives = GetPrivateProfileIntW(L"foc_coop", L"natives", 0, ini2) != 0;
         g_lpFlag = GetPrivateProfileIntW(L"foc_coop", L"lp", 0, ini2) != 0;
+        for (int q = 0; q < 8; q++) {
+            wchar_t key[16], w[200] = {0}; _snwprintf_s(key, _TRUNCATE, L"poke%d", q + 1);
+            GetPrivateProfileStringW(L"foc_coop", key, L"", w, 200, ini2);
+            if (!w[0]) continue;
+            char a[200]; WideCharToMultiByte(CP_ACP, 0, w, -1, a, sizeof(a), nullptr, nullptr);
+            char* c1 = strchr(a, ','); if (!c1) continue; *c1++ = 0;
+            char* c2 = strchr(c1, ','); if (!c2) continue; *c2++ = 0;
+            char* c3 = strchr(c2, ','); if (!c3) continue; *c3++ = 0;
+            strncpy_s(g_pokes[q].cls, a, _TRUNCATE);
+            g_pokes[q].off = strtoul(c1, nullptr, 16); g_pokes[q].val = strtoul(c2, nullptr, 16); g_pokes[q].mask = strtoul(c3, nullptr, 16);
+            g_pokes[q].used = true; g_pokes[q].id = 0;
+        }
+        g_traceLenFlag = GetPrivateProfileIntW(L"foc_coop", L"tracelen", 0, ini2);
+        g_maxPlayers = GetPrivateProfileIntW(L"foc_coop", L"maxplayers", 0, ini2);
         g_forceCharFlag = GetPrivateProfileIntW(L"foc_coop", L"forcechar", 0, ini2) != 0;
+        g_skipTut = GetPrivateProfileIntW(L"foc_coop", L"skiptut", 0, ini2) != 0;
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"findcls", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_findCls, sizeof(g_findCls), nullptr, nullptr); }
         g_engInfo = GetPrivateProfileIntW(L"foc_coop", L"enginfo", 0, ini2) != 0;
         g_snap1 = GetPrivateProfileIntW(L"foc_coop", L"snap1", 0, ini2);
