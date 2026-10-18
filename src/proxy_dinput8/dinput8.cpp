@@ -39,6 +39,12 @@ static int g_traceLenFlag = 0;
 static int g_maxPlayers = 0;
 static bool g_forceCharFlag = false;
 static bool g_skipTut = false;
+static bool g_ctrlShare = false;
+static bool g_tutGuard = false;
+static bool g_hostFirst = false;
+static bool g_ctrlDiag = false;
+static char g_ctrlSkipMaskBuf[64] = {0};
+static const char* g_ctrlSkipMask = nullptr;
 static char g_findCls[64] = "";
 static bool g_engInfo = false;
 static int g_snap1 = 0, g_snap2 = 0;
@@ -1389,6 +1395,153 @@ static DWORD WINAPI SkipTutThread(LPVOID) {
     return 0;
 }
 
+// Remote PlayerControllers on the host never get their locally-created manager objects (input override, profile,
+// achievements, ...). Native campaign code dereferences them (null+0x10 "this"). Copy valid UObject pointers from the
+// local controller into null slots of every other TnPlayerController* instance.
+static DWORD WINAPI CtrlShareThread(LPVOID) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    static BYTE* fixed[64]; static int nFixed = 0;
+    for (int round = 0; round < 3000; round++) {
+        Sleep(500);
+        __try {
+            TArr* go = (TArr*)(base + kGObjRva);
+            if (go->Num < 1000 || !go->Data) continue;
+            BYTE* pcs[16]; int npc = 0;
+            for (int i = 0; i < go->Num && npc < 16; i++) {
+                BYTE* obj = (BYTE*)go->Data[i];
+                if (!obj || !Rd(obj, 0x30)) continue;
+                char nm[80]; unsigned num = 0;
+                if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;
+                if (strncmp(nm, "TnPlayerController", 18) != 0) continue;
+                if (!Rd(obj, 0x740)) continue;
+                pcs[npc++] = obj;
+            }
+            { static int lastN = -1; if (npc != lastN) { lastN = npc; Log("pcdiag: controller count now %d", npc); } }
+            if (npc < 1 || (npc < 2 && !g_ctrlDiag)) continue;
+            static DWORD lastDiag = 0; if (g_ctrlDiag && GetTickCount() - lastDiag > 4000 && (lastDiag = GetTickCount(), true)) {
+                Log("pcdiag: %d controllers", npc);
+                for (int a = 0; a < npc; a++) {
+                    char nm[80]; unsigned num = 0; ObjNameStr(pcs[a], nm, sizeof(nm), &num);
+                    char line[1200]; size_t k = _snprintf_s(line, _TRUNCATE, "pcdiag: PC %s_%u %p refs:", nm, num - 1, pcs[a]);
+                    for (int off = 0x100; off < 0x740; off += 4) {
+                        BYTE* o = *(BYTE**)(pcs[a] + off);
+                        if (!o || !Rd(o, 0x30)) continue;
+                        unsigned idx = *(unsigned*)(o + 0x18) & 0x3ffff;
+                        if (!(idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == o)) continue;
+                        char n2[80]; unsigned nn = 0; if (!ObjNameStr(o, n2, sizeof(n2), &nn)) continue;
+                        if (strstr(n2, "Pawn") || strstr(n2, "Character") || strstr(n2, "Player") || strstr(n2, "Connection") || strstr(n2, "Hero")) {
+                            if (k + 60 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x=%s_%u", off, n2, nn - 1);
+                        }
+                    }
+                    Log("%s", line);
+                }
+                if (npc == 2) {
+                    // word diff between the local-player controller (host) and the remote one
+                    int L = -1;
+                    for (int a = 0; a < npc; a++) { BYTE* o = *(BYTE**)(pcs[a] + 0x344); char n2[80]; unsigned nn; if (o && Rd(o, 0x30) && ObjNameStr(o, n2, sizeof(n2), &nn) && !strncmp(n2, "TnLocalPlayer", 13)) L = a; }
+                    if (L >= 0) {
+                        BYTE* h = pcs[L]; BYTE* r = pcs[1 - L];
+                        char line[1500]; size_t k = 0; int cnt = 0;
+                        for (int off = 0x1d0; off < 0x740; off += 4) {
+                            unsigned hv = *(unsigned*)(h + off), rv = *(unsigned*)(r + off);
+                            if (hv == rv) continue;
+                            bool hp = hv >= 0x01000000 && hv < 0x3e000000 && (hv & 3) == 0, rp = rv >= 0x01000000 && rv < 0x3e000000 && (rv & 3) == 0;
+                            if (hp && rp) continue;   // both look like heap pointers
+                            if (k + 30 > sizeof(line) - 40) { Log("pcdiff: host-vs-remote:%s", line); k = 0; line[0] = 0; }
+                            k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x:%x/%x", off, hv, rv); cnt++;
+                        }
+                        if (k) Log("pcdiff: host-vs-remote:%s", line);
+                    }
+                }
+                // all pawn-like instances and their controller-ish refs
+                int shown = 0;
+                for (int i = 0; i < go->Num && shown < 12; i++) {
+                    BYTE* obj = (BYTE*)go->Data[i];
+                    if (!obj || !Rd(obj, 0x30)) continue;
+                    char nm[80]; unsigned num = 0;
+                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;
+                    if (!strstr(nm, "Pawn") || strstr(nm, "Default__")) continue;
+                    if (!strncmp(nm, "TnPawn", 6) == 0 && !strstr(nm, "Transformer") && !strstr(nm, "Pawn_")) {}
+                    if (!Rd(obj, 0x600)) continue;
+                    char line[900]; size_t k = _snprintf_s(line, _TRUNCATE, "pcdiag: PAWN %s_%u %p ctl-refs:", nm, num - 1, obj);
+                    for (int off = 0x100; off < 0x600; off += 4) {
+                        BYTE* o = *(BYTE**)(obj + off);
+                        for (int a = 0; a < npc; a++) if (o == pcs[a] && k + 24 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x=PC%d", off, a);
+                    }
+                    Log("%s", line); shown++;
+                }
+            }
+            auto isObj = [&](BYTE* o) -> bool {
+                if (!o || !Rd(o, 0x30)) return false;
+                unsigned idx = *(unsigned*)(o + 0x18) & 0x3ffff;
+                return idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == o;
+            };
+            auto isObj0 = [&](BYTE* o) -> bool {
+                if (!o || !Rd(o, 0x200)) return false;
+                unsigned idx = *(unsigned*)(o + 0x18) & 0x3ffff;
+                return idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == o;
+            };
+            if (g_hostFirst && npc >= 2) {
+                // Kismet "Player" = first PlayerController in WorldInfo.ControllerList, which is the newest one. Put the
+                // local-player controller (host) at the head: list = host -> others -> none.
+                int L = -1;
+                for (int a = 0; a < npc; a++) { BYTE* o = *(BYTE**)(pcs[a] + 0x344); char n2[80]; unsigned nn; if (o && Rd(o, 0x30) && ObjNameStr(o, n2, sizeof(n2), &nn) && !strncmp(n2, "TnLocalPlayer", 13)) L = a; }
+                { static int lastL = -9; if (L != lastL) { lastL = L; Log("hostfirst: local-player controller index %d of %d", L, npc); } }
+                if (L >= 0) {
+                    BYTE* host = pcs[L];
+                    BYTE* wi = nullptr; int wiOff = -1;
+                    for (int i = 0; i < go->Num && !wi; i++) {
+                        BYTE* obj = (BYTE*)go->Data[i];
+                        if (!obj || !Rd(obj, 0x30)) continue;
+                        char n2[80]; unsigned nn = 0;
+                        if ((*(unsigned*)(obj + 0x14) & 0x1fff) == 3 || !ObjNameStr(obj, n2, sizeof(n2), &nn) || !strstr(n2, "WorldInfo") || strstr(n2, "Default__") || !Rd(obj, 0xc00)) continue;
+                        for (int off = 0x100; off < 0xc00 && !wi; off += 4) {
+                            BYTE* v = *(BYTE**)(obj + off);
+                            if (!isObj0(v)) continue;
+                            int g2 = 0; for (BYTE* c = v; c && g2 < 3000 && isObj0(c); c = *(BYTE**)(c + 0x1dc), g2++) if (c == host) { wi = obj; wiOff = off; break; }
+                        }
+                    }
+                    { static int lastSt = -9; int st = !wi ? -1 : (*(BYTE**)(wi + wiOff) == host ? 2 : 1); if (st != lastSt) { lastSt = st; Log("hostfirst: state %d (wi=%p off=%x)", st, wi, wiOff); } }
+                    if (wi && *(BYTE**)(wi + wiOff) != host) {
+                        // splice the host controller out of the chain and put it at the head
+                        BYTE* head = *(BYTE**)(wi + wiOff);
+                        BYTE* pred = nullptr; int guardN = 0;
+                        for (BYTE* c = head; c && guardN < 4096 && Rd(c, 0x200); c = *(BYTE**)(c + 0x1dc), guardN++) if (*(BYTE**)(c + 0x1dc) == host) { pred = c; break; }
+                        if (pred) {
+                            Log("hostfirst: WorldInfo %p +%x head %p -> host %p", wi, wiOff, head, host);
+                            *(BYTE**)(pred + 0x1dc) = *(BYTE**)(host + 0x1dc);
+                            *(BYTE**)(host + 0x1dc) = head;
+                            *(BYTE**)(wi + wiOff) = host;
+                        }
+                    }
+                }
+            }
+            // reference = controller with the most valid object pointers in the range
+            int best = -1, bestN = -1;
+            for (int a = 0; a < npc; a++) { int n = 0; for (int off = 0x500; off < 0x740; off += 4) if (isObj(*(BYTE**)(pcs[a] + off))) n++; if (n > bestN) { bestN = n; best = a; } }
+            for (int a = 0; a < npc; a++) {
+                if (a == best) continue;
+                int copied = 0;
+                for (int off = 0x500; off < 0x740; off += 4) {
+                    BYTE** dst = (BYTE**)(pcs[a] + off); BYTE* src = *(BYTE**)(pcs[best] + off);
+                    if (*dst == nullptr && isObj(src)) {
+                        char n2[80]; unsigned nn = 0; ObjNameStr(src, n2, sizeof(n2), &nn);
+                        if (g_ctrlSkipMask && strstr(n2, g_ctrlSkipMask)) { static volatile LONG ns = 0; if (InterlockedIncrement(&ns) <= 6) Log("ctrlshare: skipping +%x %s_%u", off, n2, nn - 1); continue; }
+                        static volatile LONG nc = 0; if (InterlockedIncrement(&nc) <= 40) Log("ctrlshare: +%x <- %s_%u", off, n2, nn - 1);
+                        *dst = src; copied++;
+                    }
+                }
+                if (copied) {
+                    bool seen = false; for (int k = 0; k < nFixed; k++) if (fixed[k] == pcs[a]) seen = true;
+                    if (!seen && nFixed < 64) fixed[nFixed++] = pcs[a];
+                    static volatile LONG nl = 0; if (InterlockedIncrement(&nl) <= 20) Log("ctrlshare: %p <- %p copied %d null object slots", pcs[a], pcs[best], copied);
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) { static volatile LONG nx = 0; if (InterlockedIncrement(&nx) <= 3) Log("ctrlshare: faulted (round %d)", round); }
+    }
+    return 0;
+}
+
 static DWORD WINAPI MaxPlayersThread(LPVOID) {
     BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
     static const char* classes[] = {"TnCampaignGame", "TnCampaignGameSolo", "TnSurvivalGame", "TnTeamGame", "TnMultiplayerGame", "TnFreeForAllGame", "TnLobbyGame"};
@@ -1513,6 +1666,7 @@ static void InstallHooks() {
     if (g_forceCharFlag) CreateThread(nullptr, 0, ForceCharThread, nullptr, 0, nullptr);
     if (g_maxPlayers > 0) CreateThread(nullptr, 0, MaxPlayersThread, nullptr, 0, nullptr);
     if (g_skipTut) CreateThread(nullptr, 0, SkipTutThread, nullptr, 0, nullptr);
+    if (g_ctrlShare) CreateThread(nullptr, 0, CtrlShareThread, nullptr, 0, nullptr);
     { bool any = false; for (auto& p : g_pokes) if (p.used) any = true; if (any) CreateThread(nullptr, 0, PokeThread, nullptr, 0, nullptr); }
     if (g_snap1 > 0 || g_snap2 > 0) CreateThread(nullptr, 0, SnapThread, nullptr, 0, nullptr);
     Log("IAT patched: ODSA=%d ODSW=%d CMA=%d CMW=%d sendto=%d recvfrom=%d wsock32 sendto=%d recvfrom=%d", a, b, c, d, e, f, g, h);
@@ -1520,6 +1674,27 @@ static void InstallHooks() {
 
 static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
+    // null-this guard: ghidra FUN_00c2b010 (input-binding lookup) is called on a null object in a coop campaign.
+    // Fault is at +6 after 4 pushes (ebx,ebp,esi,edi); emulate "xor eax,eax; pop x4; ret 8".
+    if ((g_skipTut || g_tutGuard) && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Ecx == 0 &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0x82b016) {
+        CONTEXT* c = ep->ContextRecord;
+        DWORD* sp = (DWORD*)c->Esp;
+        c->Edi = sp[0]; c->Esi = sp[1]; c->Ebp = sp[2]; c->Ebx = sp[3];
+        c->Eip = sp[4]; c->Esp += 16 + 4 + 8; c->Eax = 0;
+        static volatile LONG nG = 0; if (InterlockedIncrement(&nG) <= 3) Log("guard: null-this in input lookup bypassed");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    // FUN_0093ca70 (ghidra; GetDefaultObject-like, returns 0x10 == "none") called with this=0x10: emulate returning 0x10.
+    // Fault is at +6 after "sub esp,18; push esi"; stack: [esp]=esi, [esp+0x1c]=ret, [esp+0x20]=arg (ret 4).
+    if (g_tutGuard && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Esi == 0x10 &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0x53ca76) {
+        CONTEXT* c = ep->ContextRecord;
+        DWORD* sp = (DWORD*)c->Esp;
+        c->Esi = sp[0]; c->Eip = sp[7]; c->Esp += 0x1c + 4 + 4; c->Eax = 0x10;
+        static volatile LONG nG2 = 0; if (InterlockedIncrement(&nG2) <= 3) Log("guard: getdefault(null) returned none");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     // log only serious exceptions
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
         void* addr = ep->ExceptionRecord->ExceptionAddress;
@@ -1588,6 +1763,11 @@ static void LoadConfig(const wchar_t* dir) {
         g_maxPlayers = GetPrivateProfileIntW(L"foc_coop", L"maxplayers", 0, ini2);
         g_forceCharFlag = GetPrivateProfileIntW(L"foc_coop", L"forcechar", 0, ini2) != 0;
         g_skipTut = GetPrivateProfileIntW(L"foc_coop", L"skiptut", 0, ini2) != 0;
+        g_ctrlShare = GetPrivateProfileIntW(L"foc_coop", L"ctrlshare", 0, ini2) != 0;
+        g_tutGuard = GetPrivateProfileIntW(L"foc_coop", L"tutguard", 0, ini2) != 0;
+        g_hostFirst = GetPrivateProfileIntW(L"foc_coop", L"hostfirst", 0, ini2) != 0;
+        g_ctrlDiag = GetPrivateProfileIntW(L"foc_coop", L"ctrldiag", 0, ini2) != 0;
+        { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"ctrlskip", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_ctrlSkipMaskBuf, sizeof(g_ctrlSkipMaskBuf), nullptr, nullptr); if (g_ctrlSkipMaskBuf[0]) g_ctrlSkipMask = g_ctrlSkipMaskBuf; }
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"findcls", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_findCls, sizeof(g_findCls), nullptr, nullptr); }
         g_engInfo = GetPrivateProfileIntW(L"foc_coop", L"enginfo", 0, ini2) != 0;
         g_snap1 = GetPrivateProfileIntW(L"foc_coop", L"snap1", 0, ini2);
