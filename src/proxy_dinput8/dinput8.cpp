@@ -30,6 +30,14 @@ static bool g_scan = false;
 static bool g_trace = false;
 static bool g_patchCap = false;
 static bool g_cfg = false;
+static bool g_natives = false;
+static bool g_lpFlag = false;
+static bool g_forceCharFlag = false;
+static char g_findCls[64] = "";
+static bool g_engInfo = false;
+static int g_snap1 = 0, g_snap2 = 0;
+static bool g_charFixFlag = false;
+static char g_instClass[64] = "";
 
 static void Log(const char* fmt, ...) {
     if (!g_log) return;
@@ -595,7 +603,7 @@ extern "C" void __cdecl OnSlotHit(int n, void* self, void* a0, void* a1, void* a
 }
 
 // Trampolines are generated at runtime (MSVC does not substitute template arguments inside __asm).
-static BYTE* MakeTramp(int n, void* orig) {
+static BYTE* MakeTramp(int n, void* orig, void* handler = nullptr) {
     static BYTE* pool = nullptr;
     static size_t used = 0;
     if (!pool) pool = (BYTE*)VirtualAlloc(nullptr, 64 * 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
@@ -610,7 +618,7 @@ static BYTE* MakeTramp(int n, void* orig) {
     b({0xFF, 0x75, 0x24});        // push [ebp+24]  arg0
     b({0xFF, 0x75, 0x18});        // push [ebp+18]  saved ecx (this)
     b({0x68}); d((unsigned long)n);                          // push n
-    b({0xB8}); d((unsigned long)(UINT_PTR)&OnSlotHit);       // mov eax, OnSlotHit
+    b({0xB8}); d((unsigned long)(UINT_PTR)(handler ? handler : (void*)&OnSlotHit));       // mov eax, handler
     b({0xFF, 0xD0});              // call eax
     b({0x83, 0xC4, 0x14});        // add esp, 14h
     b({0xB8}); d((unsigned long)(UINT_PTR)orig);             // mov eax, orig
@@ -819,6 +827,517 @@ static DWORD WINAPI CfgThread(LPVOID) {
     return 0;
 }
 
+
+// ---------------------------------------------------------------- GNatives hooks (script opcode handlers)
+static const unsigned long kGNativesRva = 0x154c968;
+static volatile LONG g_natLines = 0;
+static volatile LONG g_natCount[256];
+
+static bool ObjName(void* p, char* out, size_t n) {
+    out[0] = 0;
+    if ((UINT_PTR)p < 0x10000 || !Rd(p, 0x30)) return false;
+    return NameAt(*(int*)((BYTE*)p + kNameFieldOff), out, n);
+}
+
+static int g_wantNames[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
+static const char* g_wantList[8] = {"SetAButton", "SetBButton", "SetText", "GetPlayerController", "UpdateStatus", "UpdateText", "Close", "get_CustomCharactersLoaded"};
+static volatile LONG g_wantLog = 0;
+
+extern "C" void __cdecl OnNative(int op, void* self, void* stack, void* result, void*) {
+    InterlockedIncrement(&g_natCount[op & 255]);
+    if (g_wantLog > 60) return;
+    __try {
+        if (!Rd(stack, 0x40)) return;
+        BYTE* code = *(BYTE**)((BYTE*)stack + 0xC);
+        if (!code || !Rd(code, 64)) return;
+        int nameIdx = -1;
+        if (op == 0x1B || op == 0x1D) nameIdx = *(int*)code;
+        else {
+            BYTE* fp = *(BYTE**)code;
+            if ((UINT_PTR)fp > 0x10000 && Rd(fp, 0x30)) nameIdx = *(int*)(fp + kNameFieldOff);
+        }
+        char cn[64] = "";
+        if (nameIdx < 0 || !NameAt(nameIdx, cn, sizeof(cn))) return;
+        for (int q = 0; q < 8; q++) {
+            if (strcmp(cn, g_wantList[q]) == 0) {
+                LONG n = InterlockedIncrement(&g_wantLog);
+                if (n > 60) return;
+                char hx[200]; hexdump((const char*)code - 1, 44, hx, sizeof(hx));
+                Log("native: op=%02x call '%s' this=%p frame code=%p bytes(-1..43): %s", op, g_wantList[q], self, code, hx);
+                break;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+extern "C" void __cdecl OnCount(int op, void* self, void* stack, void* result, void*) {
+    InterlockedIncrement(&g_natCount[op & 255]);
+}
+
+static DWORD WINAPI NativesThread(LPVOID) {
+    Sleep(15000);
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    void** tab = (void**)(base + kGNativesRva);
+    for (int q = 0; q < 8; q++) g_wantNames[q] = FindNameIndex(g_wantList[q]);
+    int hooked = 0;
+    for (int op = 0; op < 256; op++) {
+        void* orig = tab[op];
+        if (orig == (void*)(base + 0x2af10 + 0x470000 - 0x470000)) {}
+        if ((BYTE*)orig == base + 0x2af10 - 0x0) {}
+        BYTE* tr = MakeTramp(op, orig, (op == 0x1B || op == 0x1C) ? (void*)&OnNative : (void*)&OnCount);
+        DWORD old;
+        if (VirtualProtect(&tab[op], 4, PAGE_READWRITE, &old)) { tab[op] = tr; VirtualProtect(&tab[op], 4, old, &old); hooked++; }
+    }
+    Log("natives: hooked %d opcode slots", hooked);
+    LONG prev[256] = {0};
+    for (int i = 0; i < 6; i++) {
+        Sleep(10000);
+        char line[1500]; size_t k = _snprintf_s(line, _TRUNCATE, "natives: per-10s counts:");
+        LONG total = 0;
+        for (int op = 0; op < 256; op++) { LONG c = g_natCount[op]; LONG dlt = c - prev[op]; prev[op] = c; total += dlt; if (dlt > 2000 && k + 24 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %02x=%ld", op, dlt); }
+        Log("%s total=%ld", line, total);
+    }
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- TnLocalPlayer discovery
+#define g_lp g_lpFlag
+
+static void DumpRaw(const char* tag, BYTE* obj, int bytes) {
+    char line[1800]; size_t k = _snprintf_s(line, _TRUNCATE, "lp: %s obj=%p:", tag, obj);
+    for (int off = 0; off < bytes && k + 14 < sizeof(line); off += 4) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x", *(unsigned*)(obj + off));
+    Log("%s", line);
+}
+
+static DWORD WINAPI LocalPlayerThread(LPVOID) {
+    Sleep(g_scanDelayMs);
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    TArr* go = (TArr*)(base + kGObjRva);
+    __try {
+        static const char* props[] = {"_HasBypassedIISOnce", "_CharactersLoaded", "_CorruptCustomChatacterDlgUp", "_CopiedCustomChatacterDlgUp", "_HasShownAutoSaveWarning", "_WaitingForConfirmResetDLCCharacterParts", "_XpManager", "_PlayerFileHandler"};
+        int pidx[8]; for (int q = 0; q < 8; q++) pidx[q] = FindNameIndex(props[q]);
+        int defIdx = FindNameIndex("Default__TnLocalPlayer");
+        Log("lp: name indices: %d %d %d %d %d %d, Default__TnLocalPlayer=%d", pidx[0], pidx[1], pidx[2], pidx[3], pidx[4], pidx[5], defIdx);
+        BYTE* defobj = nullptr; void* vt = nullptr;
+        for (int i = 0; i < go->Num; i++) {
+            BYTE* obj = (BYTE*)go->Data[i];
+            if (!obj || !Rd(obj, 0x80)) continue;
+            int n = *(int*)(obj + kNameFieldOff);
+            for (int q = 0; q < 8; q++) if (n == pidx[q]) { char t[64]; _snprintf_s(t, _TRUNCATE, "prop %s idx=%d", props[q], i); DumpRaw(t, obj, 0x80); }
+            if (n == defIdx && !defobj) { defobj = obj; vt = *(void**)obj; DumpRaw("Default__TnLocalPlayer", obj, 0x60); }
+        }
+        {
+            // every name containing LocalPlayer and the objects that carry it
+            TArr* gn = (TArr*)(base + kGNamesRva);
+            for (int i = 0; i < gn->Num; i++) {
+                char nm[80];
+                if (!NameAt(i, nm, sizeof(nm))) continue;
+                bool inst = (strncmp(nm, "TnWorldInfo_", 12) == 0 || strncmp(nm, "TnLocalPlayer_", 14) == 0 || strncmp(nm, "TnSurvivalGame_", 15) == 0 || strncmp(nm, "TnGameEngine", 12) == 0 || strncmp(nm, "TnSurvivalGame", 14) == 0 || strncmp(nm, "TnPlayerController_", 19) == 0);
+                if (!inst && !strstr(nm, "LocalPlayer")) continue;
+                if (!inst) continue;
+                int cnt = 0; BYTE* first = nullptr;
+                for (int j = 0; j < go->Num; j++) { BYTE* obj = (BYTE*)go->Data[j]; if (obj && Rd(obj, 0x30) && *(int*)(obj + kNameFieldOff) == i) { cnt++; if (!first) first = obj; } }
+                if (cnt) Log("lp: name '%s' idx %d carried by %d object(s), first %p vtable rva 0x%lx", nm, i, cnt, first, (unsigned long)(*(BYTE**)first - base));
+            }
+        }
+        if (vt) {
+            Log("lp: Default__TnLocalPlayer vtable rva 0x%lx", (unsigned long)((BYTE*)vt - base));
+            for (int i = 0; i < go->Num; i++) {
+                BYTE* obj = (BYTE*)go->Data[i];
+                if (!obj || obj == defobj || !Rd(obj, 0x40)) continue;
+                if (*(void**)obj != vt) continue;
+                char t[64]; _snprintf_s(t, _TRUNCATE, "instance idx=%d", i);
+                DumpRaw(t, obj, 0x60);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { Log("lp: faulted"); }
+    Log("lp: done");
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- instances of a native class (found through its vtable)
+
+static BYTE* FindClassObject(const char* name) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    TArr* go = (TArr*)(base + kGObjRva);
+    int idx = FindNameIndex(name);
+    if (idx < 0) return nullptr;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* obj = (BYTE*)go->Data[i];
+        if (obj && Rd(obj, 0x30) && *(int*)(obj + kNameFieldOff) == idx) return obj;
+    }
+    return nullptr;
+}
+
+static DWORD WINAPI InstThread(LPVOID) {
+    Sleep(g_scanDelayMs);
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    BYTE* textLo = base + 0x1000; BYTE* textHi = base + 0x1000 + 0xf5fc71;
+    __try {
+        BYTE* cls = FindClassObject(g_instClass);
+        Log("inst: class '%s' object %p", g_instClass, cls);
+        if (!cls || !Rd(cls, 0x400)) return 0;
+        {
+            char line[3000]; size_t k = _snprintf_s(line, _TRUNCATE, "inst: class words:");
+            for (int off = 0; off < 0x200; off += 4) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x", *(unsigned*)(cls + off));
+            Log("%s", line);
+            for (int off = 0; off < 0x3f0; off += 4) {
+                BYTE* f = *(BYTE**)(cls + off);
+                if (f >= textLo && f < textHi && Rd(f, 24)) { char hx[80]; hexdump((const char*)f, 20, hx, sizeof(hx)); Log("inst:   class+0x%x -> text %p: %s", off, f, hx); }
+            }
+        }
+        // candidate vtables: function pointers inside the class object whose first bytes are  C7 01 imm32  (mov [ecx], vtable)
+        void* vtables[16]; int nv = 0;
+        for (int off = 0; off < 0x3f0; off += 4) {
+            BYTE* f = *(BYTE**)(cls + off);
+            if (f < textLo || f >= textHi || !Rd(f, 64)) continue;
+            for (int k = 0; k < 40; k++) {
+                if (f[k] == 0xC7 && f[k + 1] == 0x01) {
+                    void* vt = *(void**)(f + k + 2);
+                    bool dup = false; for (int q = 0; q < nv; q++) if (vtables[q] == vt) dup = true;
+                    if (!dup && (BYTE*)vt >= base && nv < 16) { vtables[nv++] = vt; Log("inst:   class+0x%x fn %p sets vtable %p (rva 0x%lx)", off, f, vt, (unsigned long)((BYTE*)vt - base)); }
+                    break;
+                }
+            }
+        }
+        {
+            // follow pointer fields of the stub
+            for (int off = 0; off < 0x40; off += 4) {
+                BYTE* t2 = *(BYTE**)(cls + off);
+                if ((UINT_PTR)t2 < 0x1000000 || t2 == cls || !Rd(t2, 0x100)) continue;
+                char line[2200]; size_t k = _snprintf_s(line, _TRUNCATE, "inst: stub+0x%x -> %p words:", off, t2);
+                for (int o2 = 0; o2 < 0xE0; o2 += 4) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x", *(unsigned*)(t2 + o2));
+                Log("%s", line);
+            }
+        }
+        if (nv == 0) { Log("inst: no vtable found in class object"); return 0; }
+        // sweep the heap for objects starting with one of these vtables
+        SYSTEM_INFO si; GetSystemInfo(&si);
+        BYTE* p = (BYTE*)si.lpMinimumApplicationAddress; BYTE* end = (BYTE*)si.lpMaximumApplicationAddress;
+        int found = 0;
+        MEMORY_BASIC_INFORMATION mbi;
+        while (p < end && VirtualQuery(p, &mbi, sizeof(mbi))) {
+            BYTE* rb = (BYTE*)mbi.BaseAddress; size_t rs = mbi.RegionSize;
+            if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && (mbi.Protect == PAGE_READWRITE) && rs >= 0x100) {
+                for (size_t o = 0; o + 0x600 <= rs; o += 4) {
+                    void* v = *(void**)(rb + o);
+                    for (int q = 0; q < nv; q++) {
+                        if (v == vtables[q] && found < 6) {
+                            found++;
+                            char line[2600]; size_t k = _snprintf_s(line, _TRUNCATE, "inst: INSTANCE %p (vtable #%d) words:", rb + o, q);
+                            int printed = 0;
+                            for (int off = 4; off < 0x600 && k + 24 < sizeof(line) && printed < 180; off += 4) {
+                                unsigned w = *(unsigned*)(rb + o + off);
+                                if (w) { k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x:%x", off, w); printed++; }
+                            }
+                            Log("%s", line);
+                        }
+                    }
+                }
+            }
+            p = rb + rs;
+        }
+        Log("inst: found %d instance(s)", found);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { Log("inst: faulted"); }
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- bytecode skeleton patches
+// Search the private heap for a bytecode skeleton (0xFF in `mask` = must match, 0x00 = wildcard, used for the
+// 4-byte object references) and return all matches.
+static bool g_anyMem = false;
+static int FindSkeleton(const BYTE* pat, const BYTE* mask, int len, BYTE** out, int maxOut) {
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    BYTE* p = (BYTE*)si.lpMinimumApplicationAddress; BYTE* end = (BYTE*)si.lpMaximumApplicationAddress;
+    int n = 0;
+    MEMORY_BASIC_INFORMATION mbi;
+    while (p < end && VirtualQuery(p, &mbi, sizeof(mbi))) {
+        BYTE* rb = (BYTE*)mbi.BaseAddress; size_t rs = mbi.RegionSize;
+        bool okReg = mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) && (g_anyMem ? true : (mbi.Type == MEM_PRIVATE && mbi.Protect == PAGE_READWRITE));
+        if (okReg && rs >= (size_t)len) {
+            __try {
+                for (size_t o = 0; o + len <= rs; o++) {
+                    if (rb[o] != pat[0]) continue;
+                    bool ok = true;
+                    for (int k = 1; k < len; k++) if (mask[k] && rb[o + k] != pat[k]) { ok = false; break; }
+                    if (ok && n < maxOut) out[n++] = rb + o;
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        p = rb + rs;
+    }
+    return n;
+}
+
+#define g_charFix g_charFixFlag
+static DWORD WINAPI CharFixThread(LPVOID) {
+    // get_CustomCharactersLoaded: 04 19 2e <cls4> 01 <prop4> 0a 00 04 00 2d 01 <prop4> 04 3a <prop4> 53
+    static const BYTE p1[29] = {0x04,0x19,0x2e,0,0,0,0,0x01,0,0,0,0,0x0a,0x00,0x04,0x00,0x2d,0x01,0,0,0,0,0x04,0x3a,0,0,0,0,0x53};
+    static const BYTE m1[29] = {0xff,0xff,0xff,0,0,0,0,0xff,0,0,0,0,0xff,0xff,0xff,0xff,0xff,0xff,0,0,0,0,0xff,0xff,0,0,0,0,0xff};
+    // get_CharactersLoaded (and similar bool getters): 04 2d 01 <prop4> 04 3a <prop4> 53
+    static const BYTE p2[14] = {0x04,0x2d,0x01,0,0,0,0,0x04,0x3a,0,0,0,0,0x53};
+    static const BYTE m2[14] = {0xff,0xff,0xff,0,0,0,0,0xff,0xff,0,0,0,0,0xff};
+    int charsIdx = -1;
+    int patched1 = 0, patched2 = 0;
+    for (int round = 0; round < 90; round++) {
+        Sleep(2000);
+        BYTE* hits[64];
+        int n = FindSkeleton(p1, m1, sizeof(p1), hits, 64);
+        for (int i = 0; i < n; i++) {
+            if (hits[i][1] == 0x27) continue;
+            DWORD old;
+            if (VirtualProtect(hits[i], 2, PAGE_READWRITE, &old)) { hits[i][1] = 0x27; VirtualProtect(hits[i], 2, old, &old); patched1++; Log("charfix: get_CustomCharactersLoaded at %p -> return true (round %d)", hits[i], round); }
+        }
+        __try {
+            if (charsIdx < 0) charsIdx = FindNameIndex("_CharactersLoaded");
+            BYTE* h2[256];
+            int n2 = FindSkeleton(p2, m2, sizeof(p2), h2, 256);
+            for (int i = 0; i < n2; i++) {
+                BYTE* prop = *(BYTE**)(h2[i] + 3);
+                if ((UINT_PTR)prop < 0x10000 || !Rd(prop, 0x30)) continue;
+                if (*(int*)(prop + kNameFieldOff) != charsIdx) continue;
+                if (h2[i][1] == 0x27) continue;
+                DWORD old;
+                // replace "2d 01 <prop>" by "27" + padding nops: bytes: 04 27 0b 0b 0b 0b 0b ... (0b = EX_Nothing) keep length
+                if (VirtualProtect(h2[i], 8, PAGE_READWRITE, &old)) {
+                    h2[i][1] = 0x27;
+                    for (int k = 2; k < 8; k++) h2[i][k] = 0x0b;
+                    VirtualProtect(h2[i], 8, old, &old);
+                    patched2++;
+                    Log("charfix: get_CharactersLoaded at %p -> return true (round %d)", h2[i], round);
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        if (round % 10 == 0) Log("charfix: round %d, patched1=%d patched2=%d matches p1=%d", round, patched1, patched2, n);
+        if (round == 10) {
+            // UpdateStatus of the Loading Characters popup: two SetXButton("") calls then more
+            static const BYTE pu[30] = {0x1b,0,0,0,0,0,0,0,0,0x1f,0x00,0x4a,0x4a,0x4a,0x16,0x1b,0,0,0,0,0,0,0,0,0x1f,0x00,0x4a,0x4a,0x4a,0x16};
+            static const BYTE mu[30] = {0xff,0,0,0,0,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0,0,0,0,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+            BYTE* hh[16];
+            g_anyMem = true;
+            int au = FindSkeleton(pu, mu, sizeof(pu), hh, 16);
+            g_anyMem = false;
+            Log("charfix: UpdateStatus skeleton hits (any memory): %d", au);
+            for (int i = 0; i < au && i < 4; i++) {
+                MEMORY_BASIC_INFORMATION mbi; VirtualQuery(hh[i], &mbi, sizeof(mbi));
+                char hx[500]; hexdump((const char*)hh[i], 120, hx, sizeof(hx));
+                Log("charfix:   hit %p type=%lx protect=%lx: %s", hh[i], mbi.Type, mbi.Protect, hx);
+            }
+        }
+        if (round == 4) {
+            g_anyMem = true;
+            BYTE* hh[16];
+            int a1 = FindSkeleton(p1, m1, sizeof(p1), hh, 16);
+            for (int i = 0; i < a1 && i < 4; i++) { MEMORY_BASIC_INFORMATION mbi; VirtualQuery(hh[i], &mbi, sizeof(mbi)); Log("charfix: any-memory skeleton p1 hit %p type=%lx protect=%lx bytes=%02x%02x%02x%02x %02x%02x%02x%02x%02x", hh[i], mbi.Type, mbi.Protect, hh[i][3], hh[i][4], hh[i][5], hh[i][6], hh[i][7], hh[i][8], hh[i][9], hh[i][10], hh[i][11]); }
+            int a2 = FindSkeleton(p2, m2, sizeof(p2), hh, 16);
+            Log("charfix: any-memory matches p1=%d p2(first16)=%d", a1, a2);
+            g_anyMem = false;
+        }
+    }
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- heap snapshots (for offline diffing)
+
+static void WriteSnapshot(const wchar_t* name) {
+    wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH);
+    wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
+    wchar_t pbin[MAX_PATH], pidx[MAX_PATH];
+    _snwprintf_s(pbin, _TRUNCATE, L"%s\\%s.bin", dir, name);
+    _snwprintf_s(pidx, _TRUNCATE, L"%s\\%s.idx", dir, name);
+    FILE* fb = nullptr; FILE* fi = nullptr;
+    _wfopen_s(&fb, pbin, L"wb"); _wfopen_s(&fi, pidx, L"w");
+    if (!fb || !fi) { Log("snap: cannot open output"); return; }
+    SYSTEM_INFO si; GetSystemInfo(&si);
+    BYTE* p = (BYTE*)si.lpMinimumApplicationAddress; BYTE* end = (BYTE*)si.lpMaximumApplicationAddress;
+    MEMORY_BASIC_INFORMATION mbi;
+    unsigned long long off = 0; int regions = 0;
+    while (p < end && VirtualQuery(p, &mbi, sizeof(mbi))) {
+        BYTE* rb = (BYTE*)mbi.BaseAddress; size_t rs = mbi.RegionSize;
+        if (mbi.State == MEM_COMMIT && mbi.Type == MEM_PRIVATE && mbi.Protect == PAGE_READWRITE && rs <= (96u << 20)) {
+            __try {
+                fwrite(rb, 1, rs, fb);
+                fprintf(fi, "%p %zx %llx\n", rb, rs, off);
+                off += rs; regions++;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        p = rb + rs;
+    }
+    fclose(fb); fclose(fi);
+    Log("snap: wrote %ls: %d regions, %llu bytes", name, regions, off);
+}
+
+static DWORD WINAPI SnapThread(LPVOID) {
+    DWORD t0 = GetTickCount();
+    if (g_snap1 > 0) { Sleep(g_snap1); WriteSnapshot(L"foc_snap1"); }
+    if (g_snap2 > 0) { DWORD el = GetTickCount() - t0; if ((DWORD)g_snap2 > el) Sleep(g_snap2 - el); WriteSnapshot(L"foc_snap2"); }
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- GEngine -> GamePlayers (LocalPlayer instances)
+static const unsigned long kGEngineRva = 0x1561fdc;
+
+static void LogObjWords(const char* tag, BYTE* obj, int bytes) {
+    char line[3800]; size_t k = _snprintf_s(line, _TRUNCATE, "eng: %s %p:", tag, obj);
+    int n = 0;
+    for (int off = 0; off < bytes && k + 22 < sizeof(line); off += 4) { unsigned w = *(unsigned*)(obj + off); if (w) { k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x:%x", off, w); n++; } }
+    Log("%s", line);
+}
+
+static DWORD WINAPI EngineThread(LPVOID) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    BYTE* rdLo = base + 0xf61000; BYTE* rdHi = base + 0xf61000 + 0x56da46;
+    BYTE* lp = nullptr;
+    for (int round = 0; round < 12; round++) {
+        Sleep(round == 0 ? 6000 : 5000);
+        __try {
+            BYTE* eng = *(BYTE**)(base + kGEngineRva);
+            if (round == 0) Log("eng: GEngine=%p vtable=%p", eng, eng ? *(void**)eng : nullptr);
+            int engSize = 0;
+            for (int sz = 0x1400; sz >= 0x100; sz -= 0x100) if (Rd(eng, sz)) { engSize = sz; break; }
+            if (!eng || engSize == 0) continue;
+            if (round == 0) Log("eng: readable engine bytes: 0x%x", engSize);
+            if (!lp) {
+                for (int off = 0x20; off < engSize - 0x10; off += 4) {
+                    TArr* a = (TArr*)(eng + off);
+                    if (a->Num < 1 || a->Num > 4 || a->Max < a->Num || a->Max > 8 || !Rd(a->Data, 4)) continue;
+                    BYTE* o = (BYTE*)a->Data[0];
+                    if ((UINT_PTR)o < 0x10000 || !Rd(o, 0x600)) continue;
+                    BYTE* vt = *(BYTE**)o;
+                    if (vt < rdLo || vt >= rdHi) continue;
+                    Log("eng: GEngine+0x%x TArray Num=%d -> %p vtable rva 0x%lx", off, a->Num, o, (unsigned long)(vt - base));
+                    if (!lp) lp = o;   // first plausible; log all and pick later
+                }
+            }
+            if (lp && Rd(lp, 0x600)) { char tag[40]; _snprintf_s(tag, _TRUNCATE, "LP words t=%d", (round + 1) * 5); LogObjWords(tag, lp, 0x600); }
+        } __except (EXCEPTION_EXECUTE_HANDLER) { Log("eng: faulted"); }
+    }
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- class id based instance finder
+static const unsigned long kClassByIdRva = 0x19465c4 - 0x470000;   // table of class pointers indexed by class id (4 bytes each)
+
+static bool ObjNameStr(BYTE* obj, char* out, size_t n, unsigned* number = nullptr) {
+    out[0] = 0;
+    if (!obj || !Rd(obj, 0x20)) return false;
+    unsigned packed = *(unsigned*)(obj + 4);
+    if (number) *number = packed & 0x3fff;
+    return NameAt((int)(packed >> 14), out, n);
+}
+
+static DWORD WINAPI FindClsThread(LPVOID) {
+    Sleep(g_scanDelayMs);
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    TArr* go = (TArr*)(base + kGObjRva);
+    BYTE** classById = (BYTE**)(base + kClassByIdRva);
+    __try {
+        Log("fcls: GObjects Num=%d, looking for class '%s'", go->Num, g_findCls);
+        int cnt = 0;
+        unsigned wantId = 0; BYTE* classObj = nullptr;
+        for (int i = 0; i < go->Num && cnt < 12; i++) {
+            BYTE* obj = (BYTE*)go->Data[i];
+            if (!obj) continue;
+            char nm[80]; unsigned num = 0;
+            if (!ObjNameStr(obj, nm, sizeof(nm), &num) || strcmp(nm, g_findCls) != 0) continue;
+            cnt++;
+            unsigned cid = Rd(obj, 0x88) ? *(unsigned*)(obj + 0x14) & 0x1fff : 0;
+            unsigned own = Rd(obj, 0x88) ? *(unsigned*)(obj + 0x84) : 0;
+            BYTE* tab = (own > 0 && own < 8192) ? classById[own] : nullptr;
+            Log("fcls: obj %p idx=%d name '%s' num=%u classId(+0x14)=%u own(+0x84)=%u ClassById[own]=%p readable0x88=%d", obj, i, nm, num, cid, own, tab, Rd(obj, 0x88) ? 1 : 0);
+            if (tab == obj || tab == obj + 0x10) { wantId = own; classObj = obj; }
+        }
+        // instance class id = class object's +0x84 plus one
+        {
+            // pick the class object: classId(+0x14) == 3 ('Class') and +0x84 plausible
+            for (int i = 0; i < go->Num; i++) {
+                BYTE* obj = (BYTE*)go->Data[i];
+                if (!obj || !Rd(obj, 0x88)) continue;
+                char nm[80]; unsigned num = 0;
+                if (!ObjNameStr(obj, nm, sizeof(nm), &num) || strcmp(nm, g_findCls) != 0 || num != 0) continue;
+                if ((*(unsigned*)(obj + 0x14) & 0x1fff) != 3) continue;
+                wantId = *(unsigned*)(obj + 0x84) + 1; classObj = obj; break;
+            }
+        }
+        if (!wantId) { Log("fcls: class object not found"); return 0; }
+        Log("fcls: class object %p -> instance class id %u", classObj, wantId);
+        int found = 0;
+        for (int i = 0; i < go->Num; i++) {
+            BYTE* obj = (BYTE*)go->Data[i];
+            if (!obj || !Rd(obj, 0x30)) continue;
+            if ((*(unsigned*)(obj + 0x14) & 0x1fff) != wantId) continue;
+            char nm[80]; unsigned num = 0; ObjNameStr(obj, nm, sizeof(nm), &num);
+            found++;
+            if (found <= 6) {
+                Log("fcls: INSTANCE idx=%d %p name '%s' num=%u vtable rva 0x%lx", i, obj, nm, num, (unsigned long)(*(BYTE**)obj - base));
+                for (int t = 0; t < 3; t++) {
+                    if (Rd(obj, 0x700)) { char tag[48]; _snprintf_s(tag, _TRUNCATE, "INST words t+%ds", t * 10); LogObjWords(tag, obj, 0x700); }
+                    if (t < 2) Sleep(10000);
+                }
+            }
+        }
+        Log("fcls: %d instance(s) of class id %u", found, wantId);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { Log("fcls: faulted"); }
+    return 0;
+}
+
+
+// ---------------------------------------------------------------- force TnLocalPlayer._CharactersLoaded
+// Layout facts (found by diffing the instance against Default__TnLocalPlayer and from the script var order):
+//   TnLocalPlayer + 0x2c0 : CharacterCustomizationFilename (FString)
+//   + 0x2cc,0x2d0,0x2d4   : _CustomCharacterData, _PlayerFileHandler, _XpManager (pointers)
+//   + 0x2d8               : bool bit field: bit0 _HasBypassedIISOnce, bit1 _CharactersLoaded, ...
+//   + 0x2dc               : CharacterLoadCompleteFunctionName (FString, 0x26 chars incl. terminator)
+static DWORD WINAPI ForceCharThread(LPVOID) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    unsigned wantId = 0;
+    int applied = 0;
+    for (int round = 0; round < 600; round++) {
+        Sleep(1000);
+        __try {
+            TArr* go = (TArr*)(base + kGObjRva);
+            if (go->Num < 1000 || !go->Data) continue;
+            if (!wantId) {
+                for (int i = 0; i < go->Num; i++) {
+                    BYTE* obj = (BYTE*)go->Data[i];
+                    if (!obj || !Rd(obj, 0x88)) continue;
+                    char nm[80]; unsigned num = 0;
+                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || strcmp(nm, "TnLocalPlayer") != 0 || num != 0) continue;
+                    if ((*(unsigned*)(obj + 0x14) & 0x1fff) != 3) continue;
+                    wantId = *(unsigned*)(obj + 0x84) + 1;
+                    Log("forcechar: TnLocalPlayer class id %u", wantId);
+                    break;
+                }
+                if (!wantId) continue;
+            }
+            for (int i = 0; i < go->Num; i++) {
+                BYTE* obj = (BYTE*)go->Data[i];
+                if (!obj || !Rd(obj, 0x30)) continue;
+                if ((*(unsigned*)(obj + 0x14) & 0x1fff) != wantId) continue;
+                char nm[80]; unsigned num = 0;
+                if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;   // skip Default__ (name differs) and class objects
+                if (!Rd(obj, 0x300)) continue;
+                if (*(int*)(obj + 0x2e0) != 0x26 || *(int*)(obj + 0x2e4) != 0x26) continue;   // layout sanity check
+                DWORD* flags = (DWORD*)(obj + 0x2d8);
+                if (!(*flags & 2)) {
+                    *flags |= 2;
+                    applied++;
+                    Log("forcechar: instance %p name '%s'_%u: _CharactersLoaded set (flags now %x), round %d", obj, nm, num, *flags, round);
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    return 0;
+}
+
 static void InstallHooks() {
     o_ODSA = (PFN_ODSA)Resolve("kernel32.dll", "OutputDebugStringA");
     o_ODSW = (PFN_ODSW)Resolve("kernel32.dll", "OutputDebugStringW");
@@ -851,6 +1370,14 @@ static void InstallHooks() {
     if (g_trace) CreateThread(nullptr, 0, TraceThread, nullptr, 0, nullptr);
     if (g_patchCap) CreateThread(nullptr, 0, ScriptPatchThread, nullptr, 0, nullptr);
     if (g_cfg) CreateThread(nullptr, 0, CfgThread, nullptr, 0, nullptr);
+    if (g_natives) CreateThread(nullptr, 0, NativesThread, nullptr, 0, nullptr);
+    if (g_lp) CreateThread(nullptr, 0, LocalPlayerThread, nullptr, 0, nullptr);
+    if (g_instClass[0]) CreateThread(nullptr, 0, InstThread, nullptr, 0, nullptr);
+    if (g_charFix) CreateThread(nullptr, 0, CharFixThread, nullptr, 0, nullptr);
+    if (g_engInfo) CreateThread(nullptr, 0, EngineThread, nullptr, 0, nullptr);
+    if (g_findCls[0]) CreateThread(nullptr, 0, FindClsThread, nullptr, 0, nullptr);
+    if (g_forceCharFlag) CreateThread(nullptr, 0, ForceCharThread, nullptr, 0, nullptr);
+    if (g_snap1 > 0 || g_snap2 > 0) CreateThread(nullptr, 0, SnapThread, nullptr, 0, nullptr);
     Log("IAT patched: ODSA=%d ODSW=%d CMA=%d CMW=%d sendto=%d recvfrom=%d wsock32 sendto=%d recvfrom=%d", a, b, c, d, e, f, g, h);
 }
 
@@ -887,6 +1414,15 @@ static void LoadConfig(const wchar_t* dir) {
         g_trace = GetPrivateProfileIntW(L"foc_coop", L"trace", 0, ini2) != 0;
         g_patchCap = GetPrivateProfileIntW(L"foc_coop", L"patchcap", 0, ini2) != 0;
         g_cfg = GetPrivateProfileIntW(L"foc_coop", L"cfg", 0, ini2) != 0;
+        g_natives = GetPrivateProfileIntW(L"foc_coop", L"natives", 0, ini2) != 0;
+        g_lpFlag = GetPrivateProfileIntW(L"foc_coop", L"lp", 0, ini2) != 0;
+        g_forceCharFlag = GetPrivateProfileIntW(L"foc_coop", L"forcechar", 0, ini2) != 0;
+        { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"findcls", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_findCls, sizeof(g_findCls), nullptr, nullptr); }
+        g_engInfo = GetPrivateProfileIntW(L"foc_coop", L"enginfo", 0, ini2) != 0;
+        g_snap1 = GetPrivateProfileIntW(L"foc_coop", L"snap1", 0, ini2);
+        g_snap2 = GetPrivateProfileIntW(L"foc_coop", L"snap2", 0, ini2);
+        g_charFixFlag = GetPrivateProfileIntW(L"foc_coop", L"charfix", 0, ini2) != 0;
+        { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"instclass", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_instClass, sizeof(g_instClass), nullptr, nullptr); }
     }
 }
 
