@@ -12,6 +12,16 @@ Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.c
 2. Injected input via window messages (stage 6) so movement tests need no focus.
 3. Stage 3: ProcessEvent looks unusable (script mostly native, see NOTES); go for native calls found in Ghidra.
 
+## Owner request 2026-10-19: Nexus mods in the installer + settings menu
+- Mods: nexusmods.com/transformersfallofcybertron/mods/17, /12, /9, /120, /62. Texture mods and audio-log mods: always
+  installed; intro skip: a choice in the installer; other mods: decide per mod. All of them tested together with co-op
+  (online, host + guest, matrix + playbot).
+- Blocker: Nexus returns 403 to automated fetches and needs a login to download. The owner downloads the archives into
+  `E:\FoC-coop\mods_incoming\`; check each mod's permission section before bundling it into a public installer (if
+  redistribution is not allowed: the installer installs from archives the player downloaded, or ask the author).
+- In-game settings: an F10 "Settings" page for the mod options (and the mod-pack options that can change at run time);
+  options that need a restart say so.
+
 ## Goals in order
 1. **R1: all 13 story chapters start for 2 players.** Automated check: both have a pawn within 90 s of the guest joining,
    both alive for 5+ min, both pawns move, no crash.
