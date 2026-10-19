@@ -99,16 +99,21 @@ static void RunCommandNow(const std::string& cmd) {
 static void InjectCommand(const char* args);
 static void JoinViaSteam();
 static volatile LONG g_shotReq = 0;      // set by `shot`, served by the next final EndScene (SaveBackBuffer)
+static volatile LONG g_shotUiReq = 0;    // `shotui`: the same, but taken after the co-op menu was drawn
+static volatile LONG g_menuReq = -1;     // `menu <page>` / `menu off`: open the F10 menu on a page (tests)
 static wchar_t g_shotPath[MAX_PATH];
 static bool HandleLocalCommand(const std::string& c) {   // test commands that do not need the game thread
-    if (c == "shot" || c.rfind("shot ", 0) == 0) {
+    bool ui = c.rfind("shotui", 0) == 0;
+    if (ui || c == "shot" || c.rfind("shot ", 0) == 0) {
+        size_t skip = ui ? 7 : 5;
         wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH);
         wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
-        if (c.size() > 5) MultiByteToWideChar(CP_ACP, 0, c.c_str() + 5, -1, g_shotPath, MAX_PATH);
+        if (c.size() > skip) MultiByteToWideChar(CP_ACP, 0, c.c_str() + skip, -1, g_shotPath, MAX_PATH);
         else _snwprintf_s(g_shotPath, _TRUNCATE, L"%s\\foc_shot.bmp", dir);
-        g_shotReq = 1;
+        if (ui) g_shotUiReq = 1; else g_shotReq = 1;
         return true;
     }
+    if (c.rfind("menu ", 0) == 0) { g_menuReq = c.substr(5) == "off" ? 99 : atoi(c.c_str() + 5); return true; }
     if (c.rfind("input ", 0) == 0) { InjectCommand(c.c_str() + 6); return true; }
     if (c == "steamjoin") { JoinViaSteam(); return true; }   // same as the Join page's "Join a friend through Steam"
     return false;
@@ -193,7 +198,7 @@ static const MapEntry kEscalation[] = {
     {"Ark", "ESC_Ark_BASE_m"}, {"Gladiator", "ESC_Gladiator_BASE_m"}, {"Iacon", "ESC_Iacon_BASE_m"}, {"Temple", "ESC_Temple_BASE_m"},
 };
 
-static int g_page = 0;            // 0 main, 1 host, 2 join, 3 about
+static int g_page = 0;            // 0 main, 1 host, 2 join, 3 about, 4 settings
 static int g_hostMode = 0;        // 0 story, 1 escalation
 static int g_hostMapStory = 0, g_hostMapEsc = 0;
 static int g_hostPlayers = 4;
@@ -535,9 +540,47 @@ static void DrawMainPage() {
         if (!strcmp(g_relayRole, "host") && ImGui::Button("Invite friends (Steam overlay)")) RelayCommand("invite");
     }
     if (ImGui::Button(g_fastTravel ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; if (g_fastTravel) QueueCommand("disconnect"); else RelaunchWithUrl(""); }
+    if (ImGui::Button("Settings", bs)) g_page = 4;
+    Tooltip("Co-op options; most apply at once, also during a game");
     if (ImGui::Button("About / status", bs)) g_page = 3;
     ImGui::Spacing();
     ImGui::SetNextItemWidth(200); ImGui::InputText("Your name", g_playerName, sizeof(g_playerName));
+}
+
+// ---------------------------------------------------------------- settings page (F10 -> Settings)
+// Writes foc_coop.ini next to the exe. The whole player set is written, because an ini that exists but lacks a key
+// turns that feature off (LoadConfig only fills the co-op defaults when there is no ini at all).
+static void SaveSettings() {
+    wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH); wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
+    wchar_t ini[MAX_PATH]; _snwprintf_s(ini, _TRUNCATE, L"%s\\foc_coop.ini", dir);
+    struct { const wchar_t* k; int v; } kv[] = {
+        {L"tcpdriver", g_tcpDriver}, {L"forcechar", g_forceCharFlag}, {L"maxplayers", g_maxPlayers}, {L"tutguard", g_tutGuard},
+        {L"ctrlshare", g_ctrlShare}, {L"hostfirst", g_hostFirst}, {L"rescue", g_rescue}, {L"viewfix", g_viewFix},
+        {L"spawnshift", g_spawnShiftFlag}, {L"ctrldiag", g_ctrlDiag}, {L"ctrlsharedelay", g_ctrlShareDelay}, {L"steamhost", g_useSteam},
+    };
+    for (auto& e : kv) { wchar_t v[16]; _snwprintf_s(v, _TRUNCATE, L"%d", e.v); WritePrivateProfileStringW(L"foc_coop", e.k, v, ini); }
+    if (g_suffix[0]) { wchar_t v[64]; MultiByteToWideChar(CP_ACP, 0, g_suffix, -1, v, 64); WritePrivateProfileStringW(L"foc_coop", L"instance", v, ini); }
+    Log("settings: saved to %ls", ini);
+}
+static void DrawSettingsPage() {
+    ImGui::TextUnformatted("SETTINGS");
+    ImGui::Separator();
+    bool changed = false;
+    ImGui::TextDisabled("Apply at once (also while playing):");
+    changed |= ImGui::Checkbox("Rescue a player who falls out of the level", &g_rescue);
+    changed |= ImGui::Checkbox("Spawn the guest next to the host when the start spot is blocked", &g_spawnShiftFlag);
+    changed |= ImGui::Checkbox("Guest camera follows its own character", &g_viewFix);
+    changed |= ImGui::Checkbox("Share host objects with guests (fixes host crashes in story)", &g_ctrlShare);
+    changed |= ImGui::Checkbox("Host first in the player list (story scripts target the host)", &g_hostFirst);
+    changed |= ImGui::Checkbox("Detailed diagnostics in foc_coop.log", &g_ctrlDiag);
+    ImGui::Spacing();
+    ImGui::TextDisabled("Used when you host next time:");
+    changed |= ImGui::Checkbox("Host through Steam by default", &g_useSteam);
+    changed |= ImGui::SliderInt("Player limit", &g_maxPlayers, 2, 5);
+    ImGui::Spacing();
+    if (changed) SaveSettings();
+    ImGui::TextDisabled("Saved to foc_coop.ini next to TFOC.exe.");
+    if (ImGui::Button("Back")) g_page = 0;
 }
 
 static void DrawAboutPage() {
@@ -560,7 +603,7 @@ static void DrawMenu(ImGuiIO& io) {
     ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.92f);
     ImGui::Begin("foc-coop", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
-    switch (g_page) { case 1: DrawHostPage(); break; case 2: DrawJoinPage(); break; case 3: DrawAboutPage(); break; default: DrawMainPage(); }
+    switch (g_page) { case 1: DrawHostPage(); break; case 2: DrawJoinPage(); break; case 3: DrawAboutPage(); break; case 4: DrawSettingsPage(); break; default: DrawMainPage(); }
     ImGui::Spacing(); ImGui::Separator();
     ImGui::TextDisabled("%s", g_execStatus);
     ImGui::End();
@@ -594,6 +637,7 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
     }
     ImGuiIO& io = ImGui::GetIO();
     { static DWORD lastRelay = 0; if (GetTickCount() - lastRelay > 1000) { lastRelay = GetTickCount(); ReadRelayStatus(); } }
+    { LONG r = InterlockedExchange(&g_menuReq, -1); if (r == 99) g_menuOpen = 0; else if (r >= 0) { g_menuOpen = 1; g_page = r; } }   // `menu` test command
     // toggle on F10 (edge)
     static bool f10prev = false; bool f10 = KeyDown(VK_F10);
     if (f10 && !f10prev) { g_menuOpen = !g_menuOpen; if (g_menuOpen) { g_page = 0; ClipCursor(nullptr); } }
@@ -665,6 +709,7 @@ static HRESULT WINAPI h_EndScene(IDirect3DDevice9* dev) {
     if (bb) bb->Release();
     if (isFinal && InterlockedExchange(&g_shotReq, 0)) { __try { SaveBackBuffer(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("shot: exception"); } }
     if (isFinal) { __try { RenderOverlay(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { static int n = 0; if (n++ < 3) Log("menu: exception in overlay render"); } }
+    if (isFinal && InterlockedExchange(&g_shotUiReq, 0)) { __try { SaveBackBuffer(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("shot: exception"); } }
     return D3dFor(dev)->end(dev);
 }
 
@@ -874,6 +919,11 @@ static void InitHostStateFromCmdline() {
 }
 
 static void OverlayStart() {
+    {   // Settings page value: host through Steam by default
+        wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH); wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
+        wchar_t ini[MAX_PATH]; _snwprintf_s(ini, _TRUNCATE, L"%s\\foc_coop.ini", dir);
+        g_useSteam = GetPrivateProfileIntW(L"foc_coop", L"steamhost", 1, ini) != 0;
+    }
     InitHostStateFromCmdline();
     InitializeCriticalSection(&g_cmdCs); InitializeCriticalSection(&g_lobCs);
     g_cmdEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);

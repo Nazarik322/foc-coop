@@ -3,6 +3,13 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (evening): F10 Settings page
+
+- F10 -> Settings: rescue, spawnshift, guest camera fix, ctrlshare, hostfirst, diagnostics apply at once (also in a
+  game); "host through Steam" and the player limit apply next time you host. Saved to foc_coop.ini (the full player
+  set, so a partial ini never turns features off). Test commands `menu <page>|off` and `shotui <file>` (screenshot
+  with the menu). Verified: page captured in the front end; 2b and Ark still PASS.
+
 ## 2026-10-19 (evening): owner playtest fixes
 
 - **"Teleported back" (host and guest)**: the rescue teleport fired when one player simply walked down the level
