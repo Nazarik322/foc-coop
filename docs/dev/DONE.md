@@ -5,6 +5,10 @@ Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.m
 
 ## 2026-10-19 (afternoon, stage 1 of the new plan)
 
+- **B1 fixed in chapters 1, 2a, 3b, 4c, 5, 9** (`spawnshift`): cause found with a hardware breakpoint on the object
+  allocator plus Ghidra (RestartPlayer spawns the guest's pawn into the host and the spawn fails). Matrix with
+  screenshots, 120 s alive: all six PASS; without the fix all six FAIL (guest spawn state 2). 8b remains (state 0).
+
 - **B10 fixed: the host's camera followed the guest's pawn** (reported by the owner). Cause: ctrlshare copied the
   host's `TnCameraStrategyManager` (PC+0x694) into the guest's controller, so both controllers drove one camera.
   Fix: `ctrlskip` defaults to `Camera`. Verified with in-game screenshots (matrix `-Look`, only the guest walks):

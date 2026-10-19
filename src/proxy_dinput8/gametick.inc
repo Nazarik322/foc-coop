@@ -623,7 +623,7 @@ static void TickPeFind(TArr* go) {
 // ---------------------------------------------------------------- spawntrace (ini spawntrace=1, B1 diagnosis)
 // Once a guest is stuck in spawn state 2, put a hardware breakpoint (DR0, game thread) on the object allocator
 // (ghidra 0x759d80, StaticAllocateObject); the VEH logs the call stack of every allocation of the player pawn class.
-struct HwbpArgs { DWORD tid; BYTE* addr; };
+struct HwbpArgs { DWORD tid; BYTE* addr; int slot; };
 static DWORD WINAPI SetHwbpThread(LPVOID p) {
     HwbpArgs* a = (HwbpArgs*)p;
     HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, a->tid);
@@ -631,10 +631,11 @@ static DWORD WINAPI SetHwbpThread(LPVOID p) {
     SuspendThread(th);
     CONTEXT c = {}; c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
     GetThreadContext(th, &c);
-    c.Dr0 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0xF0003u) | 1;   // L0, execute, length 1
+    if (a->slot == 0) { c.Dr0 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0x000F0003u) | 0x1; }   // L0, execute
+    else { c.Dr1 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0x00F0000Cu) | 0x4; }               // L1, execute
     BOOL ok = SetThreadContext(th, &c);
     ResumeThread(th); CloseHandle(th);
-    Log("spawntrace: DR0=%p on thread %lu -> %d", a->addr, a->tid, ok);
+    Log("hwbp: DR%d=%p on thread %lu -> %d", a->slot, a->addr, a->tid, ok);
     return 0;
 }
 static void TickSpawnTrace(const TickObjs& t) {
@@ -647,7 +648,7 @@ static void TickSpawnTrace(const TickObjs& t) {
     g_hwbpAddr = (BYTE*)GetModuleHandleW(nullptr) + (0x759d80 - 0x400000);
     char cn[80] = ""; if (g_hwbpClass) ObjNameStr(g_hwbpClass, cn, sizeof(cn));
     Log("spawntrace: armed for class %p (%s)", g_hwbpClass, cn);
-    static HwbpArgs args; args.tid = GetCurrentThreadId(); args.addr = g_hwbpAddr;
+    static HwbpArgs args; args.tid = GetCurrentThreadId(); args.addr = g_hwbpAddr; args.slot = 0;
     HANDLE h = CreateThread(nullptr, 0, SetHwbpThread, &args, 0, nullptr);
     if (h) CloseHandle(h);   // it suspends this (game) thread briefly once we return to the message loop
 }
@@ -740,6 +741,25 @@ static void TickStartFix(const TickObjs& t) {
     g_sfStep++;
 }
 
+// ---------------------------------------------------------------- spawnshift (B1, ini spawnshift, default on)
+// The guest's pawn is spawned right next to the host (both use the host's start) and the spawn fails on collision every
+// tick. DR1 sits on the SpawnActor wrapper; the VEH moves the Location of player-pawn spawns while a guest is stuck.
+static void TickSpawnShift(const TickObjs& t) {
+    if (!g_spawnShiftFlag || t.ngame < 1) return;
+    bool stuck = false;
+    for (int a = 0; a < t.npc; a++) if (!IsLocalPC(t.pc[a]) && !PawnOf(t.pc[a]) && g_spawnState[a] == 2) stuck = true;
+    g_ssActive = stuck;
+    static bool armed = false;
+    if (!stuck || armed || t.npawn < 1) return;
+    armed = true;
+    g_ssClass = g_classObjById[*(unsigned*)(t.pawn[0] + 0x14) & 0x1fff];
+    g_ssAddr = (BYTE*)GetModuleHandleW(nullptr) + (0x54a8f0 - 0x400000);
+    Log("spawnshift: guest stuck in spawn state 2, watching player pawn spawns (class %p)", g_ssClass);
+    static HwbpArgs args; args.tid = GetCurrentThreadId(); args.addr = g_ssAddr; args.slot = 1;
+    HANDLE h = CreateThread(nullptr, 0, SetHwbpThread, &args, 0, nullptr);
+    if (h) CloseHandle(h);
+}
+
 // ---------------------------------------------------------------- the tick
 static void GameTick() {
     TArr* go = GObj();
@@ -761,6 +781,7 @@ static void GameTick() {
     TickStateFix(t);
     TickSpecFix(t);
     TickStartFix(t);
+    TickSpawnShift(t);
     DWORD now = GetTickCount();
     static DWORD lastDiag = 0, lastStat = 0, lastPawns = 0, lastState = 0;
     if (g_ctrlDiag && t.npc >= 1 && now - lastDiag > 4000) { lastDiag = now; CtrlDiag(t.pc, t.npc, go); }

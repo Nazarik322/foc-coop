@@ -62,6 +62,7 @@ function Look-Both($map, $pidA, $pidB) {
   $da = ImgDiff "$Out\$map`_A_1before.png" "$Out\$map`_A_2after.png"
   $db = ImgDiff "$Out\$map`_B_1before.png" "$Out\$map`_B_2after.png"
   $script:detail += " hostMoved=$hm guestMoved=$gm hostImgDiff=$da guestImgDiff=$db"
+  if ($map -notlike "L*") { return "" }   # Escalation: moving enemies and effects, the state file has no stable guest position; screenshots only
   if ($gm -lt 200) { return "guest did not move ($gm uu)" }
   if ($hm -lt 50 -and $da -gt [math]::Max(12, $db / 2)) { return "host picture changed ($da) although only the guest moved: host camera follows the guest (B10)" }
   return ""

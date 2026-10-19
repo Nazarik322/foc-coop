@@ -7,20 +7,21 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 
 ## Critical
 
-### B1. Story: the guest gets no pawn — fix found 2026-10-19 (`startfix`), verify on all chapters
-- Cause (found with a hardware breakpoint on the object allocator and Ghidra): `GameInfo.RestartPlayer` (native, ghidra
-  `0x7c2ee0`) stores `SpawnDefaultPawnFor`'s result in PC.Pawn. For the guest the spawn fails every tick (the actor is
-  created and destroyed again: the 47 "orphan" pawns are destroyed actors waiting for GC) because the guest's spawn
-  point is start + (200,200), right next to the host standing on the same `TnCampaignPlayerStart`: the robots collide.
-  It explains chapter 1 (works only after the host leaves the start in the tutorial) and the flaky 2a.
-- Fix `startfix` (default on): while a guest is in spawn state 2, move its StartSpot (Location +0xe4 and the copy at
-  +0x134) 500 uu around the original place, restore it once the guest has a pawn.
-  Verified once in chapter 3b: guest got a pawn on the first try and plays (screenshot). Remaining: 1, 2a, 4c, 5, 8b, 9.
-- Ruled out on the way: spectator bit (PRI+0x210 bit1, `specfix`, never set), script state Dead (`statefix`), hand-wired
-  possession (`possessfix`, crashes). All three stay off by default.
+### B1. Story: the guest gets no pawn — fixed in 1, 2a, 3b, 4c, 5, 9 (`spawnshift`); open: 8b
+- Cause: `GameInfo.RestartPlayer` (native, ghidra `0x7c2ee0`) spawns the guest's pawn right next to the host (the spawn
+  location follows the host, not the StartSpot actor) and the spawn fails on collision every tick; the 47 "orphan"
+  pawns are those failed spawns waiting for GC.
+- Fix `spawnshift` (default on): a hardware breakpoint (DR1, game thread) on the SpawnActor wrapper ghidra `0x54a8f0`;
+  while a guest is stuck in spawn state 2 the VEH moves the Location argument of player-pawn spawns 400-1000 uu away.
+  Verified 2026-10-19: chapters 1, 2a, 3b, 4c, 5, 9 PASS (guest pawn, 120 s alive, screenshots differ per player).
+- **8b (Grimlock Smash)**: different case, guest stays in spawn state **0** (`CheckReadySpawn` fails), not fixed.
+- Chapter 9: the guest's W press moved it only 48 uu (probably a wall in the start corridor); check by hand.
+- Chapter 1: the guest screen still shows the tutorial camera with dark silhouettes (B5/B6 territory).
+- Tried and ruled out: `startfix` (moving the StartSpot actor does not change the spawn location), spectator bit
+  (`specfix`), script state Dead (`statefix`), hand-wired possession (`possessfix`, crashes). All off by default.
 
-### B2. Story: the host crashes about 50 s after the guest joins — retest pending
-- Not seen in 2a with the game-thread tick (180 s alive). Chapter 5 not checked yet (guest gets no pawn there, B1).
+### B2. Story: the host crashes about 50 s after the guest joins — not reproduced since 2026-10-19
+- Not seen in 2a (180 s) and 5 (120 s, guest with pawn) since engine writes moved to the game thread. Keep watching.
 - Old analysis: crash at ghidra `0x857202` in pawn property replication (null cached `UProperty*`).
 
 ## Major

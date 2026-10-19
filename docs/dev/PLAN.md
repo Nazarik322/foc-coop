@@ -5,7 +5,8 @@ Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.c
 
 ## Next step (where to resume)
 **Before every DLL commit run the "must pass" set in [TESTS.md](TESTS.md).**
-1. Verify `startfix` (B1) on chapters 1, 2a, 4c, 5, 8b, 9 with `-Look`, then B2 in chapter 5; then the must-pass set.
+1. B1 in 8b (guest spawn state 0); then all 13 chapters together (stage 7, R1) with `-Look`; rerun the must-pass set
+   with the desktop shown (last run had SKIPs).
 2. Injected input via window messages (stage 6) so movement tests need no focus.
 3. Stage 3: ProcessEvent looks unusable (script mostly native, see NOTES); go for native calls found in Ghidra.
 

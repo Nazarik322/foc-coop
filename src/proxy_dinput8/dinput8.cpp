@@ -64,7 +64,9 @@ static bool g_peFind = false;
 static bool g_spawnTrace = false;
 static bool g_stateFix = false;
 static bool g_specFix = false;
-static bool g_startFix = true;   // B1: move a blocked start spot so the guest spawn does not collide (gametick.inc)   // B1: clear the guest PRI spectator bit so Possess works (gametick.inc)   // B1 experiment (gametick.inc)   // B1: call stacks of player-pawn allocations (gametick.inc)
+static bool g_startFix = false;   // superseded by spawnshift
+static bool g_spawnShiftFlag = true;   // B1: shift the guest pawn spawn location away from the host (gametick.inc + VEH)
+static BYTE* volatile g_ssAddr = nullptr; static BYTE* volatile g_ssClass = nullptr; static volatile LONG g_ssActive = 0, g_ssCount = 0;   // B1: move a blocked start spot so the guest spawn does not collide (gametick.inc)   // B1: clear the guest PRI spectator bit so Possess works (gametick.inc)   // B1 experiment (gametick.inc)   // B1: call stacks of player-pawn allocations (gametick.inc)
 static BYTE* volatile g_hwbpAddr = nullptr; static BYTE* volatile g_hwbpClass = nullptr; static volatile LONG g_hwbpHits = 0;   // locate ProcessEvent through a PlayerTick thunk (gametick.inc)   // B1 experiment (gametick.inc)   // B10: guest camera follows its own pawn (gametick.inc)
 static char g_instClass[64] = "";
 
@@ -1619,6 +1621,23 @@ static void LogRegObjects(CONTEXT* c) {
 
 static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
+    // spawnshift (B1): hardware breakpoint DR1 on the SpawnActor wrapper (ghidra 0x54a8f0); while a guest is stuck in
+    // spawn state 2, move the Location argument of player pawn spawns away from the host so the new pawn fits.
+    if (code == EXCEPTION_SINGLE_STEP && g_ssAddr && (BYTE*)ep->ExceptionRecord->ExceptionAddress == g_ssAddr) {
+        CONTEXT* c = ep->ContextRecord; DWORD* sp = (DWORD*)c->Esp;
+        BYTE* cls = (BYTE*)(UINT_PTR)sp[1];
+        if (g_ssActive && (cls == g_ssClass || cls + 0x10 == g_ssClass || cls == g_ssClass + 0x10) && Rd((void*)(UINT_PTR)sp[4], 12)) {
+            float* loc = (float*)(UINT_PTR)sp[4];
+            LONG n = InterlockedIncrement(&g_ssCount);
+            static const float dx[8] = {1, 0, -1, 0, 0.7f, -0.7f, 0.7f, -0.7f}, dy[8] = {0, 1, 0, -1, 0.7f, 0.7f, -0.7f, -0.7f};
+            float r = 400.0f + 200.0f * ((n / 8) % 4);
+            float o0 = loc[0], o1 = loc[1];
+            loc[0] += dx[n % 8] * r; loc[1] += dy[n % 8] * r; loc[2] += 60.0f;
+            if (n <= 12) Log("spawnshift: player pawn spawn #%ld moved (%.0f,%.0f) -> (%.0f,%.0f,%.0f)", n, o0, o1, loc[0], loc[1], loc[2]);
+        }
+        c->EFlags |= 0x10000;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     // spawntrace: hardware breakpoint on the object allocator; log who allocates objects of the player pawn class
     if (code == EXCEPTION_SINGLE_STEP && g_hwbpAddr && (BYTE*)ep->ExceptionRecord->ExceptionAddress == g_hwbpAddr) {
         CONTEXT* c = ep->ContextRecord; DWORD* sp = (DWORD*)c->Esp;
@@ -1800,7 +1819,8 @@ static void LoadConfig(const wchar_t* dir) {
         g_spawnTrace = GetPrivateProfileIntW(L"foc_coop", L"spawntrace", 0, ini2) != 0;
         g_stateFix = GetPrivateProfileIntW(L"foc_coop", L"statefix", 0, ini2) != 0;
         g_specFix = GetPrivateProfileIntW(L"foc_coop", L"specfix", 0, ini2) != 0;
-        g_startFix = GetPrivateProfileIntW(L"foc_coop", L"startfix", 1, ini2) != 0;
+        g_startFix = GetPrivateProfileIntW(L"foc_coop", L"startfix", 0, ini2) != 0;
+        g_spawnShiftFlag = GetPrivateProfileIntW(L"foc_coop", L"spawnshift", 1, ini2) != 0;
         if (g_tickMs < 20) g_tickMs = 20;
         if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
             g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;
