@@ -303,6 +303,25 @@ static const char* CmdlineUrl() {
     return url;
 }
 
+// The object's current script state: UObject keeps a pointer to its FStateFrame, whose first words include the UState
+// node. Found by scanning the header for a pointer to a block that holds an object of class "State".
+static int g_stateFrameOff = -1, g_stateNodeIdx = -1;
+static unsigned g_stateClassId = 0;
+static void StateName(BYTE* o, char* out, size_t n) {
+    out[0] = 0;
+    if (!g_stateClassId) { g_stateClassId = ClassIdByName("State"); if (!g_stateClassId) return; }
+    for (int off = (g_stateFrameOff >= 0 ? g_stateFrameOff : 0x08); off < (g_stateFrameOff >= 0 ? g_stateFrameOff + 1 : 0x60); off += 4) {
+        BYTE* f = *(BYTE**)(o + off);
+        if ((UINT_PTR)f < 0x10000 || !Rd(f, 0x20)) continue;
+        for (int j = (g_stateNodeIdx >= 0 ? g_stateNodeIdx : 0); j < (g_stateNodeIdx >= 0 ? g_stateNodeIdx + 1 : 8); j++) {
+            BYTE* st = *(BYTE**)(f + j * 4);
+            if (!IsObjFast(st) || (*(unsigned*)(st + 0x14) & 0x1fff) != g_stateClassId) continue;
+            if (g_stateFrameOff < 0) { g_stateFrameOff = off; g_stateNodeIdx = j; Log("tick: state frame at +0x%x, node word %d", off, j); }
+            ObjNameStr(st, out, n); SafeAscii(out); return;
+        }
+    }
+}
+
 static void WriteState(const TickObjs& t) {
     static char buf[16384];
     int n = 0;
@@ -316,11 +335,13 @@ static void WriteState(const TickObjs& t) {
         char pcn[96], pwn[96], start[96], view[96], chr[64] = "";
         ObjLabel(pc, pcn, sizeof(pcn)); ObjLabel(pw, pwn, sizeof(pwn)); ObjLabel(*(BYTE**)(pc + 0x220), start, sizeof(start));
         ObjLabel(*(BYTE**)(pc + 0x378), view, sizeof(view));   // camera view target (PlayerController+0x378)
+        char st[64]; StateName(pc, st, sizeof(st));
         BYTE* pri = *(BYTE**)(pc + 0x1d4);
-        if (IsObjFast(pri)) FStrAscii(pri + 0x34c, chr, sizeof(chr));
+        DWORD prif = 0;
+        if (IsObjFast(pri)) { FStrAscii(pri + 0x34c, chr, sizeof(chr)); prif = *(DWORD*)(pri + 0x210); }
         float* f = pw ? LocOf(pw) : nullptr;
-        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"char\":\"%s\"}",
-          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, chr);
+        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"state\":\"%s\",\"prif\":%lu,\"char\":\"%s\"}",
+          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, st, prif, chr);
     }
     J("],\"pawns\":[");
     for (int i = 0; i < t.npawn; i++) {
@@ -599,6 +620,126 @@ static void TickPeFind(TArr* go) {
     Log("pefind: PlayerTick functions patched: %d", patched);
 }
 
+// ---------------------------------------------------------------- spawntrace (ini spawntrace=1, B1 diagnosis)
+// Once a guest is stuck in spawn state 2, put a hardware breakpoint (DR0, game thread) on the object allocator
+// (ghidra 0x759d80, StaticAllocateObject); the VEH logs the call stack of every allocation of the player pawn class.
+struct HwbpArgs { DWORD tid; BYTE* addr; };
+static DWORD WINAPI SetHwbpThread(LPVOID p) {
+    HwbpArgs* a = (HwbpArgs*)p;
+    HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, a->tid);
+    if (!th) return 1;
+    SuspendThread(th);
+    CONTEXT c = {}; c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    GetThreadContext(th, &c);
+    c.Dr0 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0xF0003u) | 1;   // L0, execute, length 1
+    BOOL ok = SetThreadContext(th, &c);
+    ResumeThread(th); CloseHandle(th);
+    Log("spawntrace: DR0=%p on thread %lu -> %d", a->addr, a->tid, ok);
+    return 0;
+}
+static void TickSpawnTrace(const TickObjs& t) {
+    static bool armed = false;
+    if (!g_spawnTrace || armed || t.npawn < 1) return;
+    bool stuck = false; for (int a = 0; a < t.npc; a++) if (g_spawnState[a] == 2) stuck = true;
+    if (!stuck) return;
+    armed = true;
+    g_hwbpClass = g_classObjById[*(unsigned*)(t.pawn[0] + 0x14) & 0x1fff];
+    g_hwbpAddr = (BYTE*)GetModuleHandleW(nullptr) + (0x759d80 - 0x400000);
+    char cn[80] = ""; if (g_hwbpClass) ObjNameStr(g_hwbpClass, cn, sizeof(cn));
+    Log("spawntrace: armed for class %p (%s)", g_hwbpClass, cn);
+    static HwbpArgs args; args.tid = GetCurrentThreadId(); args.addr = g_hwbpAddr;
+    HANDLE h = CreateThread(nullptr, 0, SetHwbpThread, &args, 0, nullptr);
+    if (h) CloseHandle(h);   // it suspends this (game) thread briefly once we return to the message loop
+}
+
+static void StateName(BYTE* o, char* out, size_t n);
+// ---------------------------------------------------------------- statefix (B1 experiment, ini statefix=1)
+// In chapters where the guest never gets a pawn its controller sits in script state Dead on the host, and RestartPlayer's
+// Possess does nothing there. Switch it to the host controller's state node (normally PlayerWalking).
+static void TickStateFix(const TickObjs& t) {
+    {   // one-time: where RestartPlayer's virtual calls go for a remote controller (vtable of the +0x10 subobject)
+        static bool logged = false;
+        for (int a = 0; a < t.npc && !logged; a++) {
+            if (IsLocalPC(t.pc[a])) continue;
+            BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+            BYTE** vt = *(BYTE***)(t.pc[a] + 0x10); BYTE** gvt = t.ngame ? *(BYTE***)t.game[0] : nullptr;
+            if (!Rd(vt, 0x400)) continue;
+            logged = true;
+            Log("vtdiag: PC+0x10 vtable ghidra %lx: +0x210 %lx +0x278 (Possess) %lx +0x320 %lx; Game vtable %lx: +0x2b4 %lx +0x2c0 %lx +0x2f8 %lx",
+                (unsigned long)(0x400000 + ((BYTE*)vt - base)), (unsigned long)(0x400000 + (vt[0x210 / 4] - base)), (unsigned long)(0x400000 + (vt[0x278 / 4] - base)), (unsigned long)(0x400000 + (vt[0x320 / 4] - base)),
+                gvt ? (unsigned long)(0x400000 + ((BYTE*)gvt - base)) : 0, gvt ? (unsigned long)(0x400000 + (gvt[0x2b4 / 4] - base)) : 0, gvt ? (unsigned long)(0x400000 + (gvt[0x2c0 / 4] - base)) : 0, gvt ? (unsigned long)(0x400000 + (gvt[0x2f8 / 4] - base)) : 0);
+        }
+    }
+    if (!g_stateFix || g_stateFrameOff < 0) return;
+    BYTE* hostNode = nullptr;
+    for (int a = 0; a < t.npc; a++) if (IsLocalPC(t.pc[a])) { BYTE* f = *(BYTE**)(t.pc[a] + g_stateFrameOff); if ((UINT_PTR)f > 0x10000) hostNode = *(BYTE**)(f + g_stateNodeIdx * 4); }
+    if (!IsObjFast(hostNode)) return;
+    for (int a = 0; a < t.npc; a++) {
+        BYTE* pc = t.pc[a];
+        if (IsLocalPC(pc) || PawnOf(pc) || g_spawnState[a] != 2) continue;
+        char st[64]; StateName(pc, st, sizeof(st));
+        if (strcmp(st, "Dead") != 0) continue;
+        BYTE* f = *(BYTE**)(pc + g_stateFrameOff);
+        *(BYTE**)(f + g_stateNodeIdx * 4) = hostNode;
+        char hn[64]; ObjNameStr(hostNode, hn, sizeof(hn));
+        static volatile LONG n = 0; if (InterlockedIncrement(&n) <= 10) Log("statefix: guest PC %p state Dead -> %s", pc, hn);
+    }
+}
+
+// ---------------------------------------------------------------- specfix (B1, ini specfix, default on)
+// Controller::Possess (ghidra 0xb279d0) only possesses when bit 1 of PlayerReplicationInfo+0x210 is clear
+// (UE3: PlayerReplicationInfo.bOnlySpectator). In the chapters where the guest never gets a pawn that bit is set on the
+// guest's PRI, so RestartPlayer spawns a pawn every tick and Possess skips it. Clear the bit for a guest stuck in
+// spawn state 2.
+static void TickSpecFix(const TickObjs& t) {
+    if (!g_specFix) return;
+    for (int a = 0; a < t.npc; a++) {
+        BYTE* pc = t.pc[a];
+        if (IsLocalPC(pc) || PawnOf(pc) || g_spawnState[a] != 2) continue;
+        BYTE* pri = *(BYTE**)(pc + 0x1d4);
+        if (!IsObjFast(pri)) continue;
+        DWORD* f = (DWORD*)(pri + 0x210);
+        if (!(*f & 2)) continue;
+        Log("specfix: guest PC %p PRI %p flags %08lx -> %08lx (spectator bit cleared)", pc, pri, *f, *f & ~2u);
+        *f &= ~2u;
+    }
+}
+
+// ---------------------------------------------------------------- startfix (B1, ini startfix, default on)
+// RestartPlayer stores SpawnDefaultPawnFor's result in PC.Pawn. For a guest stuck in spawn state 2 the spawn itself
+// fails (the actor is created and destroyed again, those are the "orphan" pawns): the start spot is the one the host
+// stands on, so the new pawn collides. While a guest is stuck, move its StartSpot (PC+0x220) around the original
+// place (8 directions, 300 uu, one per tick); put it back once the guest has a pawn.
+static BYTE* g_sfSpot = nullptr; static float g_sfOrig[3], g_sfOrig2[3]; static int g_sfStep = 0;
+static void SfSet(BYTE* spot, const float* a, const float* b) { memcpy(LocOf(spot), a, 12); memcpy(spot + 0x134, b, 12); }
+static void TickStartFix(const TickObjs& t) {
+    if (!g_startFix) return;
+    BYTE* stuckPc = nullptr;
+    for (int a = 0; a < t.npc; a++) if (!IsLocalPC(t.pc[a]) && !PawnOf(t.pc[a]) && g_spawnState[a] == 2) stuckPc = t.pc[a];
+    if (!stuckPc) {
+        if (g_sfSpot) {   // done (or the guest left): restore
+            if (IsObjFast(g_sfSpot)) SfSet(g_sfSpot, g_sfOrig, g_sfOrig2);
+            Log("startfix: start spot %p restored after %d tries", g_sfSpot, g_sfStep);
+            g_sfSpot = nullptr; g_sfStep = 0;
+        }
+        return;
+    }
+    BYTE* spot = *(BYTE**)(stuckPc + 0x220);
+    if (!IsObjFast(spot)) return;
+    if (spot != g_sfSpot) {
+        if (g_sfSpot && IsObjFast(g_sfSpot)) SfSet(g_sfSpot, g_sfOrig, g_sfOrig2);
+        g_sfSpot = spot; memcpy(g_sfOrig, LocOf(spot), 12); memcpy(g_sfOrig2, spot + 0x134, 12); g_sfStep = 0;
+        char sn[96]; ObjLabel(spot, sn, sizeof(sn));
+        Log("startfix: guest stuck in spawn state 2, moving its start spot %s (%.0f,%.0f,%.0f)", sn, g_sfOrig[0], g_sfOrig[1], g_sfOrig[2]);
+    }
+    static const float dx[8] = {1, 0, -1, 0, 0.7f, -0.7f, 0.7f, -0.7f}, dy[8] = {0, 1, 0, -1, 0.7f, 0.7f, -0.7f, -0.7f};
+    int k = g_sfStep % 8; float r = 500.0f * (1 + (g_sfStep / 8) % 3);
+    float n[3] = {g_sfOrig[0] + dx[k] * r, g_sfOrig[1] + dy[k] * r, g_sfOrig[2] + 40.0f};
+    float n2[3] = {g_sfOrig2[0] + dx[k] * r, g_sfOrig2[1] + dy[k] * r, g_sfOrig2[2] + 40.0f};
+    SfSet(spot, n, n2);
+    g_sfStep++;
+}
+
 // ---------------------------------------------------------------- the tick
 static void GameTick() {
     TArr* go = GObj();
@@ -616,6 +757,10 @@ static void GameTick() {
     TickViewFix(t);
     TickPossessFix(t);
     TickPeFind(go);
+    TickSpawnTrace(t);
+    TickStateFix(t);
+    TickSpecFix(t);
+    TickStartFix(t);
     DWORD now = GetTickCount();
     static DWORD lastDiag = 0, lastStat = 0, lastPawns = 0, lastState = 0;
     if (g_ctrlDiag && t.npc >= 1 && now - lastDiag > 4000) { lastDiag = now; CtrlDiag(t.pc, t.npc, go); }

@@ -5,7 +5,7 @@ Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.c
 
 ## Next step (where to resume)
 **Before every DLL commit run the "must pass" set in [TESTS.md](TESTS.md).**
-1. B1 in chapters 1, 3b, 4c, 5, 8b, 9: guest stuck in spawn state 2 (TrySpawnPlayer fails). Then B2 in chapter 5.
+1. Verify `startfix` (B1) on chapters 1, 2a, 4c, 5, 8b, 9 with `-Look`, then B2 in chapter 5; then the must-pass set.
 2. Injected input via window messages (stage 6) so movement tests need no focus.
 3. Stage 3: ProcessEvent looks unusable (script mostly native, see NOTES); go for native calls found in Ghidra.
 

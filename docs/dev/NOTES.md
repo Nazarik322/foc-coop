@@ -45,6 +45,15 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   +0x20..+0x1a0 (`pefind=1`). Likely most UnrealScript is compiled to C++ by High Moon; calling script functions through
   ProcessEvent may not be possible. Native calls (Ghidra) are the more promising route.
 
+## Spawn path (native, found 2026-10-19 with `spawntrace=1`)
+- `0x759d80` StaticAllocateObject <- `0x77ce70` <- `0xb93390` <- `0x88d4c0` SpawnActor <- `0x54a8f0` <- `0x5abb10`
+  SpawnDefaultPawnFor (virtual) <- `0x7c2ee0` **RestartPlayer** (game vtable +0x2b4 is the spawn call; controller vtable
+  of the PC+0x10 subobject: +0x278 Possess = `0x5eca60` -> `0xb279d0` Controller::Possess).
+- `0xb560b0`: "role is not authority on a networked actor" check (WorldInfo +0x3e4 NetMode, actor +0x5e Role).
+- Controller::Possess skips when PRI+0x210 bit1 (spectator) is set.
+- Script state of an object: state frame pointer at +0x28, word 1 = UState node (e.g. PlayerWalking, Dead).
+- Natively the pawn of a controller passed as `this+0x10` is at `this[0x70]` (= PC+0x1d0).
+
 ## Script facts (decompiled UnrealScript in `coop-anything/local/script`)
 - Spawn flow: `TnGame.PostLogin` calls `SpawnHelper.Login(PC)` for remote controllers (`TnGame.uc:481`).
   `TnPlayerSpawnHelper.Tick` per player: state 0 `CheckReadySpawn` (CanRestartPlayer + HasSelectedCharacter) → 1

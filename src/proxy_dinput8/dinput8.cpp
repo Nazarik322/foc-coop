@@ -60,7 +60,12 @@ static bool g_charFixFlag = false;
 static int g_tickMs = 200;
 static bool g_viewFix = true;
 static bool g_possessFix = false;
-static bool g_peFind = false;   // locate ProcessEvent through a PlayerTick thunk (gametick.inc)   // B1 experiment (gametick.inc)   // B10: guest camera follows its own pawn (gametick.inc)
+static bool g_peFind = false;
+static bool g_spawnTrace = false;
+static bool g_stateFix = false;
+static bool g_specFix = false;
+static bool g_startFix = true;   // B1: move a blocked start spot so the guest spawn does not collide (gametick.inc)   // B1: clear the guest PRI spectator bit so Possess works (gametick.inc)   // B1 experiment (gametick.inc)   // B1: call stacks of player-pawn allocations (gametick.inc)
+static BYTE* volatile g_hwbpAddr = nullptr; static BYTE* volatile g_hwbpClass = nullptr; static volatile LONG g_hwbpHits = 0;   // locate ProcessEvent through a PlayerTick thunk (gametick.inc)   // B1 experiment (gametick.inc)   // B10: guest camera follows its own pawn (gametick.inc)
 static char g_instClass[64] = "";
 
 static void Log(const char* fmt, ...) {
@@ -1614,6 +1619,38 @@ static void LogRegObjects(CONTEXT* c) {
 
 static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
+    // spawntrace: hardware breakpoint on the object allocator; log who allocates objects of the player pawn class
+    if (code == EXCEPTION_SINGLE_STEP && g_hwbpAddr && (BYTE*)ep->ExceptionRecord->ExceptionAddress == g_hwbpAddr) {
+        CONTEXT* c = ep->ContextRecord; DWORD* sp = (DWORD*)c->Esp;
+        if ((BYTE*)(UINT_PTR)sp[1] == g_hwbpClass || (BYTE*)(UINT_PTR)c->Ecx == g_hwbpClass) {
+            LONG n = InterlockedIncrement(&g_hwbpHits);
+            BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+            char line[1500]; size_t k = _snprintf_s(line, _TRUNCATE, "spawntrace: pawn allocation #%ld, return addresses (ghidra VA):", n);
+            int m = 0;
+            for (int i = 0; i < 1500 && m < 24 && Rd(sp + i, 4); i++) {
+                BYTE* v = (BYTE*)sp[i];
+                if (v < base + 0x1000 || v >= base + 0x1000 + 0xf5fc71 || !Rd(v - 6, 6)) continue;
+                bool call = (v[-5] == 0xE8) || (v[-2] == 0xFF && (v[-1] & 0x38) == 0x10) || (v[-3] == 0xFF && (v[-2] & 0x38) == 0x10) || (v[-6] == 0xFF && (v[-5] & 0x38) == 0x10);
+                if (!call) continue;
+                k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " [%d]%lx", i, (unsigned long)(0x400000 + (v - base))); m++;
+            }
+            Log("%s", line);
+            {   // frame-pointer chain: [esp] = direct caller, then ebp -> [ebp+4]
+                k = _snprintf_s(line, _TRUNCATE, "spawntrace: ebp chain: %lx", (unsigned long)(0x400000 + ((BYTE*)(UINT_PTR)sp[0] - base)));
+                DWORD* fp = (DWORD*)(UINT_PTR)c->Ebp;
+                for (int i = 0; i < 24 && Rd(fp, 8); i++) {
+                    BYTE* r = (BYTE*)(UINT_PTR)fp[1];
+                    if (r < base + 0x1000 || r >= base + 0x1000 + 0xf5fc71) break;
+                    k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %lx", (unsigned long)(0x400000 + (r - base)));
+                    DWORD* nx = (DWORD*)(UINT_PTR)fp[0]; if (nx <= fp) break; fp = nx;
+                }
+                Log("%s", line);
+            }
+            if (n >= 3) c->Dr7 = 0;   // enough samples
+        }
+        c->EFlags |= 0x10000;   // resume flag: run the instruction without breaking again
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     // null-this guard: ghidra FUN_00c2b010 (input-binding lookup) is called on a null object in a coop campaign.
     // Fault is at +6 after 4 pushes (ebx,ebp,esi,edi); emulate "xor eax,eax; pop x4; ret 8".
     if ((g_skipTut || g_tutGuard) && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Ecx == 0 &&
@@ -1760,6 +1797,10 @@ static void LoadConfig(const wchar_t* dir) {
         g_viewFix = GetPrivateProfileIntW(L"foc_coop", L"viewfix", 1, ini2) != 0;
         g_possessFix = GetPrivateProfileIntW(L"foc_coop", L"possessfix", 0, ini2) != 0;
         g_peFind = GetPrivateProfileIntW(L"foc_coop", L"pefind", 0, ini2) != 0;
+        g_spawnTrace = GetPrivateProfileIntW(L"foc_coop", L"spawntrace", 0, ini2) != 0;
+        g_stateFix = GetPrivateProfileIntW(L"foc_coop", L"statefix", 0, ini2) != 0;
+        g_specFix = GetPrivateProfileIntW(L"foc_coop", L"specfix", 0, ini2) != 0;
+        g_startFix = GetPrivateProfileIntW(L"foc_coop", L"startfix", 1, ini2) != 0;
         if (g_tickMs < 20) g_tickMs = 20;
         if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
             g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;

@@ -7,15 +7,17 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 
 ## Critical
 
-### B1. Story: the guest gets no pawn — investigating (now chapters 1, 3b, 4c, 5, 8b, 9)
-- 2026-10-19 afternoon: with all engine writes on the game thread (gametick.inc) the guest gets a pawn in **2b** (4/4)
-  and **2a in 2 of 3 runs** (third: spawn state 2) — so B1 is not fixed, the timing only got better. Still failing: 1 (until the host finishes the tutorial), 3b, 4c, 5, 8b, 9.
-- In the failing chapters the guest stays in spawn state **2**: `TnGame.TrySpawnPlayer` (native) fails every tick and
-  leaves a new unpossessed `TnPlayerPawn` at the start spot each time (47 of them after 2 min in chapter 1).
-- Not timing: chapter 3b stays in state 2 for 5 minutes (47 orphan pawns). The guest's StartSpot is set.
-- Tried `possessfix=1` (off by default): wiring an orphan pawn to the guest by hand (pawn+0x1dc = PC, PC+0x1d0/+0x374 =
-  pawn, helper state 3) crashes the host 7 s later (ghidra `0x75662d`, read of null+0x1d0). Hand-wiring is not enough.
-- Next: decompile the native `TrySpawnPlayer` of TnCampaignGame (Ghidra) to see which check fails after the spawn.
+### B1. Story: the guest gets no pawn — fix found 2026-10-19 (`startfix`), verify on all chapters
+- Cause (found with a hardware breakpoint on the object allocator and Ghidra): `GameInfo.RestartPlayer` (native, ghidra
+  `0x7c2ee0`) stores `SpawnDefaultPawnFor`'s result in PC.Pawn. For the guest the spawn fails every tick (the actor is
+  created and destroyed again: the 47 "orphan" pawns are destroyed actors waiting for GC) because the guest's spawn
+  point is start + (200,200), right next to the host standing on the same `TnCampaignPlayerStart`: the robots collide.
+  It explains chapter 1 (works only after the host leaves the start in the tutorial) and the flaky 2a.
+- Fix `startfix` (default on): while a guest is in spawn state 2, move its StartSpot (Location +0xe4 and the copy at
+  +0x134) 500 uu around the original place, restore it once the guest has a pawn.
+  Verified once in chapter 3b: guest got a pawn on the first try and plays (screenshot). Remaining: 1, 2a, 4c, 5, 8b, 9.
+- Ruled out on the way: spectator bit (PRI+0x210 bit1, `specfix`, never set), script state Dead (`statefix`), hand-wired
+  possession (`possessfix`, crashes). All three stay off by default.
 
 ### B2. Story: the host crashes about 50 s after the guest joins — retest pending
 - Not seen in 2a with the game-thread tick (180 s alive). Chapter 5 not checked yet (guest gets no pawn there, B1).
