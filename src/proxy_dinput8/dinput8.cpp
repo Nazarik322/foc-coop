@@ -43,6 +43,7 @@ static bool g_skipTut = false;
 static bool g_ctrlShare = false;
 static bool g_tutGuard = false;
 static bool g_hostFirst = false;
+static volatile LONG g_playerCount = 0;   // player controllers seen by the host (shown in the lobby list)
 static bool g_holdSpawn = false;
 static bool g_rescue = false;
 static int g_spawnAfter = 0;
@@ -1444,6 +1445,7 @@ static DWORD WINAPI CtrlShareThread(LPVOID) {
                 if (!Rd(obj, 0x740)) continue;
                 pcs[npc++] = obj;
             }
+            g_playerCount = npc;
             { static int lastN = -1; if (npc != lastN) { lastN = npc; Log("pcdiag: controller count now %d", npc); } }
             if (npc < 1 || (npc < 2 && !g_ctrlDiag)) continue;
             static DWORD lastDiag = 0; if (g_ctrlDiag && GetTickCount() - lastDiag > 4000 && (lastDiag = GetTickCount(), true)) {

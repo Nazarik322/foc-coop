@@ -166,7 +166,7 @@ struct Lobby { char host[32]; char mode[16]; char map[96]; int players, maxp, po
 static std::vector<Lobby> g_lobbies;
 static CRITICAL_SECTION g_lobCs;
 
-static int CurrentPlayerCount() { return 0; }   // filled by the session watcher below when known
+static int CurrentPlayerCount() { return g_playerCount > 0 ? (int)g_playerCount : 1; }
 
 static DWORD WINAPI BeaconThread(LPVOID) {
     WSADATA wd; WSAStartup(MAKEWORD(2, 2), &wd);
