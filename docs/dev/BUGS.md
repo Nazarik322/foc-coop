@@ -106,7 +106,10 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   chained after GameInfo+0x280 -> +0x1d0 NextGameRules).
 - Verified: TAB shows score, kills, deaths, revives, money for host and guest; store purchase prompt works.
 
-### B19. Escalation: a player can carry more weapons than 1 primary + 1 secondary/heavy — open, check after B18
+### B19. Escalation: a player can carry more weapons than 1 primary + 1 secondary/heavy — open, not reproduced yet
+- tools/esctest.ps1 checks transform, ability, weapon switch, downed/revive, money, lives by commands, but not the
+  weapon slots: that needs buying at an armory (Interact next to it). Next: buy two weapons with poke'd money and
+  count the weapons in the inventory.
 - Weapon slots are enforced by TnPickupManager.DropRobotWeapon on the server (tosses the weapon in the slot of the
   new pickup when TnSurvivalGame.RespectsWeaponTypes). Not reproduced yet; check after the B18 fix. Note: ctrlshare
   gives the guest the host's TnUIControllerSurvival, ProfileSettings and online objects (PickupManager is not shared).

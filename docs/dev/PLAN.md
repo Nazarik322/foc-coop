@@ -4,6 +4,13 @@
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
 ## Next step (where to resume)
+**2026-10-19 owner: Escalation first, released v0.4.0.** Open for Escalation: B19 weapon slots (buy at an armory),
+match end after the last team life, Armory Recreators / T.E.C.H. (not checked). Open for the story (later, owner said
+so): B11 automatic checkpoint restart and guest respawn after a real death, B14 cutscene camera, B15 streaming
+trigger teleport, B16 chapter title on one side, B17 intro animation, revive test both ways.
+Test commands now include `oexec <pc|pawn|rpc|rpawn|game|pri|rpri|obj:Name> <exec function>` (ScriptConsoleExec ->
+ProcessEvent 0x728c60) and `poke`; the developer exec FakeScoreKill crashes the server (do not use).
+
 **Owner priority 2026-10-19: chapter 6 (L06_Megatron) host and guest identical, then the same fix for every chapter.**
 Order: UI → cutscene sync → camera in scripted scenes → streaming triggers → deaths. Full list: B12-B16 in BUGS.md.
 - Root cause of most of it: Kismet runs only on the host; objectives, chapter title, markers, matinee and streaming are

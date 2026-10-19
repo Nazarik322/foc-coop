@@ -217,6 +217,8 @@ static BYTE* OexecTarget(const char* t) {
     if (!strcmp(t, "rpc")) return rpc;
     if (!strcmp(t, "rpawn")) return rpc ? PawnOf(rpc) : nullptr;
     if (!strcmp(t, "game")) return g_to.ngame ? g_to.game[0] : nullptr;
+    if (!strcmp(t, "pri")) return lpc ? *(BYTE**)(lpc + 0x1d4) : nullptr;
+    if (!strcmp(t, "rpri")) return rpc ? *(BYTE**)(rpc + 0x1d4) : nullptr;
     if (!strncmp(t, "obj:", 4)) return FindObjByLabel(t + 4);
     return nullptr;
 }
@@ -233,8 +235,20 @@ static void OexecCommand(const char* args) {
     Log("oexec: %s '%s' -> %s", on, rest, r ? "handled" : "not an exec function of this object");
 }
 
+// `poke <target> <hex offset> <int>` (foc_cmd.txt, game thread): write an int into an object (targets as oexec, plus
+// pri / rpri); e.g. Escalation money TnPlayerReplicationInfoSurvival._SurvivalMoney (offset from `props`)
+static void PokeCommand(const char* args) {
+    char target[96] = ""; unsigned off = 0; int v = 0;
+    if (sscanf_s(args, "%95s %x %d", target, (unsigned)sizeof(target), &off, &v) < 3) { Log("poke: bad arguments '%s'", args); return; }
+    BYTE* obj = OexecTarget(target);
+    if (!IsObjFast(obj) || off > 0x2000 || !Rd(obj + off, 4)) { Log("poke: no target '%s'", target); return; }
+    int old = *(int*)(obj + off); *(int*)(obj + off) = v;
+    char on[96]; ObjLabel(obj, on, sizeof(on)); Log("poke: %s +0x%x %d -> %d", on, off, old, v);
+}
+
 static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("oexec ", 0) == 0) { OexecCommand(cmd.c_str() + 6); return; }
+    if (cmd.rfind("poke ", 0) == 0) { PokeCommand(cmd.c_str() + 5); return; }
     if (cmd.rfind("lpexec ", 0) == 0) { LpExecCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("hp ", 0) == 0) { HpCommand(cmd.c_str() + 3); return; }
     if (cmd.rfind("tpmarker", 0) == 0) { TpMarkerCommand(cmd.size() > 9 ? cmd.c_str() + 9 : ""); return; }

@@ -72,7 +72,9 @@ function Look-Both($map, $pidA, $pidB) {
 function PawnSummary($s) { ($s.players | ForEach-Object { "$(if ($_.local) {'host'} else {'guest'}):$(if ($_.pawn) {'pawn'} else {'nopawn'})/spawn=$($_.spawn)" }) -join ' ' }
 
 foreach ($map in $Maps) {
-  if ([W]::GetForegroundWindow() -eq [IntPtr]::Zero) {
+  # no foreground window for 10 s in a row = no display (a single check also hits the moment between two windows)
+  $noDisplay = $true; for ($i = 0; $i -lt 20 -and $noDisplay; $i++) { if ([W]::GetForegroundWindow() -ne [IntPtr]::Zero) { $noDisplay = $false } else { Start-Sleep -Milliseconds 500 } }
+  if ($noDisplay) {
     # remote desktop session not displayed: the game cannot create its D3D device and crashes at start (BUGS B7)
     $line = "RESULT: SKIP $map no display (remote desktop window minimized or session locked)"
     Add-Content $report "$(Get-Date -Format s) $line"; $line; continue

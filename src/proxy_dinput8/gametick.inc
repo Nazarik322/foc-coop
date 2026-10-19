@@ -810,7 +810,10 @@ static bool PawnAlive(BYTE* pc) {
     return true;
 }
 // Called by the VEH on the game thread when the game wants the game-over state. true = skip it.
+// story chapters only (L01..L09): Escalation keeps its own rules (team lives, bleeding out)
+static bool StoryMapNow(const TickObjs& t) { char m[96]; MapName(t, m, sizeof(m)); return m[0] == 'L' && m[1] >= '0' && m[1] <= '9'; }
 static bool CoopDeathSkip(BYTE* obj) {
+    if (!StoryMapNow(g_to)) return false;
     int alive = 0, down = 0, n = g_to.npc;
     char line[600]; size_t k = 0;
     char on[96] = ""; ObjLabel(obj, on, sizeof(on));
@@ -842,6 +845,7 @@ static bool CoopDeathSkip(BYTE* obj) {
     return skip;
 }
 static void TickCoopDeath(const TickObjs& t) {
+    if (!StoryMapNow(t)) return;
     if (!g_coopDeath || t.npc < 1 || (t.ngame >= 1 && t.npc < 2)) return;
     static bool armed = false;
     if (!armed) {
@@ -893,6 +897,7 @@ static void TickCoopDeath(const TickObjs& t) {
 // does. downedsec > 0 sets the drain so that bleeding out takes that many seconds. Revive heals by -Health +
 // RevivalHealth, so a deep negative health does not matter. Applied to every player pawn on host and guest (HUD bar).
 static void TickDowned(const TickObjs& t) {
+    if (!StoryMapNow(t)) return;
     if (!g_coopDeath || t.npc < 1 || (t.ngame >= 1 && t.npc < 2)) return;
     const float big = 1.0e9f, rate = g_downedSec > 0 ? big / (float)g_downedSec : 0.0f;
     // host: everybody down (downed or dead) for 5 s -> nobody can revive; let them bleed out within a second so the game
