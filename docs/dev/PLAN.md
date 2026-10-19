@@ -7,7 +7,7 @@ Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.c
 **Before every DLL commit run the "must pass" set in [TESTS.md](TESTS.md).**
 1. B1 in chapters 1, 3b, 4c, 5, 8b, 9: guest stuck in spawn state 2 (TrySpawnPlayer fails). Then B2 in chapter 5.
 2. Injected input via window messages (stage 6) so movement tests need no focus.
-3. Stage 3 (ProcessEvent) with the fixed slot tracer.
+3. Stage 3: ProcessEvent looks unusable (script mostly native, see NOTES); go for native calls found in Ghidra.
 
 ## Goals in order
 1. **R1: all 13 story chapters start for 2 players.** Automated check: both have a pawn within 90 s of the guest joining,

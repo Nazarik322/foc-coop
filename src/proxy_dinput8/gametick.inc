@@ -495,6 +495,110 @@ static void TickViewFix(const TickObjs& t) {
     }
 }
 
+// ---------------------------------------------------------------- possessfix (B1 experiment, ini possessfix=1)
+// In some chapters the spawn helper leaves a guest in GameState 2: TnGame.TrySpawnPlayer spawns a pawn at the start spot
+// every tick but never possesses it. Wire one of those pawns to the guest by hand: copy the pattern of the host's own
+// pawn (every pawn field that points at the host controller, i.e. Controller/Owner) and set PC.Pawn (+0x1d0, +0x374).
+static int g_pawnCtlOffs[8]; static int g_nPawnCtlOffs = -1;
+static TArr* g_playersArr = nullptr;
+static void TickPossessFix(const TickObjs& t) {
+    if (!g_possessFix || t.ngame < 1) return;
+    if (g_nPawnCtlOffs < 0) {
+        for (int a = 0; a < t.npc && g_nPawnCtlOffs < 0; a++) {
+            BYTE* pw = PawnOf(t.pc[a]);
+            if (!pw || !IsLocalPC(t.pc[a]) || !Rd(pw, 0x800)) continue;
+            int n = 0; char line[300]; size_t k = _snprintf_s(line, _TRUNCATE, "possessfix: host pawn fields -> host PC:");
+            for (int off = 0x60; off < 0x800 && n < 8; off += 4) if (*(BYTE**)(pw + off) == t.pc[a]) { g_pawnCtlOffs[n++] = off; k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " +%x", off); }
+            g_nPawnCtlOffs = n; Log("%s", line);
+        }
+        if (g_nPawnCtlOffs <= 0) { g_nPawnCtlOffs = -1; return; }
+    }
+    for (int a = 0; a < t.npc; a++) {
+        BYTE* pc = t.pc[a];
+        if (IsLocalPC(pc) || PawnOf(pc) || g_spawnState[a] != 2) continue;
+        BYTE* best = nullptr;
+        for (int i = 0; i < t.npawn; i++) {
+            bool owned = false; for (int b = 0; b < t.npc; b++) if (PawnOf(t.pc[b]) == t.pawn[i]) owned = true;
+            if (owned) continue;
+            if (*(BYTE**)(t.pawn[i] + g_pawnCtlOffs[0])) continue;   // already has a controller
+            best = t.pawn[i];   // the newest spawn is last in GObjects order
+        }
+        if (!best) continue;
+        for (int k = 0; k < g_nPawnCtlOffs; k++) *(BYTE**)(best + g_pawnCtlOffs[k]) = pc;
+        *(BYTE**)(pc + 0x1d0) = best; *(BYTE**)(pc + 0x374) = best;
+        // stop the spawn helper from spawning more pawns: GameState 3
+        if (g_shGameOff >= 0 && g_shPlayersOff >= 0) {
+            BYTE* helper = *(BYTE**)(t.game[0] + g_shGameOff); TArr* arr = (TArr*)(helper + g_shPlayersOff);
+            for (int i = 0; i < arr->Num && i < 16; i++) { BYTE* e = (BYTE*)arr->Data + i * 8; if (*(BYTE**)e == pc) e[4] = 3; }
+        }
+        Log("possessfix: guest PC %p <- pawn %p (%d fields)", pc, best, g_nPawnCtlOffs);
+    }
+}
+
+// ---------------------------------------------------------------- pefind (ini pefind=1): locate ProcessEvent
+// A script UFunction keeps its native entry (Func, normally UObject::ProcessInternal for script code) at a fixed
+// offset. Find that offset (the code pointer most Function objects share), then point Func of every "PlayerTick" at a
+// thunk that logs the return addresses once and jumps on. PlayerTick is called by the engine through ProcessEvent,
+// so the first return address lands inside ProcessEvent.
+static int g_funcOff = -1; static BYTE* g_funcOrig = nullptr; static volatile LONG g_peLogged = 0;
+extern "C" void __cdecl PeLogStack(DWORD* sp) {
+    if (InterlockedIncrement(&g_peLogged) > 3) return;
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    char line[1200]; size_t k = _snprintf_s(line, _TRUNCATE, "pefind: PlayerTick called, return addresses (ghidra VA):");
+    int n = 0;
+    for (int i = 0; i < 400 && n < 16; i++) {
+        BYTE* v = (BYTE*)sp[i];
+        if (v < base + 0x1000 || v >= base + 0x1000 + 0xf5fc71 || !Rd(v - 6, 6)) continue;
+        bool call = (v[-5] == 0xE8) || (v[-2] == 0xFF && (v[-1] & 0x38) == 0x10) || (v[-3] == 0xFF && (v[-2] & 0x38) == 0x10) || (v[-6] == 0xFF && (v[-5] & 0x38) == 0x10);
+        if (!call) continue;
+        k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " [%d]%lx", i, (unsigned long)(0x400000 + (v - base)));
+        n++;
+    }
+    Log("%s", line);
+}
+static BYTE* g_peThunk = nullptr;
+static void TickPeFind(TArr* go) {
+    static bool done = false;
+    if (!g_peFind || done || !g_functionClassId) { if (g_peFind && !g_functionClassId) g_functionClassId = ClassIdByName("Function"); return; }
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    BYTE* textLo = base + 0x1000; BYTE* textHi = base + 0x1000 + 0xf5fc71;
+    // 1. Func offset: per offset, the most common code pointer over Function objects
+    static int counts[96]; static BYTE* vals[96]; int sampled = 0;
+    for (int i = 0; i < go->Num && sampled < 3000; i++) {
+        BYTE* o = (BYTE*)go->Data[i];
+        if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != g_functionClassId) continue;
+        sampled++;
+        for (int j = 0; j < 96; j++) { BYTE* v = *(BYTE**)(o + 0x20 + j * 4); if (v < textLo || v >= textHi) continue; if (!vals[j]) vals[j] = v; if (v == vals[j]) counts[j]++; }
+    }
+    int bj = -1; for (int j = 0; j < 96; j++) if (counts[j] > 0 && (bj < 0 || counts[j] > counts[bj])) bj = j;
+    done = true;
+    { char line[900]; size_t k = _snprintf_s(line, _TRUNCATE, "pefind: code pointers by offset (count/%d):", sampled);
+      for (int j = 0; j < 96; j++) if (counts[j] > sampled / 20) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " +%x:%d(%lx)", 0x20 + j * 4, counts[j], (unsigned long)(0x400000 + (vals[j] - base)));
+      Log("%s", line); }
+    if (bj < 0 || counts[bj] < sampled / 5) { Log("pefind: no shared Func pointer found (%d functions)", sampled); return; }
+    g_funcOff = 0x20 + bj * 4; g_funcOrig = vals[bj];
+    Log("pefind: Func at UFunction+0x%x, shared value ghidra %lx (%d of %d functions)", g_funcOff, (unsigned long)(0x400000 + (g_funcOrig - base)), counts[bj], sampled);
+    // 2. thunk: pushad; push esp+32 (caller frame); call PeLogStack; add esp,4; popad; jmp orig
+    g_peThunk = (BYTE*)VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    BYTE* w = g_peThunk;
+    *w++ = 0x60;                                   // pushad
+    *w++ = 0x8D; *w++ = 0x44; *w++ = 0x24; *w++ = 0x20;   // lea eax,[esp+20h]
+    *w++ = 0x50;                                   // push eax
+    *w++ = 0xB8; *(void**)w = (void*)&PeLogStack; w += 4;  // mov eax, PeLogStack
+    *w++ = 0xFF; *w++ = 0xD0;                       // call eax
+    *w++ = 0x83; *w++ = 0xC4; *w++ = 0x04;          // add esp,4
+    *w++ = 0x61;                                   // popad
+    *w++ = 0xB8; *(void**)w = g_funcOrig; w += 4;  // mov eax, orig
+    *w++ = 0xFF; *w++ = 0xE0;                       // jmp eax
+    int idx = FindNameIndex("PlayerTick"), patched = 0;
+    for (int i = 0; i < go->Num && idx >= 0; i++) {
+        BYTE* o = (BYTE*)go->Data[i];
+        if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != g_functionClassId || NameIdxOf(o) != idx) continue;
+        if (*(BYTE**)(o + g_funcOff) == g_funcOrig) { *(BYTE**)(o + g_funcOff) = g_peThunk; patched++; }
+    }
+    Log("pefind: PlayerTick functions patched: %d", patched);
+}
+
 // ---------------------------------------------------------------- the tick
 static void GameTick() {
     TArr* go = GObj();
@@ -510,6 +614,8 @@ static void GameTick() {
     TickRescue(t);
     TickSpawnHelper(t);
     TickViewFix(t);
+    TickPossessFix(t);
+    TickPeFind(go);
     DWORD now = GetTickCount();
     static DWORD lastDiag = 0, lastStat = 0, lastPawns = 0, lastState = 0;
     if (g_ctrlDiag && t.npc >= 1 && now - lastDiag > 4000) { lastDiag = now; CtrlDiag(t.pc, t.npc, go); }

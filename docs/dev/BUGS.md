@@ -12,7 +12,10 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   and **2a in 2 of 3 runs** (third: spawn state 2) — so B1 is not fixed, the timing only got better. Still failing: 1 (until the host finishes the tutorial), 3b, 4c, 5, 8b, 9.
 - In the failing chapters the guest stays in spawn state **2**: `TnGame.TrySpawnPlayer` (native) fails every tick and
   leaves a new unpossessed `TnPlayerPawn` at the start spot each time (47 of them after 2 min in chapter 1).
-- Next: find why TrySpawnPlayer fails (Ghidra on the native, or `Possess` one of those pawns via script calls).
+- Not timing: chapter 3b stays in state 2 for 5 minutes (47 orphan pawns). The guest's StartSpot is set.
+- Tried `possessfix=1` (off by default): wiring an orphan pawn to the guest by hand (pawn+0x1dc = PC, PC+0x1d0/+0x374 =
+  pawn, helper state 3) crashes the host 7 s later (ghidra `0x75662d`, read of null+0x1d0). Hand-wiring is not enough.
+- Next: decompile the native `TrySpawnPlayer` of TnCampaignGame (Ghidra) to see which check fails after the spawn.
 
 ### B2. Story: the host crashes about 50 s after the guest joins — retest pending
 - Not seen in 2a with the game-thread tick (180 s alive). Chapter 5 not checked yet (guest gets no pawn there, B1).

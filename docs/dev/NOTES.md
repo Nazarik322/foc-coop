@@ -38,6 +38,13 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
 - UWorld: objects named `TheWorld` (class `World`, name number 0, several exist). **World +0x15c = URL** (FURL: Protocol
   "unreal", Host, Port, Map at +0x1c, ...), so the map name is the FString at World+0x178.
 
+## ProcessEvent search (2026-10-19)
+- Slot tracer with the right name field: hits mostly land in identical-code-folded stubs (`return 0`, `ret`, `movzx eax,
+  word [ecx+0x34]`) shared by many vtables, so arg0 is noise. No ProcessEvent from it.
+- Only **2673** objects of class `Function` exist at run time (chapter 6) and none of them holds a code pointer in
+  +0x20..+0x1a0 (`pefind=1`). Likely most UnrealScript is compiled to C++ by High Moon; calling script functions through
+  ProcessEvent may not be possible. Native calls (Ghidra) are the more promising route.
+
 ## Script facts (decompiled UnrealScript in `coop-anything/local/script`)
 - Spawn flow: `TnGame.PostLogin` calls `SpawnHelper.Login(PC)` for remote controllers (`TnGame.uc:481`).
   `TnPlayerSpawnHelper.Tick` per player: state 0 `CheckReadySpawn` (CanRestartPlayer + HasSelectedCharacter) → 1

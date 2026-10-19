@@ -58,7 +58,9 @@ static bool g_engInfo = false;
 static int g_snap1 = 0, g_snap2 = 0;
 static bool g_charFixFlag = false;
 static int g_tickMs = 200;
-static bool g_viewFix = true;   // B10: guest camera follows its own pawn (gametick.inc)
+static bool g_viewFix = true;
+static bool g_possessFix = false;
+static bool g_peFind = false;   // locate ProcessEvent through a PlayerTick thunk (gametick.inc)   // B1 experiment (gametick.inc)   // B10: guest camera follows its own pawn (gametick.inc)
 static char g_instClass[64] = "";
 
 static void Log(const char* fmt, ...) {
@@ -1756,6 +1758,8 @@ static void LoadConfig(const wchar_t* dir) {
         g_charFixFlag = GetPrivateProfileIntW(L"foc_coop", L"charfix", 0, ini2) != 0;
         g_tickMs = GetPrivateProfileIntW(L"foc_coop", L"tickms", 200, ini2);
         g_viewFix = GetPrivateProfileIntW(L"foc_coop", L"viewfix", 1, ini2) != 0;
+        g_possessFix = GetPrivateProfileIntW(L"foc_coop", L"possessfix", 0, ini2) != 0;
+        g_peFind = GetPrivateProfileIntW(L"foc_coop", L"pefind", 0, ini2) != 0;
         if (g_tickMs < 20) g_tickMs = 20;
         if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
             g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;
