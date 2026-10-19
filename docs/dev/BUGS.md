@@ -94,6 +94,37 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - The intro now plays on host and guest at the same time, but on one of them (probably the host) the player
   character's animation is missing. Check with screenshots of both at the level start.
 
+### B18. Escalation: TAB scoreboard does not count, no points/money — fixed 2026-10-19 (mock Steam, 2 copies)
+- Owner report after a real Steam session. Cause: the game's own lobby starts Escalation with options from
+  TnOnlineGameSettingsSV: `?GameModeTag=SV?GameTeamStatus=2?GameRules=TransGame.TnGameRules_CompetitiveScoring,
+  TransGame.TnGameRules_TrackKills` (Rules array read from the package bytes). Our URL had only `?Game=...`, so
+  GameInfo.InitGame added no rules: no kill scoring (CompetitiveScoring -> PRI score events -> AddScore -> money).
+- A comma in a command-line map URL sends the game back to the front end (any option, also restored through a
+  GetCommandLine hook from %2C); the in-game `open` bounces (B4). So the URL carries `?GameModeTag=SV?GameTeamStatus=2
+  ?GameRules=TransGame.TnGameRules_CompetitiveScoring` (F10 Host kEscalationOptions, tools/matrix.ps1) and the host DLL
+  spawns TnGameRules_TrackKills natively (`killrules`, sync.inc TickEscalationRules: spawn wrapper ghidra 0x54a8f0,
+  chained after GameInfo+0x280 -> +0x1d0 NextGameRules).
+- Verified: TAB shows score, kills, deaths, revives, money for host and guest; store purchase prompt works.
+
+### B19. Escalation: a player can carry more weapons than 1 primary + 1 secondary/heavy — open, check after B18
+- Weapon slots are enforced by TnPickupManager.DropRobotWeapon on the server (tosses the weapon in the slot of the
+  new pickup when TnSurvivalGame.RespectsWeaponTypes). Not reproduced yet; check after the B18 fix. Note: ctrlshare
+  gives the guest the host's TnUIControllerSurvival, ProfileSettings and online objects (PickupManager is not shared).
+
+### B20. Steam join was hard (restarts, friend did not see the lobby) — fix built 2026-10-19, not tested yet
+- Lobbies were friends-only and the guest relay looked only for friends whose Steam "game played" was 480 with a
+  lobby; the game itself showed as 213120 until v0.3.2.
+- Fix: host lobby public, tagged foccoop=1 with name/mode/map/max; `FoCRelay list` searches Steam (string filter,
+  worldwide) every 3 s and the F10 Join page lists the games (friends first) with a Join button; IP/LAN removed from
+  the menu (code kept). Relay logs to foc_relay
+elay.log; mod logs of the last 10 runs in Binariesoc_logs.
+
+### B21. Guest frozen on the host after using an interactive object, then dropped — fixed 2026-10-19 (`ctrlskip`)
+- Owner's Steam session (chapter 6): the guest used something at ~63 s; ctrlshare copied the host's TnInteractStore /
+  TnContextualCommandUseInteract (and later TnTankForm) into the guest's controller every 0.2 s; the guest's pawn froze
+  on the host (client kept moving: 25000 uu apart) and the guest fell back to the menu ~60 s later.
+- Fix: ctrlskip is a comma list, default `Camera,Interact,ContextualCommand,Form`.
+
 ### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 
 ## Minor

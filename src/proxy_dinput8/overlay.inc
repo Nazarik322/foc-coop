@@ -3,6 +3,7 @@
 #include <d3d9.h>
 #include <ws2tcpip.h>
 #include <vector>
+#include <algorithm>
 #include <shellapi.h>
 #include <string>
 #include "imgui.h"
@@ -203,7 +204,37 @@ static void LpExecCommand(const char* cmd) {
     Log("lpexec: no FExec subobject found");
 }
 
+// `oexec <target> <exec function and args>` (foc_cmd.txt, game thread): run a script exec function on an object through
+// UObject::ScriptConsoleExec (ghidra 0xbf1f70, thiscall: const TCHAR* Str, FOutputDevice& Ar, UObject* Executor; it finds
+// the function by name, checks FUNC_Exec, parses the arguments and calls ProcessEvent = ghidra 0x728c60).
+// Targets: pc / pawn (local player), rpc / rpawn (first remote player, host only), game, gri, obj:<Name_N>.
+typedef BOOL(__fastcall* PFN_ScriptConsoleExec)(void* self, void* edx, const wchar_t* str, void* ar, void* executor);
+static BYTE* OexecTarget(const char* t) {
+    BYTE* lpc = nullptr; BYTE* rpc = nullptr;
+    for (int a = 0; a < g_to.npc; a++) { if (!IsObjFast(g_to.pc[a])) continue; if (IsLocalPC(g_to.pc[a])) lpc = g_to.pc[a]; else if (!rpc) rpc = g_to.pc[a]; }
+    if (!strcmp(t, "pc")) return lpc;
+    if (!strcmp(t, "pawn")) return lpc ? PawnOf(lpc) : nullptr;
+    if (!strcmp(t, "rpc")) return rpc;
+    if (!strcmp(t, "rpawn")) return rpc ? PawnOf(rpc) : nullptr;
+    if (!strcmp(t, "game")) return g_to.ngame ? g_to.game[0] : nullptr;
+    if (!strncmp(t, "obj:", 4)) return FindObjByLabel(t + 4);
+    return nullptr;
+}
+static void OexecCommand(const char* args) {
+    char target[96] = ""; int n = 0; sscanf_s(args, "%95s%n", target, (unsigned)sizeof(target), &n);
+    const char* rest = args + n; while (*rest == ' ') rest++;
+    BYTE* obj = OexecTarget(target);
+    if (!obj || !*rest) { Log("oexec: no target '%s' or no command", target); return; }
+    wchar_t w[512]; MultiByteToWideChar(CP_ACP, 0, rest, -1, w, 512);
+    PFN_ScriptConsoleExec fn = (PFN_ScriptConsoleExec)((BYTE*)GetModuleHandleW(nullptr) + (0xbf1f70 - 0x400000));
+    char on[96]; ObjLabel(obj, on, sizeof(on));
+    BOOL r = FALSE;
+    __try { r = fn(obj, nullptr, w, g_outDev, nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("oexec: %s '%s' raised %08lx", on, rest, GetExceptionCode()); return; }
+    Log("oexec: %s '%s' -> %s", on, rest, r ? "handled" : "not an exec function of this object");
+}
+
 static void RunCommandNow(const std::string& cmd) {
+    if (cmd.rfind("oexec ", 0) == 0) { OexecCommand(cmd.c_str() + 6); return; }
     if (cmd.rfind("lpexec ", 0) == 0) { LpExecCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("hp ", 0) == 0) { HpCommand(cmd.c_str() + 3); return; }
     if (cmd.rfind("tpmarker", 0) == 0) { TpMarkerCommand(cmd.size() > 9 ? cmd.c_str() + 9 : ""); return; }
@@ -313,6 +344,7 @@ static void SubclassGameWindow(HWND w) {
 static volatile LONG g_menuOpen = 0;
 
 struct MapEntry { const char* title; const char* map; };
+static const char kEscalationOptions[] = "?GameModeTag=SV?GameTeamStatus=2?GameRules=TransGame.TnGameRules_CompetitiveScoring";
 static const MapEntry kChapters[] = {
     {"1  The Exodus", "L01_TheExodus_BASE_m"}, {"2a Defend the Ark", "L02a_DefendTheArk_BASE_m"},
     {"2b Destroy All Mortars", "L02b_DestroyAllMortars_BASE_m"}, {"3a Eye of the Storm", "L03a_EyeOfTheStorm_BASE_m"},
@@ -452,6 +484,7 @@ static bool g_useSteam = true;            // Host page checkbox
 static char g_joinLobby[32] = "";         // Join page: lobby id, empty = first friend who hosts
 static char g_relayState[160] = "";
 static unsigned long long g_relayLobby = 0; static int g_relayPeers = 0; static char g_relayRole[16] = "";
+static char g_relayPersona[64] = "";   // the player's Steam name (relay.status persona=)
 static void RelayDir(wchar_t* out) { GetModuleFileNameW(nullptr, out, MAX_PATH); wchar_t* sl = wcsrchr(out, L'\\'); if (sl) wcscpy_s(sl, 32, L"\\foc_relay"); }
 static bool StartRelay(const char* args) {
     wchar_t dir[MAX_PATH]; RelayDir(dir);
@@ -475,6 +508,7 @@ static void ReadRelayStatus() {   // relay.status: key=value lines
         else if (!strncmp(line, "lobby=", 6)) g_relayLobby = _strtoui64(line + 6, nullptr, 10);
         else if (!strncmp(line, "peers=", 6)) g_relayPeers = atoi(line + 6);
         else if (!strncmp(line, "role=", 5)) strncpy_s(g_relayRole, line + 5, _TRUNCATE);
+        else if (!strncmp(line, "persona=", 8)) strncpy_s(g_relayPersona, line + 8, _TRUNCATE);
     }
     fclose(f);
 }
@@ -488,19 +522,29 @@ static DWORD WINAPI HostRelayThread(LPVOID) {
     for (int i = 0; i < 600 && !(g_hostBoundPort && g_to.ngame > 0 && g_to.npc > 0); i++) Sleep(500);
     Sleep(2000);
     if (!g_hostBoundPort) { Log("relay: no listen port, host relay not started"); return 0; }
-    char a[64]; _snprintf_s(a, _TRUNCATE, "host %ld", g_hostBoundPort);
+    // lobby data for the Join page: max players, mode and map from our command line URL
+    const char* url = CmdlineUrl();
+    char map[96] = ""; int i = 0; while (url[i] && url[i] != '?' && i < 95) { map[i] = url[i]; i++; } map[i] = 0;
+    const char* mp = strstr(url, "MaxPlayers="); int maxp = mp ? atoi(mp + 11) : 5;
+    const char* mode = strstr(url, "TnSurvivalGame") ? "Escalation" : "Story";
+    char a[200]; _snprintf_s(a, _TRUNCATE, "host %ld %d %s %s", g_hostBoundPort, maxp, mode, map[0] ? map : "-");
     StartRelay(a);
     return 0;
 }
 // guest: start the join relay, wait until it is in the lobby, then restart the game into 127.0.0.1:7790
+static void ListRelayStop();
 static DWORD WINAPI JoinSteamThread(LPVOID) {
+    ListRelayStop();
     char a[96]; _snprintf_s(a, _TRUNCATE, "join %s %d", g_joinLobby[0] ? g_joinLobby : "auto", kRelayLocalPort);
     g_relayState[0] = 0;
     if (!StartRelay(a)) return 0;
     for (int i = 0; i < 120; i++) {
         Sleep(500); ReadRelayStatus();
         if (!strncmp(g_relayState, "joined", 6) || !strncmp(g_relayState, "connected", 9)) {
-            char url[64]; _snprintf_s(url, _TRUNCATE, "127.0.0.1:%d", kRelayLocalPort);
+            // ?Name=: without it the guest's player name is the profile default ("Default" on the scoreboard)
+            char name[64]; strncpy_s(name, g_relayPersona[0] ? g_relayPersona : g_playerName, _TRUNCATE);
+            for (char* c = name; *c; c++) if (*c == '?' || *c == '=' || *c == ' ' || *c == '"' || *c == ',' || *c == '#' || (unsigned char)*c < 0x20) *c = '_';
+            char url[128]; _snprintf_s(url, _TRUNCATE, "127.0.0.1:%d?Name=%s", kRelayLocalPort, name);
             RelaunchWithUrl(url);
             return 0;
         }
@@ -512,11 +556,58 @@ static DWORD WINAPI JoinSteamThread(LPVOID) {
 }
 static void JoinViaSteam() { CreateThread(nullptr, 0, JoinSteamThread, nullptr, 0, nullptr); }
 
+// Join page: a "FoCRelay list" process searches Steam for foc-coop lobbies (public ones, plus friends' lobbies) and
+// writes lobbies.txt every 3 s: lobby|owner|name|mode|map|members|max|friend.
+struct SteamLobby { char id[24]; char name[64]; char mode[24]; char map[96]; int members, maxp; bool isFriend; };
+static std::vector<SteamLobby> g_steamLobbies;
+static DWORD g_listStarted = 0, g_listRead = 0;
+static void ListRelayStop() { wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\list.cmd", dir); FILE* f = nullptr; _wfopen_s(&f, p, L"w"); if (f) { fputs("quit", f); fclose(f); } g_listStarted = 0; }
+static const char* MapTitle(const char* map) {
+    for (auto& m : kChapters) if (!_stricmp(m.map, map)) return m.title;
+    for (auto& m : kEscalation) if (!_stricmp(m.map, map)) return m.title;
+    return map;
+}
+static void ListRelayTick() {   // called while the Join page is open
+    DWORD now = GetTickCount();
+    if (!g_listStarted) {   // start the search once per visit of the page (stopped by Back / Join; it also ends 60 s after the game)
+        wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\list.cmd", dir); DeleteFileW(p);
+        _snwprintf_s(p, _TRUNCATE, L"%s\\lobbies.txt", dir); DeleteFileW(p); g_steamLobbies.clear();
+        {
+            wchar_t cmd[MAX_PATH + 40]; _snwprintf_s(cmd, _TRUNCATE, L"\"%s\\FoCRelay.exe\" list", dir);
+            STARTUPINFOW si = {sizeof(si)}; PROCESS_INFORMATION pi = {};
+            if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, dir, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); Log("relay: lobby search started"); }
+        }
+        g_listStarted = now;
+    }
+    if (now - g_listRead < 1000) return;
+    g_listRead = now;
+    wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\lobbies.txt", dir);
+    FILE* f = nullptr; _wfopen_s(&f, p, L"r"); if (!f) return;
+    std::vector<SteamLobby> v; char line[400];
+    while (fgets(line, sizeof(line), f)) {
+        char* fld[8] = {0}; int n = 0; char* c = line; fld[n++] = c;
+        for (; *c && n < 8; c++) if (*c == '|') { *c = 0; fld[n++] = c + 1; }
+        if (n < 8) continue;
+        char* e = fld[7]; while (*e && *e != '\n' && *e != '\r') e++; *e = 0;
+        SteamLobby l = {}; strncpy_s(l.id, fld[0], _TRUNCATE); strncpy_s(l.name, fld[2][0] ? fld[2] : "?", _TRUNCATE);
+        strncpy_s(l.mode, fld[3], _TRUNCATE); strncpy_s(l.map, MapTitle(fld[4]), _TRUNCATE);
+        l.members = atoi(fld[5]); l.maxp = atoi(fld[6]); l.isFriend = fld[7][0] == '1';
+        v.push_back(l);
+    }
+    fclose(f);
+    std::stable_sort(v.begin(), v.end(), [](const SteamLobby& a, const SteamLobby& b) { return a.isFriend && !b.isFriend; });
+    g_steamLobbies.swap(v);
+}
+
 static void StartHosting() {
     const MapEntry& m = g_hostMode == 0 ? kChapters[g_hostMapStory] : kEscalation[g_hostMapEsc];
     char url[400], cmd[420];
-    _snprintf_s(url, _TRUNCATE, "%s?Game=TransContent.%s?listen?MaxPlayers=%d", m.map,
-                g_hostMode == 0 ? "TnCampaignGame" : "TnSurvivalGame", g_hostPlayers);
+    // Escalation needs the options the game's own lobby adds (TnOnlineGameSettingsSV): its GameRules give points and
+    // money for kills (TnGameRules_CompetitiveScoring) and the TAB scoreboard; without them nothing is scored.
+    // The lobby also adds TnGameRules_TrackKills ("A,B"), but any comma in a command-line URL sends the game back to
+    // the front end (also with our GetCommandLine hook restoring %2C), and the in-game "open" bounces (B4): one rule.
+    _snprintf_s(url, _TRUNCATE, "%s?Game=TransContent.%s%s?listen?MaxPlayers=%d", m.map,
+                g_hostMode == 0 ? "TnCampaignGame" : "TnSurvivalGame", g_hostMode == 0 ? "" : kEscalationOptions, g_hostPlayers);
     _snprintf_s(cmd, _TRUNCATE, "open %s", url);
     strncpy_s(g_hostTitle, m.title, _TRUNCATE); strcpy_s(g_hostModeName, g_hostMode == 0 ? "Story" : "Escalation");
     g_hostMax = g_hostPlayers; g_hostBoundPort = 0; g_captureBind = 1; g_hosting = 1;
@@ -592,13 +683,9 @@ static void DrawHostPage() {
     }
     ImGui::EndChild();
     ImGui::SliderInt("Max players", &g_hostPlayers, 2, 5);
-    ImGui::Checkbox("Through Steam: friends join from the Join page, no IP or port forwarding", &g_useSteam);
-    Tooltip("Uses Steam's relay network through the free Spacewar app (AppID 480). Steam must be running.");
-    ImGui::InputInt("Game port", &g_gamePort, 0, 0);
     ImGui::Spacing();
-    ImGui::TextDisabled("%s", g_hostMode == 0 ? "Story co-op is experimental: only chapter 1 has been tested." : "Escalation: wave survival, up to 5 players.");
-    ImGui::Text("Your address for friends: %s : %d", MyLanIps().c_str(), g_gamePort);
-    ImGui::TextDisabled("Friends on the same network see your lobby automatically; others type the IP.");
+    ImGui::TextDisabled("%s", g_hostMode == 0 ? "Story co-op: chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9 tested." : "Escalation: wave survival, up to 5 players.");
+    ImGui::TextWrapped("Your game appears in your friends' Join list through Steam (no IP addresses, no port forwarding). Steam must be running.");
     ImGui::Spacing();
     if (ImGui::Button("Start hosting", ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
     ImGui::SameLine(); ImGui::TextDisabled("(the game restarts into the session)");
@@ -609,43 +696,32 @@ static void DrawHostPage() {
 static void DrawJoinPage() {
     ImGui::TextUnformatted("JOIN A GAME");
     ImGui::Separator();
-    ImGui::TextUnformatted("Lobbies found on your network:");
-    ImGui::BeginChild("lobbies", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 7.5f), true);
+    ListRelayTick();
+    ImGui::TextUnformatted("Games on Steam (friends first, refreshed every few seconds):");
+    ImGui::BeginChild("lobbies", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 9.5f), true);
     if (ImGui::BeginTable("lt", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("Host"); ImGui::TableSetupColumn("Mode"); ImGui::TableSetupColumn("Map / chapter");
-        ImGui::TableSetupColumn("Players"); ImGui::TableSetupColumn("Address");
+        ImGui::TableSetupColumn("Players"); ImGui::TableSetupColumn("");
         ImGui::TableHeadersRow();
-        EnterCriticalSection(&g_lobCs);
-        DWORD now = GetTickCount();
-        for (size_t i = 0; i < g_lobbies.size();) { if (now - g_lobbies[i].seen > 6000) g_lobbies.erase(g_lobbies.begin() + i); else i++; }
-        for (int i = 0; i < (int)g_lobbies.size(); i++) {
-            const Lobby& l = g_lobbies[i];
+        for (int i = 0; i < (int)g_steamLobbies.size(); i++) {
+            const SteamLobby& l = g_steamLobbies[i];
             ImGui::TableNextRow(); ImGui::TableNextColumn();
-            char id[64]; _snprintf_s(id, _TRUNCATE, "%s##%d", l.host, i);
-            if (ImGui::Selectable(id, g_selLobby == i, ImGuiSelectableFlags_SpanAllColumns)) { g_selLobby = i; strncpy_s(g_joinIp, l.ip, _TRUNCATE); g_gamePort = l.port; }
+            if (l.isFriend) ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s (friend)", l.name); else ImGui::TextUnformatted(l.name);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(l.mode);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(l.map);
-            ImGui::TableNextColumn(); ImGui::Text("%d / %d", l.players, l.maxp);
-            ImGui::TableNextColumn(); ImGui::Text("%s:%d", l.ip, l.port);
+            ImGui::TableNextColumn(); if (l.maxp) ImGui::Text("%d / %d", l.members, l.maxp); else ImGui::TextUnformatted("?");
+            ImGui::TableNextColumn();
+            char b[48]; _snprintf_s(b, _TRUNCATE, "Join##%s", l.id);
+            if (ImGui::SmallButton(b)) { strncpy_s(g_joinLobby, l.id, _TRUNCATE); JoinViaSteam(); }
         }
-        if (g_lobbies.empty()) { ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextDisabled("searching..."); }
-        LeaveCriticalSection(&g_lobCs);
+        if (g_steamLobbies.empty()) { ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextDisabled(g_listStarted && GetTickCount() - g_listStarted > 8000 ? "no games found yet - ask your friend to host" : "searching..."); }
         ImGui::EndTable();
     }
     ImGui::EndChild();
+    if (g_relayState[0] && !strcmp(g_relayRole, "join")) ImGui::TextDisabled("Steam: %s", g_relayState);
+    ImGui::TextDisabled("Joining restarts the game once into the session.");
     ImGui::Spacing();
-    ImGui::TextUnformatted("Through Steam (a friend hosts with \"Through Steam\"):");
-    ImGui::SetNextItemWidth(260); ImGui::InputText("Lobby id (empty = any friend who hosts)", g_joinLobby, sizeof(g_joinLobby));
-    if (ImGui::Button("Join a friend through Steam", ImVec2(ImGui::GetFontSize() * 15.f, 0))) JoinViaSteam();
-    if (g_relayState[0] && !strcmp(g_relayRole, "join")) { ImGui::SameLine(); ImGui::TextDisabled("%s", g_relayState); }
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Or connect by address:");
-    ImGui::SetNextItemWidth(260); ImGui::InputText("IP / host", g_joinIp, sizeof(g_joinIp));
-    ImGui::SetNextItemWidth(120); ImGui::InputInt("Port", &g_gamePort, 0, 0);
-    ImGui::Spacing();
-    if (ImGui::Button("Join", ImVec2(ImGui::GetFontSize() * 11.f, 0))) JoinServer(g_joinIp, g_gamePort);
-    ImGui::SameLine();
-    if (ImGui::Button("Back")) g_page = 0;
+    if (ImGui::Button("Back")) { ListRelayStop(); g_page = 0; }
 }
 
 static void DrawMainPage() {

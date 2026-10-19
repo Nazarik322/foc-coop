@@ -202,3 +202,24 @@ __declspec(dllexport) void API SteamAPI_SteamNetworkingMessage_t_Release(uint8_t
 __declspec(dllexport) void* API SteamAPI_SteamNetworkingUtils_SteamAPI_v004(void) { return (void*)5; }
 __declspec(dllexport) bool8 API SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32(void* s, int e, int32_t v) { (void)s; (void)e; (void)v; return 1; }
 __declspec(dllexport) void API SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess(void* s) { (void)s; }
+
+/* ---------------------------------------------------------------- lobby search (RequestLobbyList -> LobbyMatchList 510) */
+static char g_filtKey[64], g_filtVal[64]; static uint64_t g_found[64]; static int g_nfound;
+__declspec(dllexport) void API SteamAPI_ISteamMatchmaking_AddRequestLobbyListStringFilter(void* s, const char* k, const char* v, int cmp) { (void)s; (void)cmp; strncpy(g_filtKey, k, 63); strncpy(g_filtVal, v, 63); }
+__declspec(dllexport) void API SteamAPI_ISteamMatchmaking_AddRequestLobbyListDistanceFilter(void* s, int d) { (void)s; (void)d; }
+__declspec(dllexport) void API SteamAPI_ISteamMatchmaking_AddRequestLobbyListResultCountFilter(void* s, int n) { (void)s; (void)n; }
+__declspec(dllexport) uint64_t API SteamAPI_ISteamMatchmaking_RequestLobbyList(void* s) {
+    char pat[MAX_PATH]; sprintf(pat, "%s\\lobbies\\*.txt", g_root); WIN32_FIND_DATAA fd; HANDLE h = FindFirstFileA(pat, &fd);
+    g_nfound = 0;
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            uint64_t l = _strtoui64(fd.cFileName, NULL, 10); if (!l || g_nfound >= 64) continue;
+            if (g_filtKey[0] && strcmp(SteamAPI_ISteamMatchmaking_GetLobbyData(s, l, g_filtKey), g_filtVal)) continue;
+            g_found[g_nfound++] = l;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    g_filtKey[0] = 0;
+    uint32_t count = (uint32_t)g_nfound; return PushResult(510, &count, sizeof(count));
+}
+__declspec(dllexport) uint64_t API SteamAPI_ISteamMatchmaking_GetLobbyByIndex(void* s, int i) { (void)s; return i >= 0 && i < g_nfound ? g_found[i] : 0; }

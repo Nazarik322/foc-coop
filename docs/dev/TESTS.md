@@ -26,6 +26,8 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | B11 one death ends the mission | `coopdeath` (DR2 on game-over thunk 0x7eb060) | `tools/deathtest.ps1` (L06): log "coopdeath: ... SKIPPED", host screen keeps playing, guest screen no MISSION FAILED | `-Twin` (coopdeath=0): MISSION FAILED | 2026-10-19: skip works on host and guest; respawn of a really dead guest FAILS (open) |
 | B11 downed players bleed out in 10 s | `downedsec` (DownedHealth 1e9) | `tools/downtest.ps1` (L06): downed host alive after 45 s; both down -> MISSION FAILED on both | `-Twin` | 2026-10-19: PASS by screenshots (twin not run yet) |
 | B12 objective + marker only on the host | `sync` (sync.inc) | matrix L06 `-Keep`, `shot` both: NEW OBJECTIVE and marker on both; guest log "sync: objective -> 0" | `sync=0` in both inis: guest has no objective | 2026-10-19: PASS (twin not run yet) |
+| B18 Escalation scoring | URL options + `killrules` | matrix `-Steam` ESC_Ark `-Keep`, both shoot 2 min, TAB screenshot: score, kills, money > 0 on both | URL without GameRules: all 0 (owner's session) | 2026-10-19 PASS (kills 2/1, money 707/640) |
+| B21 guest frozen after interacting | `ctrlskip` default Camera,Interact,ContextualCommand,Form | playbot story with "interact" actions over Steam: guest desync < 400 | `ctrlskip=Camera`: TnInteractStore copied (log) | 2026-10-19: log check only |
 | B13 intro starts before the guest loaded | `waitguest` (Pauser until guest ready, movies over) | matrix L06: host log "waitguest: guest ready, no movie playing -> unpaused" after the guest's "movie: closed" | `waitguest=0` | 2026-10-19: PASS (twin not run yet) |
 
 ## Known flaky

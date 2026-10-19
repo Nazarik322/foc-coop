@@ -3,6 +3,13 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (night 2): Escalation scoring, Steam lobby list, guest freeze
+- Escalation: scoring rules (B18) - TAB now counts score, kills, deaths, revives, money (verified, 2 copies, Steam mock).
+- Steam join: public lobbies with name/mode/map, Join page lists games found on Steam (friends first) with Join
+  buttons; IP/LAN removed from the menu (B20). Guest joins with ?Name=<Steam name>.
+- ctrlshare no longer shares interaction objects and vehicle forms (B21, the guest drop in the owner's session).
+- Logs: last 10 runs in Binariesoc_logs; relay logs relay.log / relay_list.log.
+
 ## 2026-10-19 (late night): Steam shows Spacewar, installer opens mod pages
 - Owner: Steam showed "Transformers" instead of Spacewar. dinput8.dll now restarts a game started with SteamAppId != 480
   as SteamAppId=480 (verified: Steam RunningAppID 480, game runs; a Steam-like start with 213120 switches to 480).

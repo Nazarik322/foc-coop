@@ -248,6 +248,46 @@ static void SendReady(const TickObjs& t) {
     LeaveCriticalSection(&g_syncCs);
 }
 
+// ---------------------------------------------------------------- Escalation: the second scoring rule (host)
+// The game's lobby starts Escalation with GameRules "TnGameRules_CompetitiveScoring,TnGameRules_TrackKills", but a
+// comma in a command-line URL breaks the map load, so the URL carries only CompetitiveScoring (points, money). This adds
+// TnGameRules_TrackKills (kills on the TAB board, kill streaks) once: native spawn through the Actor spawn wrapper
+// ghidra 0x54a8f0 (thiscall on the spawning actor: Class, Owner, int* tag, &Location, &Rotation, Template,
+// bNoCollisionFail, FString* out; the game's own callers, e.g. ghidra 0x41de60, pass 0, 0, &0, loc, rot, 0, 0, &{0,0,0})
+// with the game as spawner, then appended to GameInfo+0x280 GameRulesModifiers ->
+// GameRules+0x1d0 NextGameRules (offsets from `props`). ini killrules=0 turns it off.
+typedef BYTE* (__fastcall* PFN_SpawnWrap)(void* self, void* edx, BYTE* cls, BYTE* owner, int* tag, float* loc, int* rot, BYTE* tmpl, int noCollFail, int* outStr);
+static void TickEscalationRules(const TickObjs& t) {
+    static BYTE* doneFor = nullptr;
+    if (!g_killRules || t.ngame < 1 || t.nuworld < 1 || doneFor == t.uworld[0]) return;
+    BYTE* game = t.game[0];
+    char gc[80] = ""; ClassNameOf(game, gc, sizeof(gc));
+    if (strcmp(gc, "TnSurvivalGame") != 0) return;
+    BYTE* first = *(BYTE**)(game + 0x280);
+    if (!IsObjFast(first)) return;   // rules not there yet (or none: an old URL)
+    unsigned tkId = ClassIdByName("TnGameRules_TrackKills");
+    BYTE* tkCls = tkId ? g_classObjById[tkId] : nullptr;
+    if (!tkCls) return;
+    doneFor = t.uworld[0];
+    BYTE* last = first;
+    for (int i = 0; i < 16; i++) {
+        if ((*(unsigned*)(last + 0x14) & 0x1fff) == tkId) { Log("killrules: TnGameRules_TrackKills already in the chain"); return; }
+        BYTE* nx = *(BYTE**)(last + 0x1d0);
+        if (!IsObjFast(nx)) break;
+        last = nx;
+    }
+    int tag = 0; int rot[3] = {0, 0, 0}; float loc[3]; memcpy(loc, LocOf(game), 12);
+    PFN_SpawnWrap spawn = (PFN_SpawnWrap)((BYTE*)GetModuleHandleW(nullptr) + (0x54a8f0 - 0x400000));
+    BYTE* r = nullptr;
+    int outStr[3] = {0, 0, 0};
+    __try { r = spawn(game, nullptr, tkCls, nullptr, &tag, loc, rot, nullptr, 0, outStr); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { Log("killrules: spawn raised %08lx", GetExceptionCode()); return; }
+    if (!IsObjFast(r)) { Log("killrules: spawn returned %p", r); return; }
+    *(BYTE**)(last + 0x1d0) = r;
+    char rn[96]; ObjLabel(r, rn, sizeof(rn)); char ln[96]; ObjLabel(last, ln, sizeof(ln));
+    Log("killrules: spawned %s, chained after %s", rn, ln);
+}
+
 // ---------------------------------------------------------------- wait for the guest (host, ini waitguest seconds)
 // A story map starts its intro (Kismet, matinee) as soon as it is loaded, long before a guest has loaded it. The host
 // keeps its world paused (WorldInfo +0x394 Pauser = the host's PlayerReplicationInfo) after a story map loaded until a
@@ -291,6 +331,7 @@ static void SyncGetStr(const char* snap, const char* key, char* out, size_t n) {
 
 static void TickSync(const TickObjs& t) {
     TickWaitGuest(t);
+    TickEscalationRules(t);
     if (!g_syncOn) return;
     static DWORD last = 0, lastLog = 0; DWORD now = GetTickCount();
     char map[96]; MapName(t, map, sizeof(map));

@@ -119,6 +119,17 @@ static void TickMaxPlayers(const TickObjs& t) {
 // Remote PlayerControllers on the host never get their locally-created manager objects (input override, profile,
 // achievements, ...). Native campaign code dereferences them (null+0x10 "this"). Copy valid object pointers from the
 // local controller into the null slots (+0x500..+0x740) of every other controller.
+// ctrlskip: comma list of name parts that are never shared (default Camera, Interact, ContextualCommand, Form).
+// Camera: B10 (host camera followed the guest). Interact/ContextualCommand/Form (2026-10-19 Steam session): the
+// guest's server-side controller got the host's TnInteractStore / UseInteract / TnTankForm; its pawn froze on the host
+// while the guest kept moving locally, and after ~60 s the guest was dropped to the menu.
+static bool SkipShare(const char* name) {
+    if (!g_ctrlSkipMask) return false;
+    char buf[128]; strncpy_s(buf, g_ctrlSkipMask, _TRUNCATE);
+    char* ctx = nullptr;
+    for (char* tok = strtok_s(buf, ",", &ctx); tok; tok = strtok_s(nullptr, ",", &ctx)) if (*tok && strstr(name, tok)) return true;
+    return false;
+}
 static void TickCtrlShare(const TickObjs& t) {
     if (!g_ctrlShare || t.npc < 2) return;
     int best = -1;
@@ -139,7 +150,7 @@ static void TickCtrlShare(const TickObjs& t) {
             BYTE** dst = (BYTE**)(t.pc[a] + off); BYTE* src = *(BYTE**)(t.pc[best] + off);
             if (*dst != nullptr || !IsObjFast(src)) continue;
             char n2[80]; unsigned nn = 0; ObjNameStr(src, n2, sizeof(n2), &nn);
-            if (g_ctrlSkipMask && strstr(n2, g_ctrlSkipMask)) { static volatile LONG ns = 0; if (InterlockedIncrement(&ns) <= 6) Log("ctrlshare: skipping +%x %s_%u", off, n2, nn - 1); continue; }
+            if (SkipShare(n2)) { static volatile LONG ns = 0; if (InterlockedIncrement(&ns) <= 6) Log("ctrlshare: skipping +%x %s_%u", off, n2, nn - 1); continue; }
             static volatile LONG nc = 0; if (InterlockedIncrement(&nc) <= 40) Log("ctrlshare: +%x <- %s_%u", off, n2, nn - 1);
             *dst = src; copied++;
         }

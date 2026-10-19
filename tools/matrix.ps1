@@ -85,7 +85,9 @@ foreach ($map in $Maps) {
   $game = if ($isStory) { "TnCampaignGame" } else { "TnSurvivalGame" }
   $reason = $null; $detail = ""; $pidB = $null
   $extraA = @(); if ($Steam) { $extraA = @("-steamrelay") }
-  $pidA = Start-Foc "A" "$map`?Game=TransContent.$game`?listen`?MaxPlayers=$Players" 960 540 -Extra $extraA
+  # Escalation: the options of the game's own lobby (scoring rules), the same as the F10 menu (overlay.inc kEscalationOptions)
+  $opts = if ($isStory) { "" } else { "?GameModeTag=SV?GameTeamStatus=2?GameRules=TransGame.TnGameRules_CompetitiveScoring" }
+  $pidA = Start-Foc "A" "$map`?Game=TransContent.$game$opts`?listen`?MaxPlayers=$Players" 960 540 -Extra $extraA
   # 1. the host is in the map, with the expected game class (checks the mode before anything else)
   $sA = Wait-FocState A { param($s) $s.map -eq $map -and $s.role -eq "host" -and $s.port -gt 0 } 180
   if (-not $sA) { $s = Read-FocState A; $reason = "host not in map (alive=$(Alive $pidA) map=$($s.map) role=$($s.role) port=$($s.port))" }

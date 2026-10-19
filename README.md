@@ -24,7 +24,7 @@ Works with the Steam version of the game (build 12831). Every player needs their
 Steam must be running for everyone, and you must be Steam friends.
 
 - **Host:** start the game, press **F10** → Host a game → pick a chapter or Escalation map → Start hosting.
-- **Friend:** start the game, press **F10** → Join a game → **Join a friend through Steam**.
+- **Friend:** start the game, press **F10** → Join a game → pick the game in the list (friends are on top) → **Join**.
 
 No IP addresses, no port forwarding: traffic goes through Steam. While the mod is installed, Steam shows the game as
 "Spacewar" (the free Steam app the co-op connection uses); `spacewar=0` in `Binariesoc_coop.ini` turns that off. On one network you can also join from the lobby list
@@ -32,7 +32,7 @@ or by IP.
 
 ## What works
 
-- Escalation for 2 players on all 4 maps.
+- Escalation for 2 players on all 4 maps, with score, kills, money and the weapon store as in the original.
 - Story chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9: both players spawn, each with their own camera and HUD.
 - Joining through Steam (tested on one PC; a test with two real Steam accounts is still to come).
 - Story: the host waits until the friend has loaded the level, then it starts for both; the current objective and the
