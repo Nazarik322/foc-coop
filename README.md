@@ -1,5 +1,7 @@
 # foc-coop — co-op for Transformers: Fall of Cybertron (DEV / work in progress)
 
+**Languages:** **English** | [Русский](README.ru.md)
+
 Unofficial co-op layer for **Transformers: Fall of Cybertron** (Steam app 213120, build 12831,
 `TFOC.exe` SHA-256 `c1dab177f81503ecb831d63a3d799f928dd9823242ca3689482c684396acfedc`).
 The campaign is single-player and the official online services are dead, so this project builds
