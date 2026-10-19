@@ -3,6 +3,9 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-20: Escalation session fixes (v0.4.2)
+- Player names from Steam on both sides (B22); ctrlshare allowlist (B23); names in foc_state.json.
+
 ## 2026-10-19 (night 2): Escalation scoring, Steam lobby list, guest freeze
 - Escalation: scoring rules (B18) - TAB now counts score, kills, deaths, revives, money (verified, 2 copies, Steam mock).
 - Steam join: public lobbies with name/mode/map, Join page lists games found on Steam (friends first) with Join

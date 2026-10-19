@@ -123,7 +123,16 @@ static void TickMaxPlayers(const TickObjs& t) {
 // Camera: B10 (host camera followed the guest). Interact/ContextualCommand/Form (2026-10-19 Steam session): the
 // guest's server-side controller got the host's TnInteractStore / UseInteract / TnTankForm; its pawn froze on the host
 // while the guest kept moving locally, and after ~60 s the guest was dropped to the menu.
+static bool NameInList(const char* list, const char* name) {
+    char buf[160]; strncpy_s(buf, list, _TRUNCATE);
+    char* ctx = nullptr;
+    for (char* tok = strtok_s(buf, ",", &ctx); tok; tok = strtok_s(nullptr, ",", &ctx)) if (*tok && strstr(name, tok)) return true;
+    return false;
+}
+// ctrlallow (default below): only these host objects are ever shared (Escalation session 2026-10-19: the guest also got
+// the host's TnPlayerTargeting and a TnPlayerPawnSurvival reference and could not interact with much)
 static bool SkipShare(const char* name) {
+    if (g_ctrlAllow[0] && !NameInList(g_ctrlAllow, name)) return true;
     if (!g_ctrlSkipMask) return false;
     char buf[128]; strncpy_s(buf, g_ctrlSkipMask, _TRUNCATE);
     char* ctx = nullptr;
@@ -362,10 +371,11 @@ static void WriteState(const TickObjs& t) {
         char st[64]; StateName(pc, st, sizeof(st));
         BYTE* pri = *(BYTE**)(pc + 0x1d4);
         DWORD prif = 0;
-        if (IsObjFast(pri)) { FStrAscii(pri + 0x34c, chr, sizeof(chr)); prif = *(DWORD*)(pri + 0x210); }
+        char pname[64] = "";   // PlayerReplicationInfo.PlayerName (FString +0x1e0)
+        if (IsObjFast(pri)) { FStrAscii(pri + 0x34c, chr, sizeof(chr)); prif = *(DWORD*)(pri + 0x210); FStrAscii(pri + 0x1e0, pname, sizeof(pname)); }
         float* f = pw ? LocOf(pw) : nullptr;
-        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"state\":\"%s\",\"prif\":%lu,\"char\":\"%s\",\"hp\":%.0f,\"downed\":%d}",
-          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, st, prif, chr,
+        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"state\":\"%s\",\"prif\":%lu,\"char\":\"%s\",\"name\":\"%s\",\"hp\":%.0f,\"downed\":%d}",
+          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, st, prif, chr, pname,
           pw ? *(float*)(pw + 0x350) : 0.f, pw && (*(unsigned*)(pw + 0x5d0) & 0x80000) ? 1 : 0);   // TnPawn Health, _IsDowned
     }
     J("],\"pawns\":[");

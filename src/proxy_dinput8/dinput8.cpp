@@ -52,6 +52,7 @@ static int g_spawnAfter = 0;
 static volatile LONG g_releaseSpawn = 0;
 static bool g_ctrlDiag = false;
 static char g_ctrlSkipMaskBuf[128] = {0};
+static char g_ctrlAllow[160] = "OnlineSubsystem,OnlinePlayerData,ProfileSettings,UIController";   // ctrlshare allowlist (gametick.inc SkipShare), ini ctrlallow
 static const char* g_ctrlSkipMask = nullptr;
 static char g_findCls[64] = "";
 static bool g_engInfo = false;
@@ -200,7 +201,8 @@ static void hexdump(const char* p, int n, char* out, size_t outsz) {
 
 static int g_waitGuestSec = 300;   // host pauses a freshly loaded story map until a guest joins (sync.inc), ini waitguest
 static bool g_syncOn = true;
-static bool g_killRules = true;   // Escalation host adds TnGameRules_TrackKills (sync.inc), ini killrules   // co-op sync channel host -> guest (sync.inc), ini sync
+static bool g_killRules = true;
+static bool g_setNames = true;   // each player gets its Steam name via SetName (sync.inc TickNames), ini setnames   // Escalation host adds TnGameRules_TrackKills (sync.inc), ini killrules   // co-op sync channel host -> guest (sync.inc), ini sync
 static void SyncNoteOut(SOCKET s);
 static bool SyncFilterIn(const char* buf, int len, const sockaddr* from);
 static int WSAAPI h_sendto(SOCKET s, const char* buf, int len, int flags, const sockaddr* to, int tolen) {
@@ -1890,6 +1892,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_rescue = GetPrivateProfileIntW(L"foc_coop", L"rescue", 0, ini2) != 0;
         g_spawnAfter = GetPrivateProfileIntW(L"foc_coop", L"spawnafter", 0, ini2);
         g_ctrlDiag = GetPrivateProfileIntW(L"foc_coop", L"ctrldiag", 0, ini2) != 0;
+        { wchar_t w[160] = {0}; GetPrivateProfileStringW(L"foc_coop", L"ctrlallow", L"OnlineSubsystem,OnlinePlayerData,ProfileSettings,UIController", w, 160, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_ctrlAllow, sizeof(g_ctrlAllow), nullptr, nullptr); }
         // ctrlskip (comma list, gametick.inc SkipShare): host objects never copied into a guest controller
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"ctrlskip", L"Camera,Interact,ContextualCommand,Form", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_ctrlSkipMaskBuf, sizeof(g_ctrlSkipMaskBuf), nullptr, nullptr); if (g_ctrlSkipMaskBuf[0]) g_ctrlSkipMask = g_ctrlSkipMaskBuf; }
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"findcls", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_findCls, sizeof(g_findCls), nullptr, nullptr); }
@@ -1910,6 +1913,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_coopDeath = GetPrivateProfileIntW(L"foc_coop", L"coopdeath", 1, ini2) != 0;
         g_syncOn = GetPrivateProfileIntW(L"foc_coop", L"sync", 1, ini2) != 0;
         g_killRules = GetPrivateProfileIntW(L"foc_coop", L"killrules", 1, ini2) != 0;
+        g_setNames = GetPrivateProfileIntW(L"foc_coop", L"setnames", 1, ini2) != 0;
         g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
         g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);
         if (g_tickMs < 20) g_tickMs = 20;

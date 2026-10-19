@@ -134,6 +134,22 @@ elay.log; mod logs of the last 10 runs in Binariesoc_logs.
   on the host (client kept moving: 25000 uu apart) and the guest fell back to the menu ~60 s later.
 - Fix: ctrlskip is a comma list, default `Camera,Interact,ContextualCommand,Form`.
 
+### B22. Both players had the same name — fixed 2026-10-20 (`setnames`)
+- Each game takes the player name from its own profile ("Default" without Demonware). Now the local controller runs
+  `SetName <name>` (exec -> ServerChangeName) through ScriptConsoleExec: the guest uses the ?Name= of its join URL
+  (Steam name), the host its Steam name from relay.status. Checked: host 'mock_85533', guest 'mock_87376' on both.
+
+### B23. Escalation: the guest could not interact with many things — fix built 2026-10-20, check in a real session
+- Owner's session log: ctrlshare also gave the guest the host's TnPlayerTargeting (+0x5f8, used to find what to
+  interact with) and a TnPlayerPawnSurvival reference (+0x720). ctrlshare is now an allowlist (`ctrlallow`, default
+  OnlineSubsystem,OnlinePlayerData,ProfileSettings,UIController). Buying at an armory could not be reproduced by
+  commands (the pawn has to stand at the armory).
+
+### B24. Rejoin leaves stale controllers on the host — open
+- Owner's 41-minute Escalation session: npc=4 for 2 players at the end, two controllers shared one PRI
+  (pridiag PC0 and PC2 -> the same PRI). Probably old controllers of a guest who reconnected. Check what the game does
+  with them (scoreboard rows, spawn helper, sync peers).
+
 ### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 
 ## Minor

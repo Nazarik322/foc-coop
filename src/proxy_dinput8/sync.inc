@@ -317,6 +317,41 @@ static void TickWaitGuest(const TickObjs& t) {
     else g_waitingGuest = (LONG)(g_waitGuestSec - (GetTickCount() - since) / 1000);
 }
 
+// ---------------------------------------------------------------- player names
+// Each game takes the player name from its own profile ("Default" when Demonware is offline), so both players could
+// show the same name. Once the local pawn exists, the local controller runs `SetName <name>` (PlayerController exec ->
+// ServerChangeName, so the host's copy is renamed too) through UObject::ScriptConsoleExec (ghidra 0xbf1f70). Name: the
+// ?Name= option of our URL (the guest's join URL carries the Steam name), else the Steam name from relay.status.
+static char g_relayPersona[64] = "";   // the player's Steam name (relay.status persona=, read by overlay.inc)
+typedef BOOL(__fastcall* PFN_SCE)(void* self, void* edx, const wchar_t* str, void* ar, void* executor);
+static void* g_sceOut[2];   // an FOutputDevice whose vtable entries do nothing (set up in TickNames)
+static void __fastcall SceOutStub(void*, void*, const wchar_t*, int) {}
+static void* g_sceVt[32];
+static void TickNames(const TickObjs& t) {
+    static BYTE* world = nullptr; static int tries = 0; static DWORD last = 0;
+    if (t.nuworld < 1) return;
+    if (world != t.uworld[0]) { world = t.uworld[0]; tries = 0; }
+    if (tries >= 3 || GetTickCount() - last < 5000) return;
+    char want[64] = "";
+    const char* url = CmdlineUrl(); const char* n = strstr(url, "?Name=");
+    if (n) { n += 6; size_t i = 0; while (n[i] && n[i] != '?' && i + 1 < sizeof(want)) { want[i] = n[i]; i++; } want[i] = 0; }
+    else strncpy_s(want, g_relayPersona, _TRUNCATE);
+    for (char* c = want; *c; c++) if (*c == ' ' || *c == '"' || (unsigned char)*c < 0x20) *c = '_';
+    if (!want[0]) return;
+    BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsLocalPC(t.pc[a])) pc = t.pc[a];
+    if (!pc || !PawnOf(pc)) return;
+    BYTE* pri = *(BYTE**)(pc + 0x1d4); if (!IsObjFast(pri)) return;
+    char have[64] = ""; FStrAscii(pri + 0x1e0, have, sizeof(have));
+    if (!strcmp(have, want)) return;
+    last = GetTickCount(); tries++;
+    if (!g_sceVt[0]) { for (int i = 0; i < 32; i++) g_sceVt[i] = (void*)SceOutStub; g_sceOut[0] = g_sceVt; }
+    wchar_t cmd[96]; _snwprintf_s(cmd, _TRUNCATE, L"SetName %hs", want);
+    PFN_SCE fn = (PFN_SCE)((BYTE*)GetModuleHandleW(nullptr) + (0xbf1f70 - 0x400000));
+    BOOL r = FALSE;
+    __try { r = fn(pc, nullptr, cmd, g_sceOut, nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("names: SetName raised %08lx", GetExceptionCode()); tries = 3; return; }
+    Log("names: '%s' -> SetName %s (%s)", have, want, r ? "ok" : "not handled");
+}
+
 // ---------------------------------------------------------------- tick (game thread)
 static int SyncGetInt(const char* snap, const char* key, int def) {
     char k[40]; _snprintf_s(k, _TRUNCATE, "\n%s=", key);
@@ -332,6 +367,7 @@ static void SyncGetStr(const char* snap, const char* key, char* out, size_t n) {
 static void TickSync(const TickObjs& t) {
     TickWaitGuest(t);
     TickEscalationRules(t);
+    if (g_setNames) TickNames(t);
     if (!g_syncOn) return;
     static DWORD last = 0, lastLog = 0; DWORD now = GetTickCount();
     char map[96]; MapName(t, map, sizeof(map));

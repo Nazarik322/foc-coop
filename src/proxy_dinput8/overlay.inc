@@ -502,7 +502,6 @@ static bool g_useSteam = true;            // Host page checkbox
 static char g_joinLobby[32] = "";         // Join page: lobby id, empty = first friend who hosts
 static char g_relayState[160] = "";
 static unsigned long long g_relayLobby = 0; static int g_relayPeers = 0; static char g_relayRole[16] = "";
-static char g_relayPersona[64] = "";   // the player's Steam name (relay.status persona=)
 static void RelayDir(wchar_t* out) { GetModuleFileNameW(nullptr, out, MAX_PATH); wchar_t* sl = wcsrchr(out, L'\\'); if (sl) wcscpy_s(sl, 32, L"\\foc_relay"); }
 static bool StartRelay(const char* args) {
     wchar_t dir[MAX_PATH]; RelayDir(dir);
