@@ -7,14 +7,16 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 
 ## Critical
 
-### B1. Story: the guest gets no pawn — fixed in 1, 2a, 3b, 4c, 5, 9 (`spawnshift`); open: 8b
+### B1. Story: the guest gets no pawn — fixed in 1, 2a, 3b, 4c, 5, 8b, 9 (`spawnshift` + guard 0x641e10)
 - Cause: `GameInfo.RestartPlayer` (native, ghidra `0x7c2ee0`) spawns the guest's pawn right next to the host (the spawn
   location follows the host, not the StartSpot actor) and the spawn fails on collision every tick; the 47 "orphan"
   pawns are those failed spawns waiting for GC.
 - Fix `spawnshift` (default on): a hardware breakpoint (DR1, game thread) on the SpawnActor wrapper ghidra `0x54a8f0`;
   while a guest is stuck in spawn state 2 the VEH moves the Location argument of player-pawn spawns 400-1000 uu away.
   Verified 2026-10-19: chapters 1, 2a, 3b, 4c, 5, 9 PASS (guest pawn, 120 s alive, screenshots differ per player).
-- **8b (Grimlock Smash)**: different case, guest stays in spawn state **0** (`CheckReadySpawn` fails), not fixed.
+- **8b (Grimlock Smash)**: with spawnshift the guest's Possess runs and then crashed the host in ghidra `FUN_00641e10`
+  (checkpoint data, `this` = none) called from the tail of Possess. New VEH guard (counter 5) emulates its `ret 8`.
+  Verified: guest plays Grimlock, separate camera, 120 s alive; the guest barely moved on W (check by hand).
 - Chapter 9: the guest's W press moved it only 48 uu (probably a wall in the start corridor); check by hand.
 - Chapter 1: the guest screen still shows the tutorial camera with dark silhouettes (B5/B6 territory).
 - Tried and ruled out: `startfix` (moving the StartSpot actor does not change the spawn location), spectator bit

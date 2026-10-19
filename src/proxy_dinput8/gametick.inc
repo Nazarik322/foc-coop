@@ -349,8 +349,8 @@ static void WriteState(const TickObjs& t) {
         char pwn[96]; ObjLabel(t.pawn[i], pwn, sizeof(pwn)); float* f = LocOf(t.pawn[i]);
         J("%s{\"name\":\"%s\",\"possessed\":%d,\"x\":%.0f,\"y\":%.0f,\"z\":%.0f}", i ? "," : "", pwn, owned ? 1 : 0, f[0], f[1], f[2]);
     }
-    J("],\"guards\":[%ld,%ld,%ld,%ld,%ld],\"excExe\":%ld,\"excBenign\":%ld,\"excSelf\":%ld,\"dumps\":%ld}\n",
-      g_guardHits[0], g_guardHits[1], g_guardHits[2], g_guardHits[3], g_guardHits[4], g_excExe, g_excBenign, g_excSelf, g_dumps);
+    J("],\"guards\":[%ld,%ld,%ld,%ld,%ld,%ld],\"excExe\":%ld,\"excBenign\":%ld,\"excSelf\":%ld,\"dumps\":%ld}\n",
+      g_guardHits[0], g_guardHits[1], g_guardHits[2], g_guardHits[3], g_guardHits[4], g_guardHits[5], g_excExe, g_excBenign, g_excSelf, g_dumps);
 #undef J
     wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH);
     wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
@@ -760,6 +760,27 @@ static void TickSpawnShift(const TickObjs& t) {
     if (h) CloseHandle(h);
 }
 
+// ---------------------------------------------------------------- chardiag (one-time): host vs guest PRI around
+// _SelectedCharacter (+0x34c) when a guest waits in spawn state 0 (no character chosen, chapter 8b)
+static void TickCharDiag(const TickObjs& t) {
+    static DWORD since = 0; static bool done = false;
+    if (done || t.npc < 2) return;
+    BYTE *host = nullptr, *guest = nullptr;
+    for (int a = 0; a < t.npc; a++) { if (IsLocalPC(t.pc[a])) host = t.pc[a]; else if (g_spawnState[a] == 0) guest = t.pc[a]; }
+    if (!host || !guest) { since = 0; return; }
+    if (!since) { since = GetTickCount(); return; }
+    if (GetTickCount() - since < 10000) return;
+    done = true;
+    BYTE* hp = *(BYTE**)(host + 0x1d4); BYTE* gp = *(BYTE**)(guest + 0x1d4);
+    if (!Rd(hp, 0x400) || !Rd(gp, 0x400)) return;
+    char line[2400]; size_t k = _snprintf_s(line, _TRUNCATE, "chardiag: PRI words host/guest that differ (0x300..0x3c0):");
+    for (int off = 0x300; off < 0x3c0; off += 4) {
+        DWORD h = *(DWORD*)(hp + off), g = *(DWORD*)(gp + off);
+        if (h != g) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " +%x=%lx/%lx", off, h, g);
+    }
+    Log("%s", line);
+}
+
 // ---------------------------------------------------------------- the tick
 static void GameTick() {
     TArr* go = GObj();
@@ -782,6 +803,7 @@ static void GameTick() {
     TickSpecFix(t);
     TickStartFix(t);
     TickSpawnShift(t);
+    TickCharDiag(t);
     DWORD now = GetTickCount();
     static DWORD lastDiag = 0, lastStat = 0, lastPawns = 0, lastState = 0;
     if (g_ctrlDiag && t.npc >= 1 && now - lastDiag > 4000) { lastDiag = now; CtrlDiag(t.pc, t.npc, go); }

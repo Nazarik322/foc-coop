@@ -71,6 +71,7 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
 | 0x6cb310 (+8 fault) | esi == 0 | pop edi; pop esi; ret 4 | 2 |
 | 0x4e0ca0 (entry) | eax == 0 | eax = 0; ret | 3 |
 | 0x660130 (+9 fault) | esi == 0 | pop edi, esi, ebx; ret | 4 |
+| 0x641e10 (+7 fault) | ebp == 0x10 or 0 | pop ebp, ebx; ret 8 (8b, tail of Possess) | 5 |
 
 ## DLL structure (since 2026-10-19)
 - **Game-thread tick** (`gametick.inc`): `TickThread` posts `WM_APP+0x4F1` every `tickms` (default 200) ms, `GetMsgProc`

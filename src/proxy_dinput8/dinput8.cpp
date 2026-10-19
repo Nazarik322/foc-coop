@@ -1561,7 +1561,7 @@ static void InstallHooks() {
 
 // ---------------------------------------------------------------- crash reporting
 static HMODULE g_self = nullptr;                 // this DLL
-static volatile LONG g_guardHits[5];             // VEH guards below, in order
+static volatile LONG g_guardHits[6];             // VEH guards below, in order
 static volatile LONG g_excExe = 0, g_excBenign = 0, g_excSelf = 0, g_dumps = 0;
 static volatile LONG g_crashTest = 0;            // set by the `crashtest` command: dump on our own test fault
 static const unsigned long kBenignFaultRva = 0x15432c;   // the game writes to null here once at startup and handles it
@@ -1717,6 +1717,16 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         DWORD* sp = (DWORD*)c->Esp;
         c->Edi = sp[0]; c->Esi = sp[1]; c->Ebx = sp[2]; c->Eip = sp[3]; c->Esp += 16;
         if (InterlockedIncrement(&g_guardHits[4]) <= 3) Log("guard: null-this array clear bypassed");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    // ghidra FUN_00641e10 (thiscall, 2 stack args, ret 8) called with this == none (0x10) from the tail of the guest's
+    // Possess in chapter 8b (checkpoint data). Fault at +7 after "sub esp,8; push ebx; push ebp; mov ebp,ecx".
+    if (g_tutGuard && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && (ep->ContextRecord->Ebp == 0x10 || ep->ContextRecord->Ebp == 0) &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0x241e17) {
+        CONTEXT* c = ep->ContextRecord;
+        DWORD* sp = (DWORD*)c->Esp;
+        c->Ebp = sp[0]; c->Ebx = sp[1]; c->Eip = sp[4]; c->Esp += 0x14 + 8;
+        if (InterlockedIncrement(&g_guardHits[5]) <= 3) Log("guard: none-this checkpoint update (0x641e10) bypassed");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     // log only serious exceptions
