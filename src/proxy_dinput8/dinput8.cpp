@@ -1702,7 +1702,29 @@ static DWORD WINAPI RescueThread(LPVOID) {
                 if (!(idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == pw)) continue;
                 pawns[np++] = pw;
             }
-            if (GetTickCount() - lastStat > 5000) { lastStat = GetTickCount(); Log("rescue: stat npc=%d np=%d z0=%.0f z1=%.0f", npc, np, np > 0 ? ((float*)(pawns[0] + 0xe4))[2] : 0.f, np > 1 ? ((float*)(pawns[1] + 0xe4))[2] : 0.f); }
+            if (GetTickCount() - lastStat > 3000) {
+                lastStat = GetTickCount(); char b[400]; int l = _snprintf_s(b, _TRUNCATE, "rescue: stat npc=%d np=%d", npc, np);
+                for (int a2 = 0; a2 < npc; a2++) {
+                    BYTE* o = *(BYTE**)(pcs[a2] + 0x344); char n2[80]; unsigned nn;
+                    bool loc = o && Rd(o, 0x30) && ObjNameStr(o, n2, sizeof(n2), &nn) && !strncmp(n2, "TnLocalPlayer", 13);
+                    BYTE* pw = *(BYTE**)(pcs[a2] + 0x1d0); bool okp = pw && Rd(pw, 0x400);
+                    float* f = okp ? (float*)(pw + 0xe4) : nullptr;
+                    l += _snprintf_s(b + l, sizeof(b) - l, _TRUNCATE, " | %s %s (%.0f,%.0f,%.0f)", loc ? "HOST" : "GUEST", okp ? "pawn" : "nopawn", f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f);
+                }
+                Log("%s", b);
+                {   // every live pawn object, even ones no controller points to
+                    char b2[600]; int l2 = _snprintf_s(b2, _TRUNCATE, "rescue: pawns in world:");
+                    for (int i = 0, c = 0; i < go->Num && c < 8; i++) {
+                        BYTE* obj = (BYTE*)go->Data[i];
+                        if (!obj || !Rd(obj, 0x400)) continue;
+                        char nm[80]; unsigned num = 0;
+                        if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0 || strncmp(nm, "TnPlayerPawn", 12) != 0) continue;
+                        float* f = (float*)(obj + 0xe4); c++;
+                        l2 += _snprintf_s(b2 + l2, sizeof(b2) - l2, _TRUNCATE, " %s_%u ctl=%p (%.0f,%.0f,%.0f);", nm, num, *(void**)(obj + 0x1fc), f[0], f[1], f[2]);
+                    }
+                    Log("%s", b2);
+                }
+            }
             if (np < 2) continue;
             int hi = 0; for (int a = 1; a < np; a++) if (((float*)(pawns[a] + 0xe4))[2] > ((float*)(pawns[hi] + 0xe4))[2]) hi = a;
             float* ref = (float*)(pawns[hi] + 0xe4);
@@ -1886,6 +1908,15 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         DWORD* sp = (DWORD*)c->Esp;
         c->Edi = sp[0]; c->Esi = sp[1]; c->Eip = sp[2]; c->Esp += 8 + 4 + 4;
         static volatile LONG nG3 = 0; if (InterlockedIncrement(&nG3) <= 3) Log("guard: null-this setter (+0x14) bypassed");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    // ghidra FUN_004e0ca0 (`return this->+0x30 && this->+0x38`, this in EAX, no stack args): EAX == null for the guest's controller.
+    if (g_tutGuard && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Eax == 0 &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0xe0ca0) {
+        CONTEXT* c = ep->ContextRecord;
+        DWORD* sp = (DWORD*)c->Esp;
+        c->Eip = sp[0]; c->Esp += 4; c->Eax = 0;
+        static volatile LONG nG4 = 0; if (InterlockedIncrement(&nG4) <= 3) Log("guard: null-this validity check bypassed");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     // ghidra FUN_00660130 (array clear of `this`, no stack args): `this` == null, fault at +9 after push ebx,esi,edi.

@@ -2,7 +2,8 @@
 param(
   [string[]]$Maps = @("ESC_Ark_BASE_m"),
   [string]$Out = "$env:TEMP\foc_matrix",
-  [int]$Players = 2
+  [int]$Players = 2,
+  [switch]$Keep
 )
 . "$PSScriptRoot\dev.ps1"
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -32,7 +33,7 @@ foreach ($map in $Maps) {
     Start-Sleep 45
     $aliveB = [bool](Get-Process -Id $pidB -ErrorAction SilentlyContinue)
     if ($aliveB) { [W]::Click($hB, 6, 6); Start-Sleep 1; Shot $hB "$Out\$map`_B_joined.png" | Out-Null; [W]::Key(0x0D) }
-    FocusWin $hA; [W]::Key(0x0D); Start-Sleep 20
+    FocusWin $hA; [W]::Key(0x27); Start-Sleep -Milliseconds 700; [W]::Key(0x0D); Start-Sleep 20
     Shot $hA "$Out\$map`_A_play.png" | Out-Null
     if ($aliveB) { FocusWin $hB; Shot $hB "$Out\$map`_B_play.png" | Out-Null }
     Start-Sleep 20
@@ -42,5 +43,5 @@ foreach ($map in $Maps) {
   }
   Add-Content $report $line
   $line
-  Stop-Foc
+  if (-not $Keep) { Stop-Foc }
 }

@@ -65,7 +65,9 @@ Tested with two game copies on one PC, host and guest, through the menu:
 ## What does not work / known issues
 
 - **Story chapters 2a, 2b, 3b, 4c, 8b, 9: the guest connects but gets no character** (stares at the sky, no HUD).
-  The level scripts spawn only one hero; a spawn for the second player is not implemented yet.
+  Checked in 2b: the guest is not falling out of the map, it simply has no pawn. The host's controller list shows
+  a pawn for the host only, and the level holds a pool of pre-spawned pawns that nobody possesses for the guest.
+  The guest's character name is already set, so the spawn helper is not blocked on that. Fix needs a native `Possess` call.
 - **Chapters 2a and 5: the host crashes about 50 seconds after the guest joins** (when the chapter's opening scene ends and the level script touches the guest's controller). Two null-object guards were added for it; the crashes then move to other places.
 - **Chapter 4b** was shown as a cutscene for both players; gameplay not verified.
 - **Guest visuals**: characters appear as dark silhouettes on the guest's screen in cutscenes.

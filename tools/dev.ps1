@@ -89,3 +89,4 @@ function Wait-CopyWindow([string]$Copy, [int]$Timeout = 120, [int]$NotPid = 0) {
   }
   return [IntPtr]::Zero
 }
+function HoldKey($h, [byte]$sc, [int]$ms) { FocusWin $h; [W]::keybd_event(0,$sc,8,[UIntPtr]::Zero); Start-Sleep -Milliseconds $ms; [W]::keybd_event(0,$sc,10,[UIntPtr]::Zero) }
