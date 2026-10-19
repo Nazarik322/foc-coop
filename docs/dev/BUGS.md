@@ -50,11 +50,14 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 
 ## Minor
 
-### B7. The guest copy sometimes crashes at startup (about 4 s) — open
-- Seen once: `EXCEPTION at 0x24D247` (base-relative) and faults in the DINPUT8 scan threads. A rerun works.
-
-### B8. RescueThread stat logs only every ~25–30 s instead of every 3 s — open
-- The full GObjects scan is slow with two game instances on one PC. Diagnostics only.
+### B7. A copy crashes at startup (3-8 s) at ghidra `0x64d247` — workaround (environment)
+- Cause found 2026-10-19: the render thread runs an RHI init function (ghidra `FUN_0064d1f0`: BeginScene + 16×
+  SetSamplerState(MAXANISOTROPY) on `this+0xc`, the `IDirect3DDevice9`) while the device is still null; the game never
+  called `CreateDevice` (no `menu: game CreateDevice` line).
+- It happens while the remote desktop session is not displayed (no foreground window, LogonUI on the console):
+  5 of 5 starts crashed **with the old and the new DLL**; once the session was shown again, 7 of 7 starts worked.
+  D3D9 still reports the adapter (`menu: D3D9 adapters=1 'NVIDIA GeForce RTX 3080' mode=1920x1080`).
+- Workaround: keep the remote desktop window open (not minimized) while tests run. Not caused by the DLL.
 
 ### B9. `tools/matrix.ps1` screenshots fail when the guest window does not exist (Win32Exception) — open
 - Harmless, but it pollutes the output.

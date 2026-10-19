@@ -12,6 +12,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winsock2.h>
+#include <dbghelp.h>
+#include <shellapi.h>
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
@@ -55,6 +57,7 @@ static char g_findCls[64] = "";
 static bool g_engInfo = false;
 static int g_snap1 = 0, g_snap2 = 0;
 static bool g_charFixFlag = false;
+static int g_tickMs = 200;   // game-thread tick period (gametick.inc)
 static char g_instClass[64] = "";
 
 static void Log(const char* fmt, ...) {
@@ -464,6 +467,10 @@ static bool Rd(const void* p, size_t n) {
 
 struct TArr { void** Data; int Num; int Max; };
 
+// UObject header of this build: +4 packed FName = (GNames index << 14) | number, +0x14 class id (low 13 bits),
+// +0x18 object index + 1 (low 18 bits). Early probes read the name from +0x18, which is wrong.
+static inline int NameIdxOf(const BYTE* obj) { return (int)(*(const unsigned*)(obj + 4) >> 14); }
+
 static int g_scanDelayMs = 20000;
 static DWORD WINAPI ScanThread(LPVOID) {
     Sleep(g_scanDelayMs);
@@ -546,7 +553,7 @@ static DWORD WINAPI ScanThread(LPVOID) {
                 BYTE* obj = (BYTE*)t->Data[i];
                 if (!obj || !Rd(obj, 0x80)) continue;
                 char nm[80];
-                if (!nameOf(*(int*)(obj + 0x18), nm, sizeof(nm))) continue;
+                if (!nameOf(NameIdxOf(obj), nm, sizeof(nm))) continue;
                 bool want = false;
                 for (const char* w : names2) if (strcmp(nm, w) == 0) want = true;
                 if (!want) continue;
@@ -559,7 +566,7 @@ static DWORD WINAPI ScanThread(LPVOID) {
                     unsigned v = *(unsigned*)(obj + off);
                     char tn[40]; tn[0] = 0;
                     BYTE* tp = (BYTE*)(UINT_PTR)v;
-                    if (v > 0x10000 && Rd(tp, 0x20)) nameOf(*(int*)(tp + 0x18), tn, sizeof(tn));
+                    if (v > 0x10000 && Rd(tp, 0x20)) nameOf(NameIdxOf(tp), tn, sizeof(tn));
                     if (tn[0]) ln += _snprintf_s(line + ln, sizeof(line) - ln, _TRUNCATE, " +%x:%x(%s)", off, v, tn);
                     else ln += _snprintf_s(line + ln, sizeof(line) - ln, _TRUNCATE, " +%x:%x", off, v);
                 }
@@ -573,7 +580,7 @@ static DWORD WINAPI ScanThread(LPVOID) {
                 BYTE* obj = (BYTE*)t->Data[i];
                 if (!obj || !Rd(obj, 0x30)) continue;
                 char nm[80];
-                if (!nameOf(*(int*)(obj + 0x18), nm, sizeof(nm))) continue;
+                if (!nameOf(NameIdxOf(obj), nm, sizeof(nm))) continue;
                 if (!(strstr(nm, "WorldInfo") || strstr(nm, "PlayerController") || strcmp(nm, "GameInfo") == 0)) continue;
                 Log("scan: OBJ %s idx=%d obj=%p vtable rva=0x%lx +1c=%d", nm, i, obj, (unsigned long)(*(BYTE**)obj - base), *(int*)(obj + 0x1c));
                 shown++;
@@ -584,7 +591,7 @@ static DWORD WINAPI ScanThread(LPVOID) {
             BYTE* obj = (BYTE*)t->Data[i];
             if (!obj || !Rd(obj, 0x40)) continue;
             char nm[80];
-            if (!nameOf(*(int*)(obj + 0x18), nm, sizeof(nm))) continue;
+            if (!nameOf(NameIdxOf(obj), nm, sizeof(nm))) continue;
             size_t L = strlen(nm);
             if (strncmp(nm, "Tn", 2) != 0 || !strstr(nm, "Game") || strncmp(nm, "Default__", 9) == 0) continue;
             if (L < 3 || nm[L - 1] < '0' || nm[L - 1] > '9' || !strchr(nm, '_')) continue;
@@ -606,7 +613,7 @@ static DWORD WINAPI ScanThread(LPVOID) {
             BYTE* obj = (BYTE*)t->Data[i];
             if (!obj || !Rd(obj, 0x30)) continue;
             char nm[80];
-            if (!nameOf(*(int*)(obj + 0x18), nm, sizeof(nm))) continue;
+            if (!nameOf(NameIdxOf(obj), nm, sizeof(nm))) continue;
             for (const char* w : wanted) {
                 if (strcmp(nm, w) != 0) continue;
                 BYTE** vt = *(BYTE***)obj;
@@ -619,7 +626,7 @@ static DWORD WINAPI ScanThread(LPVOID) {
                 for (int off = 0x1c; off <= 0x60; off += 4) {
                     BYTE* c = *(BYTE**)(obj + off);
                     char cn[64];
-                    if (c && Rd(c, 0x30) && nameOf(*(int*)(c + 0x18), cn, sizeof(cn))) Log("scan:   %s [+0x%x] -> %p name '%s'", nm, off, c, cn);
+                    if (c && Rd(c, 0x30) && nameOf(NameIdxOf(c), cn, sizeof(cn))) Log("scan:   %s [+0x%x] -> %p name '%s'", nm, off, c, cn);
                 }
             }
         }
@@ -633,7 +640,6 @@ static DWORD WINAPI ScanThread(LPVOID) {
 #include "slot_targets.inc"
 static const unsigned long kGNamesRva = 0x15b1d20;
 static const unsigned long kGObjRva = 0x15b1d5c;
-static const int kNameFieldOff = 0x18;
 static void* g_slotOrig[128];
 static volatile LONG g_slotHits[128];
 static char g_slotSample[128][3][48];
@@ -648,20 +654,40 @@ static bool NameAt(int idx, char* out, size_t n) {
     if (!Rd(e, 8 + 4)) return false;
     const char* s = (const char*)e + 8;
     size_t k = 0;
-    while (k + 1 < n && Rd(s + k, 1) && s[k]) { out[k] = s[k]; k++; }
+    bool fast = Rd(s, n);   // one VirtualQuery for the whole range instead of one per character
+    while (k + 1 < n && (fast || Rd(s + k, 1)) && s[k]) { out[k] = s[k]; k++; }
     out[k] = 0;
     return k > 0;
 }
 
+static bool ObjNameStr(BYTE* obj, char* out, size_t n, unsigned* number = nullptr);
+
+// Instance class id of the class called `name`: the class object (class id 3 = 'Class', name number 0) keeps its own
+// id at +0x84, and its instances carry that id + 1 at +0x14.
+static unsigned ClassIdByName(const char* name) {
+    TArr* go = (TArr*)((BYTE*)GetModuleHandleW(nullptr) + kGObjRva);
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* obj = (BYTE*)go->Data[i];
+        if (!obj || !Rd(obj, 0x88) || (*(unsigned*)(obj + 0x14) & 0x1fff) != 3) continue;
+        char nm[80]; unsigned num = 0;
+        if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num != 0 || strcmp(nm, name) != 0) continue;
+        unsigned own = *(unsigned*)(obj + 0x84);
+        if (own > 0 && own < 8191) return own + 1;
+    }
+    return 0;
+}
+
+static unsigned g_functionClassId = 0;   // instance class id of 'Function' objects (set by TraceThread)
 extern "C" void __cdecl OnSlotHit(int n, void* self, void* a0, void* a1, void* a2) {
     __try {
         if (!a0 || (UINT_PTR)a0 < 0x10000) return;
         BYTE* o = (BYTE*)a0;
         if (!Rd(o, 0x40)) return;
+        // ProcessEvent's first argument is a UFunction
+        if (g_functionClassId && (*(unsigned*)(o + 0x14) & 0x1fff) != g_functionClassId) return;
         char nm[48];
-        if (!NameAt(*(int*)(o + kNameFieldOff), nm, sizeof(nm))) return;
+        if (!NameAt(NameIdxOf(o), nm, sizeof(nm))) return;
         if (!(nm[0] >= 'A' && nm[0] <= 'Z')) return;
-        // a Function object has a vtable in the exe and a plausible name; ProcessEvent's first arg is such an object
         LONG h = InterlockedIncrement(&g_slotHits[n]);
         LONG s = g_slotSampleN[n];
         if (s < 3 && h < 5000) { strncpy_s(g_slotSample[n][s], nm, _TRUNCATE); g_slotSampleN[n] = s + 1; }
@@ -705,7 +731,8 @@ static DWORD WINAPI TraceThread(LPVOID) {
     BYTE* rd = nullptr; size_t rdSize = 0;
     for (int i = 0; i < nt->FileHeader.NumberOfSections; i++)
         if (memcmp(sec[i].Name, ".rdata", 6) == 0) { rd = base + sec[i].VirtualAddress; rdSize = sec[i].Misc.VirtualSize; }
-    Log("trace: start, rdata=%p size=0x%zx", rd, rdSize);
+    for (int i = 0; i < 40 && !g_functionClassId; i++) { __try { g_functionClassId = ClassIdByName("Function"); } __except (EXCEPTION_EXECUTE_HANDLER) {} if (!g_functionClassId) Sleep(250); }
+    Log("trace: start, rdata=%p size=0x%zx, Function class id %u", rd, rdSize, g_functionClassId);
     static void* tramps[128];
     for (int k = 0; k < kSlotCount && k < 110; k++) tramps[k] = MakeTramp(k, base + kSlotRva[k]);
     Log("trace: trampolines built, t0=%p t108=%p", tramps[0], tramps[108]);
@@ -761,7 +788,7 @@ static int PatchFunctionStart(int nameIdx, int minLen, int maxLen, BYTE firstByt
         BYTE* obj = (BYTE*)go->Data[i];
         if (!obj) continue;
         if (!Rd(obj, 0x30)) continue;
-        if (*(int*)(obj + 0x18) != nameIdx) continue;
+        if (NameIdxOf(obj) != nameIdx) continue;
         if (!Rd(obj, 0x160)) continue;
         {
             static int dbg = 0;
@@ -810,7 +837,7 @@ static DWORD WINAPI ScriptPatchThread(LPVOID) {
                 for (int i = 0; i < go->Num; i++) {
                     BYTE* obj = (BYTE*)go->Data[i];
                     if (!obj) continue;
-                    int nidx = *(int*)(obj + 0x18);
+                    int nidx = NameIdxOf(obj);
                     for (int q = 0; q < NP; q++) if (nidx == idxs[q]) counts[q]++;
                 }
                 char line[900]; size_t ln = _snprintf_s(line, _TRUNCATE, "scriptpatch: presence round %d (Num=%d):", round, go->Num);
@@ -903,7 +930,7 @@ static volatile LONG g_natCount[256];
 static bool ObjName(void* p, char* out, size_t n) {
     out[0] = 0;
     if ((UINT_PTR)p < 0x10000 || !Rd(p, 0x30)) return false;
-    return NameAt(*(int*)((BYTE*)p + kNameFieldOff), out, n);
+    return NameAt(NameIdxOf((BYTE*)p), out, n);
 }
 
 static int g_wantNames[8] = {-1,-1,-1,-1,-1,-1,-1,-1};
@@ -921,7 +948,7 @@ extern "C" void __cdecl OnNative(int op, void* self, void* stack, void* result, 
         if (op == 0x1B || op == 0x1D) nameIdx = *(int*)code;
         else {
             BYTE* fp = *(BYTE**)code;
-            if ((UINT_PTR)fp > 0x10000 && Rd(fp, 0x30)) nameIdx = *(int*)(fp + kNameFieldOff);
+            if ((UINT_PTR)fp > 0x10000 && Rd(fp, 0x30)) nameIdx = NameIdxOf(fp);
         }
         char cn[64] = "";
         if (nameIdx < 0 || !NameAt(nameIdx, cn, sizeof(cn))) return;
@@ -990,7 +1017,7 @@ static DWORD WINAPI LocalPlayerThread(LPVOID) {
         for (int i = 0; i < go->Num; i++) {
             BYTE* obj = (BYTE*)go->Data[i];
             if (!obj || !Rd(obj, 0x80)) continue;
-            int n = *(int*)(obj + kNameFieldOff);
+            int n = NameIdxOf(obj);
             for (int q = 0; q < 8; q++) if (n == pidx[q]) { char t[64]; _snprintf_s(t, _TRUNCATE, "prop %s idx=%d", props[q], i); DumpRaw(t, obj, 0x80); }
             if (n == defIdx && !defobj) { defobj = obj; vt = *(void**)obj; DumpRaw("Default__TnLocalPlayer", obj, 0x60); }
         }
@@ -1004,7 +1031,7 @@ static DWORD WINAPI LocalPlayerThread(LPVOID) {
                 if (!inst && !strstr(nm, "LocalPlayer")) continue;
                 if (!inst) continue;
                 int cnt = 0; BYTE* first = nullptr;
-                for (int j = 0; j < go->Num; j++) { BYTE* obj = (BYTE*)go->Data[j]; if (obj && Rd(obj, 0x30) && *(int*)(obj + kNameFieldOff) == i) { cnt++; if (!first) first = obj; } }
+                for (int j = 0; j < go->Num; j++) { BYTE* obj = (BYTE*)go->Data[j]; if (obj && Rd(obj, 0x30) && NameIdxOf(obj) == i) { cnt++; if (!first) first = obj; } }
                 if (cnt) Log("lp: name '%s' idx %d carried by %d object(s), first %p vtable rva 0x%lx", nm, i, cnt, first, (unsigned long)(*(BYTE**)first - base));
             }
         }
@@ -1033,7 +1060,7 @@ static BYTE* FindClassObject(const char* name) {
     if (idx < 0) return nullptr;
     for (int i = 0; i < go->Num; i++) {
         BYTE* obj = (BYTE*)go->Data[i];
-        if (obj && Rd(obj, 0x30) && *(int*)(obj + kNameFieldOff) == idx) return obj;
+        if (obj && Rd(obj, 0x30) && NameIdxOf(obj) == idx) return obj;
     }
     return nullptr;
 }
@@ -1167,7 +1194,7 @@ static DWORD WINAPI CharFixThread(LPVOID) {
             for (int i = 0; i < n2; i++) {
                 BYTE* prop = *(BYTE**)(h2[i] + 3);
                 if ((UINT_PTR)prop < 0x10000 || !Rd(prop, 0x30)) continue;
-                if (*(int*)(prop + kNameFieldOff) != charsIdx) continue;
+                if (NameIdxOf(prop) != charsIdx) continue;
                 if (h2[i][1] == 0x27) continue;
                 DWORD old;
                 // replace "2d 01 <prop>" by "27" + padding nops: bytes: 04 27 0b 0b 0b 0b 0b ... (0b = EX_Nothing) keep length
@@ -1293,12 +1320,23 @@ static DWORD WINAPI EngineThread(LPVOID) {
 // ---------------------------------------------------------------- class id based instance finder
 static const unsigned long kClassByIdRva = 0x19465c4 - 0x470000;   // table of class pointers indexed by class id (4 bytes each)
 
-static bool ObjNameStr(BYTE* obj, char* out, size_t n, unsigned* number = nullptr) {
+static bool ObjNameStr(BYTE* obj, char* out, size_t n, unsigned* number) {
     out[0] = 0;
     if (!obj || !Rd(obj, 0x20)) return false;
     unsigned packed = *(unsigned*)(obj + 4);
     if (number) *number = packed & 0x3fff;
     return NameAt((int)(packed >> 14), out, n);
+}
+
+// Filled by the game-thread tick (gametick.inc): instance class id -> class object, and the kind of object it is.
+static BYTE* g_classObjById[8192];
+static BYTE g_kindById[8192];
+
+static bool ClassNameOf(BYTE* obj, char* out, size_t n) {
+    out[0] = 0;
+    if (!obj || !Rd(obj, 0x20)) return false;
+    BYTE* cls = g_classObjById[*(unsigned*)(obj + 0x14) & 0x1fff];
+    return cls && ObjNameStr(cls, out, n);
 }
 
 static DWORD WINAPI FindClsThread(LPVOID) {
@@ -1357,56 +1395,7 @@ static DWORD WINAPI FindClsThread(LPVOID) {
 }
 
 
-// ---------------------------------------------------------------- force TnLocalPlayer._CharactersLoaded
-// Layout facts (found by diffing the instance against Default__TnLocalPlayer and from the script var order):
-//   TnLocalPlayer + 0x2c0 : CharacterCustomizationFilename (FString)
-//   + 0x2cc,0x2d0,0x2d4   : _CustomCharacterData, _PlayerFileHandler, _XpManager (pointers)
-//   + 0x2d8               : bool bit field: bit0 _HasBypassedIISOnce, bit1 _CharactersLoaded, ...
-//   + 0x2dc               : CharacterLoadCompleteFunctionName (FString, 0x26 chars incl. terminator)
-static DWORD WINAPI ForceCharThread(LPVOID) {
-    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
-    unsigned wantId = 0;
-    int applied = 0;
-    for (int round = 0; round < 600; round++) {
-        Sleep(1000);
-        __try {
-            TArr* go = (TArr*)(base + kGObjRva);
-            if (go->Num < 1000 || !go->Data) continue;
-            if (!wantId) {
-                for (int i = 0; i < go->Num; i++) {
-                    BYTE* obj = (BYTE*)go->Data[i];
-                    if (!obj || !Rd(obj, 0x88)) continue;
-                    char nm[80]; unsigned num = 0;
-                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || strcmp(nm, "TnLocalPlayer") != 0 || num != 0) continue;
-                    if ((*(unsigned*)(obj + 0x14) & 0x1fff) != 3) continue;
-                    wantId = *(unsigned*)(obj + 0x84) + 1;
-                    Log("forcechar: TnLocalPlayer class id %u", wantId);
-                    break;
-                }
-                if (!wantId) continue;
-            }
-            for (int i = 0; i < go->Num; i++) {
-                BYTE* obj = (BYTE*)go->Data[i];
-                if (!obj || !Rd(obj, 0x30)) continue;
-                if ((*(unsigned*)(obj + 0x14) & 0x1fff) != wantId) continue;
-                char nm[80]; unsigned num = 0;
-                if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;   // skip Default__ (name differs) and class objects
-                if (!Rd(obj, 0x300)) continue;
-                if (*(int*)(obj + 0x2e0) != 0x26 || *(int*)(obj + 0x2e4) != 0x26) continue;   // layout sanity check
-                DWORD* flags = (DWORD*)(obj + 0x2d8);
-                if (!(*flags & 2)) {
-                    *flags |= 2;
-                    applied++;
-                    Log("forcechar: instance %p name '%s'_%u: _CharactersLoaded set (flags now %x), round %d", obj, nm, num, *flags, round);
-                }
-            }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    }
-    return 0;
-}
-
-
-// ---------------------------------------------------------------- GameInfo.MaxPlayers poke
+// ---------------------------------------------------------------- GameInfo layout, tutorial patch
 // GameInfo instance layout in this build (from diffing instances against Default__ objects):
 //   +0x230 MaxPlayers, +0x234 MaxPlayersAllowed (1/1 for TnCampaignGame, 4/4 for TnSurvivalGame), +0x238 NumPlayers,
 //   +0x244 CurrentID. (+0x224/+0x228 are MaxSpectators/MaxSpectatorsAllowed.)
@@ -1421,205 +1410,6 @@ static DWORD WINAPI SkipTutThread(LPVOID) {
             if (VirtualProtect(fn, 1, PAGE_EXECUTE_READWRITE, &old)) { fn[0] = 0xC3; VirtualProtect(fn, 1, old, &old); Log("skiptut: patched %p", fn); }
         } else Log("skiptut: unexpected bytes %02x %02x %02x at %p", fn[0], fn[1], fn[2], fn);
     } __except (EXCEPTION_EXECUTE_HANDLER) { Log("skiptut: faulted"); }
-    return 0;
-}
-
-// Remote PlayerControllers on the host never get their locally-created manager objects (input override, profile,
-// achievements, ...). Native campaign code dereferences them (null+0x10 "this"). Copy valid UObject pointers from the
-// local controller into null slots of every other TnPlayerController* instance.
-static DWORD WINAPI CtrlShareThread(LPVOID) {
-    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
-    static BYTE* fixed[64]; static int nFixed = 0;
-    for (int round = 0; round < 3000; round++) {
-        Sleep(500);
-        __try {
-            TArr* go = (TArr*)(base + kGObjRva);
-            if (go->Num < 1000 || !go->Data) continue;
-            BYTE* pcs[16]; int npc = 0;
-            for (int i = 0; i < go->Num && npc < 16; i++) {
-                BYTE* obj = (BYTE*)go->Data[i];
-                if (!obj || !Rd(obj, 0x30)) continue;
-                char nm[80]; unsigned num = 0;
-                if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;
-                if (strncmp(nm, "TnPlayerController", 18) != 0) continue;
-                if (!Rd(obj, 0x740)) continue;
-                pcs[npc++] = obj;
-            }
-            g_playerCount = npc;
-            { static int lastN = -1; if (npc != lastN) { lastN = npc; Log("pcdiag: controller count now %d", npc); } }
-            if (npc < 1 || (npc < 2 && !g_ctrlDiag)) continue;
-            static DWORD lastDiag = 0; if (g_ctrlDiag && GetTickCount() - lastDiag > 4000 && (lastDiag = GetTickCount(), true)) {
-                Log("pcdiag: %d controllers", npc);
-                for (int a = 0; a < npc; a++) {
-                    char nm[80]; unsigned num = 0; ObjNameStr(pcs[a], nm, sizeof(nm), &num);
-                    char line[1200]; size_t k = _snprintf_s(line, _TRUNCATE, "pcdiag: PC %s_%u %p refs:", nm, num - 1, pcs[a]);
-                    for (int off = 0x100; off < 0x740; off += 4) {
-                        BYTE* o = *(BYTE**)(pcs[a] + off);
-                        if (!o || !Rd(o, 0x30)) continue;
-                        unsigned idx = *(unsigned*)(o + 0x18) & 0x3ffff;
-                        if (!(idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == o)) continue;
-                        char n2[80]; unsigned nn = 0; if (!ObjNameStr(o, n2, sizeof(n2), &nn)) continue;
-                        if (strstr(n2, "Pawn") || strstr(n2, "Character") || strstr(n2, "Player") || strstr(n2, "Connection") || strstr(n2, "Hero")) {
-                            if (k + 60 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x=%s_%u", off, n2, nn - 1);
-                        }
-                    }
-                    Log("%s", line);
-                }
-                if (npc == 2) {
-                    // word diff between the local-player controller (host) and the remote one
-                    int L = -1;
-                    for (int a = 0; a < npc; a++) { BYTE* o = *(BYTE**)(pcs[a] + 0x344); char n2[80]; unsigned nn; if (o && Rd(o, 0x30) && ObjNameStr(o, n2, sizeof(n2), &nn) && !strncmp(n2, "TnLocalPlayer", 13)) L = a; }
-                    if (L >= 0) {
-                        BYTE* h = pcs[L]; BYTE* r = pcs[1 - L];
-                        char line[1500]; size_t k = 0; int cnt = 0;
-                        for (int off = 0x1d0; off < 0x740; off += 4) {
-                            unsigned hv = *(unsigned*)(h + off), rv = *(unsigned*)(r + off);
-                            if (hv == rv) continue;
-                            bool hp = hv >= 0x01000000 && hv < 0x3e000000 && (hv & 3) == 0, rp = rv >= 0x01000000 && rv < 0x3e000000 && (rv & 3) == 0;
-                            if (hp && rp) continue;   // both look like heap pointers
-                            if (k + 30 > sizeof(line) - 40) { Log("pcdiff: host-vs-remote:%s", line); k = 0; line[0] = 0; }
-                            k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x:%x/%x", off, hv, rv); cnt++;
-                        }
-                        if (k) Log("pcdiff: host-vs-remote:%s", line);
-                    }
-                }
-                for (int a = 0; a < npc; a++) {
-                    for (int off = 0x100; off < 0x740; off += 4) {
-                        BYTE* cam = *(BYTE**)(pcs[a] + off);
-                        if (!cam || !Rd(cam, 0x30)) continue;
-                        unsigned ci = *(unsigned*)(cam + 0x18) & 0x3ffff;
-                        if (!(ci >= 1 && ci <= (unsigned)go->Num && (BYTE*)go->Data[ci - 1] == cam)) continue;
-                        char cn[80]; unsigned cnum = 0; if (!ObjNameStr(cam, cn, sizeof(cn), &cnum) || cnum == 0) continue;
-                        if (!strstr(cn, "PlayerCamera") && !strstr(cn, "CameraActor")) continue;
-                        if (!Rd(cam, 0x600)) continue;
-                        char line[1300]; size_t k = _snprintf_s(line, _TRUNCATE, "camdiag: PC%d +%x %s_%u %p refs:", a, off, cn, cnum - 1, cam);
-                        for (int o2 = 0x100; o2 < 0x600; o2 += 4) {
-                            BYTE* t = *(BYTE**)(cam + o2);
-                            if (!t || !Rd(t, 0x30)) continue;
-                            unsigned ti = *(unsigned*)(t + 0x18) & 0x3ffff;
-                            if (!(ti >= 1 && ti <= (unsigned)go->Num && (BYTE*)go->Data[ti - 1] == t)) continue;
-                            char tn[80]; unsigned tnum = 0; if (!ObjNameStr(t, tn, sizeof(tn), &tnum)) continue;
-                            if (!strncmp(tn, "TnPlayer", 8) || strstr(tn, "Camera")) { if (k + 60 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x=%s_%u", o2, tn, tnum - 1); }
-                        }
-                        Log("%s", line);
-                    }
-                }
-                for (int a = 0; a < npc; a++) {
-                    BYTE* pri = *(BYTE**)(pcs[a] + 0x1d4);
-                    if (!pri || !Rd(pri, 0x900)) continue;
-                    char line[1400]; size_t k = _snprintf_s(line, _TRUNCATE, "pridiag: PC%d pri %p strings:", a, pri);
-                    for (int off = 0x200; off < 0x900; off += 4) {
-                        wchar_t* d = *(wchar_t**)(pri + off); int num = *(int*)(pri + off + 4), mx = *(int*)(pri + off + 8);
-                        if (num < 2 || num > 40 || mx < num || mx > 4096 || !d || !Rd(d, num * 2)) continue;
-                        bool ok = d[num - 1] == 0; for (int q = 0; q < num - 1 && ok; q++) if (d[q] < 32 || d[q] > 126) ok = false;
-                        if (!ok) continue;
-                        char t[48]; int tn = 0; for (; tn < num - 1 && tn < 40; tn++) t[tn] = (char)d[tn]; t[tn] = 0;
-                        if (k + 70 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x='%s'(%d)", off, t, num);
-                    }
-                    Log("%s", line);
-                }
-                for (int i = 0; i < go->Num; i++) {
-                    BYTE* obj = (BYTE*)go->Data[i];
-                    if (!obj || !Rd(obj, 0x30)) continue;
-                    char nm[80]; unsigned num = 0;
-                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0 || strncmp(nm, "TnPlayerPawn", 12) != 0 || !Rd(obj, 0x400)) continue;
-                    char line[1500]; size_t k = _snprintf_s(line, _TRUNCATE, "pawnloc: %s_%u %p:", nm, num - 1, obj);
-                    for (int off = 0x60; off < 0x300; off += 4) {
-                        float* f = (float*)(obj + off);
-                        bool ok = true; for (int q = 0; q < 3; q++) if (!(f[q] > -2e6f && f[q] < 2e6f) || (f[q] != f[q])) ok = false;
-                        if (!ok) continue;
-                        if (fabsf(f[0]) < 1.0f && fabsf(f[1]) < 1.0f && fabsf(f[2]) < 1.0f) continue;
-                        if (fabsf(f[0]) < 1e-3f && fabsf(f[1]) < 1e-3f) continue;
-                        if (k + 70 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x=(%.0f,%.0f,%.0f)", off, f[0], f[1], f[2]);
-                    }
-                    Log("%s", line);
-                }
-                // all pawn-like instances and their controller-ish refs
-                int shown = 0;
-                for (int i = 0; i < go->Num && shown < 12; i++) {
-                    BYTE* obj = (BYTE*)go->Data[i];
-                    if (!obj || !Rd(obj, 0x30)) continue;
-                    char nm[80]; unsigned num = 0;
-                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;
-                    if (!strstr(nm, "Pawn") || strstr(nm, "Default__")) continue;
-                    if (!strncmp(nm, "TnPawn", 6) == 0 && !strstr(nm, "Transformer") && !strstr(nm, "Pawn_")) {}
-                    if (!Rd(obj, 0x600)) continue;
-                    char line[900]; size_t k = _snprintf_s(line, _TRUNCATE, "pcdiag: PAWN %s_%u %p ctl-refs:", nm, num - 1, obj);
-                    for (int off = 0x100; off < 0x600; off += 4) {
-                        BYTE* o = *(BYTE**)(obj + off);
-                        for (int a = 0; a < npc; a++) if (o == pcs[a] && k + 24 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x=PC%d", off, a);
-                    }
-                    Log("%s", line); shown++;
-                }
-            }
-            auto isObj = [&](BYTE* o) -> bool {
-                if (!o || !Rd(o, 0x30)) return false;
-                unsigned idx = *(unsigned*)(o + 0x18) & 0x3ffff;
-                return idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == o;
-            };
-            auto isObj0 = [&](BYTE* o) -> bool {
-                if (!o || !Rd(o, 0x200)) return false;
-                unsigned idx = *(unsigned*)(o + 0x18) & 0x3ffff;
-                return idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == o;
-            };
-            if (g_hostFirst && npc >= 2) {
-                // Kismet "Player" = first PlayerController in WorldInfo.ControllerList, which is the newest one. Put the
-                // local-player controller (host) at the head: list = host -> others -> none.
-                int L = -1;
-                for (int a = 0; a < npc; a++) { BYTE* o = *(BYTE**)(pcs[a] + 0x344); char n2[80]; unsigned nn; if (o && Rd(o, 0x30) && ObjNameStr(o, n2, sizeof(n2), &nn) && !strncmp(n2, "TnLocalPlayer", 13)) L = a; }
-                { static int lastL = -9; if (L != lastL) { lastL = L; Log("hostfirst: local-player controller index %d of %d", L, npc); } }
-                if (L >= 0) {
-                    BYTE* host = pcs[L];
-                    BYTE* wi = nullptr; int wiOff = -1;
-                    for (int i = 0; i < go->Num && !wi; i++) {
-                        BYTE* obj = (BYTE*)go->Data[i];
-                        if (!obj || !Rd(obj, 0x30)) continue;
-                        char n2[80]; unsigned nn = 0;
-                        if ((*(unsigned*)(obj + 0x14) & 0x1fff) == 3 || !ObjNameStr(obj, n2, sizeof(n2), &nn) || !strstr(n2, "WorldInfo") || strstr(n2, "Default__") || !Rd(obj, 0xc00)) continue;
-                        for (int off = 0x100; off < 0xc00 && !wi; off += 4) {
-                            BYTE* v = *(BYTE**)(obj + off);
-                            if (!isObj0(v)) continue;
-                            int g2 = 0; for (BYTE* c = v; c && g2 < 3000 && isObj0(c); c = *(BYTE**)(c + 0x1dc), g2++) if (c == host) { wi = obj; wiOff = off; break; }
-                        }
-                    }
-                    { static int lastSt = -9; int st = !wi ? -1 : (*(BYTE**)(wi + wiOff) == host ? 2 : 1); if (st != lastSt) { lastSt = st; Log("hostfirst: state %d (wi=%p off=%x)", st, wi, wiOff); } }
-                    if (wi && *(BYTE**)(wi + wiOff) != host) {
-                        // splice the host controller out of the chain and put it at the head
-                        BYTE* head = *(BYTE**)(wi + wiOff);
-                        BYTE* pred = nullptr; int guardN = 0;
-                        for (BYTE* c = head; c && guardN < 4096 && Rd(c, 0x200); c = *(BYTE**)(c + 0x1dc), guardN++) if (*(BYTE**)(c + 0x1dc) == host) { pred = c; break; }
-                        if (pred) {
-                            Log("hostfirst: WorldInfo %p +%x head %p -> host %p", wi, wiOff, head, host);
-                            *(BYTE**)(pred + 0x1dc) = *(BYTE**)(host + 0x1dc);
-                            *(BYTE**)(host + 0x1dc) = head;
-                            *(BYTE**)(wi + wiOff) = host;
-                        }
-                    }
-                }
-            }
-            // reference = controller with the most valid object pointers in the range
-            int best = -1, bestN = -1;
-            for (int a = 0; a < npc; a++) { int n = 0; for (int off = 0x500; off < 0x740; off += 4) if (isObj(*(BYTE**)(pcs[a] + off))) n++; if (n > bestN) { bestN = n; best = a; } }
-            for (int a = 0; a < npc; a++) {
-                if (a == best) continue;
-                int copied = 0;
-                for (int off = 0x500; off < 0x740; off += 4) {
-                    BYTE** dst = (BYTE**)(pcs[a] + off); BYTE* src = *(BYTE**)(pcs[best] + off);
-                    if (*dst == nullptr && isObj(src)) {
-                        char n2[80]; unsigned nn = 0; ObjNameStr(src, n2, sizeof(n2), &nn);
-                        if (g_ctrlSkipMask && strstr(n2, g_ctrlSkipMask)) { static volatile LONG ns = 0; if (InterlockedIncrement(&ns) <= 6) Log("ctrlshare: skipping +%x %s_%u", off, n2, nn - 1); continue; }
-                        static volatile LONG nc = 0; if (InterlockedIncrement(&nc) <= 40) Log("ctrlshare: +%x <- %s_%u", off, n2, nn - 1);
-                        *dst = src; copied++;
-                    }
-                }
-                if (copied) {
-                    bool seen = false; for (int k = 0; k < nFixed; k++) if (fixed[k] == pcs[a]) seen = true;
-                    if (!seen && nFixed < 64) fixed[nFixed++] = pcs[a];
-                    static volatile LONG nl = 0; if (InterlockedIncrement(&nl) <= 20) Log("ctrlshare: %p <- %p copied %d null object slots", pcs[a], pcs[best], copied);
-                }
-            }
-        } __except (EXCEPTION_EXECUTE_HANDLER) { static volatile LONG nx = 0; if (InterlockedIncrement(&nx) <= 3) Log("ctrlshare: faulted (round %d)", round); }
-    }
     return 0;
 }
 
@@ -1671,123 +1461,6 @@ static DWORD WINAPI HoldSpawnThread(LPVOID) {
     return 0;
 }
 
-// rescue: when a player pawn has fallen far below another player's pawn (its streamed-out area no longer exists on the
-// host), teleport it next to the other pawn. Pawn = PlayerController+0x1d0, Actor.Location = pawn+0xe4 (x,y,z floats).
-static DWORD WINAPI RescueThread(LPVOID) {
-    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
-    BYTE* pcs[16]; int npc = 0; DWORD lastScan = 0, lastStat = 0;
-    Log("rescue: thread started");
-    for (;;) {
-        Sleep(100);
-        __try {
-            TArr* go = (TArr*)(base + kGObjRva);
-            if (go->Num < 1000 || !go->Data) continue;
-            if (GetTickCount() - lastScan > 1000) {
-                lastScan = GetTickCount(); npc = 0;
-                for (int i = 0; i < go->Num && npc < 16; i++) {
-                    BYTE* obj = (BYTE*)go->Data[i];
-                    if (!obj || !Rd(obj, 0x30)) continue;
-                    char nm[80]; unsigned num = 0;
-                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0 || strncmp(nm, "TnPlayerController", 18) != 0 || !Rd(obj, 0x740)) continue;
-                    pcs[npc++] = obj;
-                }
-            }
-            if (npc < 2) continue;
-            BYTE* pawns[16]; int np = 0;
-            for (int a = 0; a < npc; a++) {
-                if (!Rd(pcs[a], 0x1e0)) continue;
-                BYTE* pw = *(BYTE**)(pcs[a] + 0x1d0);
-                if (!pw || !Rd(pw, 0x400)) continue;
-                unsigned idx = *(unsigned*)(pw + 0x18) & 0x3ffff;
-                if (!(idx >= 1 && idx <= (unsigned)go->Num && (BYTE*)go->Data[idx - 1] == pw)) continue;
-                pawns[np++] = pw;
-            }
-            if (GetTickCount() - lastStat > 3000) {
-                lastStat = GetTickCount(); char b[400]; int l = _snprintf_s(b, _TRUNCATE, "rescue: stat npc=%d np=%d", npc, np);
-                for (int a2 = 0; a2 < npc; a2++) {
-                    BYTE* o = *(BYTE**)(pcs[a2] + 0x344); char n2[80]; unsigned nn;
-                    bool loc = o && Rd(o, 0x30) && ObjNameStr(o, n2, sizeof(n2), &nn) && !strncmp(n2, "TnLocalPlayer", 13);
-                    BYTE* pw = *(BYTE**)(pcs[a2] + 0x1d0); bool okp = pw && Rd(pw, 0x400);
-                    float* f = okp ? (float*)(pw + 0xe4) : nullptr;
-                    l += _snprintf_s(b + l, sizeof(b) - l, _TRUNCATE, " | %s %s (%.0f,%.0f,%.0f)", loc ? "HOST" : "GUEST", okp ? "pawn" : "nopawn", f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f);
-                }
-                Log("%s", b);
-                {   // every live pawn object, even ones no controller points to
-                    char b2[600]; int l2 = _snprintf_s(b2, _TRUNCATE, "rescue: pawns in world:");
-                    for (int i = 0, c = 0; i < go->Num && c < 8; i++) {
-                        BYTE* obj = (BYTE*)go->Data[i];
-                        if (!obj || !Rd(obj, 0x400)) continue;
-                        char nm[80]; unsigned num = 0;
-                        if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0 || strncmp(nm, "TnPlayerPawn", 12) != 0) continue;
-                        float* f = (float*)(obj + 0xe4); c++;
-                        l2 += _snprintf_s(b2 + l2, sizeof(b2) - l2, _TRUNCATE, " %s_%u ctl=%p (%.0f,%.0f,%.0f);", nm, num, *(void**)(obj + 0x1fc), f[0], f[1], f[2]);
-                    }
-                    Log("%s", b2);
-                }
-            }
-            if (np < 2) continue;
-            int hi = 0; for (int a = 1; a < np; a++) if (((float*)(pawns[a] + 0xe4))[2] > ((float*)(pawns[hi] + 0xe4))[2]) hi = a;
-            float* ref = (float*)(pawns[hi] + 0xe4);
-            for (int a = 0; a < np; a++) {
-                if (a == hi) continue;
-                float* loc = (float*)(pawns[a] + 0xe4);
-                if (ref[2] - loc[2] > 4000.0f && ref[2] > -20000.0f) {
-                    static volatile LONG nl = 0; if (InterlockedIncrement(&nl) <= 20) Log("rescue: pawn %p fell to z=%.0f, moving next to %p (%.0f,%.0f,%.0f)", pawns[a], loc[2], pawns[hi], ref[0], ref[1], ref[2]);
-                    float nx = ref[0] + 250.0f * (a + 1), ny = ref[1] + 60.0f, nz = ref[2] + 120.0f;
-                    loc[0] = nx; loc[1] = ny; loc[2] = nz;
-                    float* loc2 = (float*)(pawns[a] + 0x134); loc2[0] = nx; loc2[1] = ny; loc2[2] = nz;
-                    // clear a plausible Velocity so the fall does not continue: scan the pawn for the old fall speed is not possible; leave it.
-                }
-            }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    }
-    return 0;
-}
-
-static DWORD WINAPI MaxPlayersThread(LPVOID) {
-    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
-    static const char* classes[] = {"TnCampaignGame", "TnCampaignGameSolo", "TnSurvivalGame", "TnTeamGame", "TnMultiplayerGame", "TnFreeForAllGame", "TnLobbyGame"};
-    unsigned ids[8] = {0};
-    for (int round = 0; round < 900; round++) {
-        Sleep(1000);
-        __try {
-            TArr* go = (TArr*)(base + kGObjRva);
-            if (go->Num < 1000 || !go->Data) continue;
-            bool need = false;
-            for (int q = 0; q < 7; q++) if (!ids[q]) need = true;
-            if (need && (round % 5 == 0)) {
-                for (int i = 0; i < go->Num; i++) {
-                    BYTE* obj = (BYTE*)go->Data[i];
-                    if (!obj || !Rd(obj, 0x88)) continue;
-                    if ((*(unsigned*)(obj + 0x14) & 0x1fff) != 3) continue;
-                    char nm[80]; unsigned num = 0;
-                    if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num != 0) continue;
-                    for (int q = 0; q < 7; q++) if (!ids[q] && strcmp(nm, classes[q]) == 0) { unsigned own = *(unsigned*)(obj + 0x84); if (own > 0 && own < 8191) ids[q] = own + 1; }
-                }
-            }
-            for (int i = 0; i < go->Num; i++) {
-                BYTE* obj = (BYTE*)go->Data[i];
-                if (!obj || !Rd(obj, 0x30)) continue;
-                unsigned cid = *(unsigned*)(obj + 0x14) & 0x1fff;
-                int q = -1; for (int k = 0; k < 7; k++) if (ids[k] && ids[k] == cid) q = k;
-                if (q < 0) continue;
-                char nm[80]; unsigned num = 0;
-                if (!ObjNameStr(obj, nm, sizeof(nm), &num) || num == 0) continue;       // skip class + Default__ objects
-                if (!Rd(obj, 0x300)) continue;
-                int* mp = (int*)(obj + 0x230); int* mpa = (int*)(obj + 0x234);
-                if (*mpa < 1 || *mpa > 64 || *mp < 0 || *mp > 64) continue;           // sanity
-                if (*mpa < g_maxPlayers && *mp >= g_maxPlayers) continue;
-                if (*mp < g_maxPlayers) {
-                    Log("maxplayers: %s_%u at %p: MaxPlayers %d (allowed %d) -> %d", nm, num - 1, obj, *mp, *mpa, g_maxPlayers);
-                    *mp = g_maxPlayers;
-                    if (*mpa < g_maxPlayers) *mpa = g_maxPlayers;
-                }
-            }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    }
-    return 0;
-}
-
 
 // ---------------------------------------------------------------- generic pokes: poke1..poke8 = "Class,offsetHex,valueHex,maskHex"
 static DWORD WINAPI PokeThread(LPVOID) {
@@ -1827,6 +1500,8 @@ static DWORD WINAPI PokeThread(LPVOID) {
     return 0;
 }
 
+static DWORD WINAPI DbgHelpThread(LPVOID);
+
 static void InstallHooks() {
     o_ODSA = (PFN_ODSA)Resolve("kernel32.dll", "OutputDebugStringA");
     o_ODSW = (PFN_ODSW)Resolve("kernel32.dll", "OutputDebugStringW");
@@ -1854,6 +1529,7 @@ static void InstallHooks() {
     PatchBoth("connect", (void**)&o_connect, (void*)h_connect);
     Log("IAT patched more: bind=%d socket=%d closesocket=%d recv=%d send=%d", hb, hs, hc, hr, hn);
     CreateThread(nullptr, 0, StatsThread, nullptr, 0, nullptr);
+    CreateThread(nullptr, 0, DbgHelpThread, nullptr, 0, nullptr);
     if (g_tcpDriver) CreateThread(nullptr, 0, DelayedNetDriverPatch, nullptr, 0, nullptr);
     if (g_dump) CreateThread(nullptr, 0, DumpThread, nullptr, 0, nullptr);
     if (g_scan) CreateThread(nullptr, 0, ScanThread, nullptr, 0, nullptr);
@@ -1866,15 +1542,71 @@ static void InstallHooks() {
     if (g_charFix) CreateThread(nullptr, 0, CharFixThread, nullptr, 0, nullptr);
     if (g_engInfo) CreateThread(nullptr, 0, EngineThread, nullptr, 0, nullptr);
     if (g_findCls[0]) CreateThread(nullptr, 0, FindClsThread, nullptr, 0, nullptr);
-    if (g_forceCharFlag) CreateThread(nullptr, 0, ForceCharThread, nullptr, 0, nullptr);
-    if (g_maxPlayers > 0) CreateThread(nullptr, 0, MaxPlayersThread, nullptr, 0, nullptr);
     if (g_skipTut) CreateThread(nullptr, 0, SkipTutThread, nullptr, 0, nullptr);
-    if (g_ctrlShare) CreateThread(nullptr, 0, CtrlShareThread, nullptr, 0, nullptr);
     if (g_holdSpawn) CreateThread(nullptr, 0, HoldSpawnThread, nullptr, 0, nullptr);
-    if (g_rescue) CreateThread(nullptr, 0, RescueThread, nullptr, 0, nullptr);
     { bool any = false; for (auto& p : g_pokes) if (p.used) any = true; if (any) CreateThread(nullptr, 0, PokeThread, nullptr, 0, nullptr); }
     if (g_snap1 > 0 || g_snap2 > 0) CreateThread(nullptr, 0, SnapThread, nullptr, 0, nullptr);
     Log("IAT patched: ODSA=%d ODSW=%d CMA=%d CMW=%d sendto=%d recvfrom=%d wsock32 sendto=%d recvfrom=%d", a, b, c, d, e, f, g, h);
+}
+
+// ---------------------------------------------------------------- crash reporting
+static HMODULE g_self = nullptr;                 // this DLL
+static volatile LONG g_guardHits[5];             // VEH guards below, in order
+static volatile LONG g_excExe = 0, g_excBenign = 0, g_excSelf = 0, g_dumps = 0;
+static volatile LONG g_crashTest = 0;            // set by the `crashtest` command: dump on our own test fault
+static const unsigned long kBenignFaultRva = 0x15432c;   // the game writes to null here once at startup and handles it
+
+typedef BOOL(WINAPI* PFN_MiniDumpWriteDump)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION, PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION);
+static PFN_MiniDumpWriteDump g_miniDump = nullptr;   // loaded by DbgHelpThread, not inside the exception handler
+
+static DWORD WINAPI DbgHelpThread(LPVOID) {
+    wchar_t p[MAX_PATH]; GetSystemDirectoryW(p, MAX_PATH); wcscat_s(p, L"\\dbghelp.dll");
+    HMODULE h = LoadLibraryW(p);
+    g_miniDump = h ? (PFN_MiniDumpWriteDump)GetProcAddress(h, "MiniDumpWriteDump") : nullptr;
+    Log("dump: dbghelp %p MiniDumpWriteDump %p", h, g_miniDump);
+    return 0;
+}
+
+// Minidump next to the exe: foc_crash_<pid>_<tag>.dmp (at most two real crash dumps per process).
+static void WriteCrashDump(EXCEPTION_POINTERS* ep, const char* tag) {
+    if (!g_miniDump) { Log("dump: dbghelp not loaded"); return; }
+    if (strcmp(tag, "test") != 0 && InterlockedIncrement(&g_dumps) > 2) return;
+    wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH);
+    wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
+    wchar_t path[MAX_PATH]; _snwprintf_s(path, _TRUNCATE, L"%s\\foc_crash_%lu_%S%ld.dmp", dir, GetCurrentProcessId(), tag, strcmp(tag, "test") ? g_dumps : 0L);
+    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) { Log("dump: cannot create %ls", path); return; }
+    MINIDUMP_EXCEPTION_INFORMATION mei; mei.ThreadId = GetCurrentThreadId(); mei.ExceptionPointers = ep; mei.ClientPointers = FALSE;
+    BOOL ok = g_miniDump(GetCurrentProcess(), GetCurrentProcessId(), f, (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules), &mei, nullptr, nullptr);
+    DWORD err = ok ? 0 : GetLastError();
+    CloseHandle(f);
+    Log("dump: %s -> %ls ok=%d err=%lu", tag, path, ok, err);
+}
+
+// "Name_N(Class)" when v points at a live engine object (GObjects index check, no __try: this runs inside the VEH).
+static bool ObjAt(DWORD v, char* out, size_t n) {
+    BYTE* o = (BYTE*)(UINT_PTR)v;
+    if (v < 0x10000 || (v & 3) || !Rd(o, 0x20)) return false;
+    TArr* go = (TArr*)((BYTE*)GetModuleHandleW(nullptr) + kGObjRva);
+    unsigned idx = *(unsigned*)(o + 0x18) & 0x3ffff;
+    if (idx < 1 || idx > (unsigned)go->Num || !Rd(&go->Data[idx - 1], 4) || (BYTE*)go->Data[idx - 1] != o) return false;
+    char nm[80], cn[80]; unsigned num = 0;
+    if (!ObjNameStr(o, nm, sizeof(nm), &num)) return false;
+    ClassNameOf(o, cn, sizeof(cn));
+    _snprintf_s(out, n, _TRUNCATE, "%s_%u(%s)", nm, num ? num - 1 : 0, cn);
+    return true;
+}
+
+// Engine objects that the registers and the top of the stack point at: shows which actor the crashing code worked on.
+static void LogRegObjects(CONTEXT* c) {
+    char line[2000]; size_t k = _snprintf_s(line, _TRUNCATE, "CRASHOBJ:");
+    const char* rn[] = {"eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"};
+    DWORD rv[] = {c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp};
+    char o[160];
+    for (int i = 0; i < 7; i++) if (ObjAt(rv[i], o, sizeof(o)) && k + 180 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %s=%s", rn[i], o);
+    DWORD* sp = (DWORD*)c->Esp;
+    for (int i = 0; i < 48 && Rd(sp + i, 4); i++) if (ObjAt(sp[i], o, sizeof(o)) && k + 180 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " [esp+%x]=%s", i * 4, o);
+    Log("%s", line);
 }
 
 static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
@@ -1887,7 +1619,7 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         DWORD* sp = (DWORD*)c->Esp;
         c->Edi = sp[0]; c->Esi = sp[1]; c->Ebp = sp[2]; c->Ebx = sp[3];
         c->Eip = sp[4]; c->Esp += 16 + 4 + 8; c->Eax = 0;
-        static volatile LONG nG = 0; if (InterlockedIncrement(&nG) <= 3) Log("guard: null-this in input lookup bypassed");
+        if (InterlockedIncrement(&g_guardHits[0]) <= 3) Log("guard: null-this in input lookup bypassed");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     // FUN_0093ca70 (ghidra; GetDefaultObject-like, returns 0x10 == "none") called with this=0x10: emulate returning 0x10.
@@ -1897,7 +1629,7 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         CONTEXT* c = ep->ContextRecord;
         DWORD* sp = (DWORD*)c->Esp;
         c->Esi = sp[0]; c->Eip = sp[7]; c->Esp += 0x1c + 4 + 4; c->Eax = 0x10;
-        static volatile LONG nG2 = 0; if (InterlockedIncrement(&nG2) <= 3) Log("guard: getdefault(null) returned none");
+        if (InterlockedIncrement(&g_guardHits[1]) <= 3) Log("guard: getdefault(null) returned none");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     // ghidra FUN_006cb310: `void __thiscall Set(int v){ if (v != this->+0x14) {...; this->+0x14 = v;} }` called with this == null when
@@ -1907,7 +1639,7 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         CONTEXT* c = ep->ContextRecord;
         DWORD* sp = (DWORD*)c->Esp;
         c->Edi = sp[0]; c->Esi = sp[1]; c->Eip = sp[2]; c->Esp += 8 + 4 + 4;
-        static volatile LONG nG3 = 0; if (InterlockedIncrement(&nG3) <= 3) Log("guard: null-this setter (+0x14) bypassed");
+        if (InterlockedIncrement(&g_guardHits[2]) <= 3) Log("guard: null-this setter (+0x14) bypassed");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     // ghidra FUN_004e0ca0 (`return this->+0x30 && this->+0x38`, this in EAX, no stack args): EAX == null for the guest's controller.
@@ -1916,7 +1648,7 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         CONTEXT* c = ep->ContextRecord;
         DWORD* sp = (DWORD*)c->Esp;
         c->Eip = sp[0]; c->Esp += 4; c->Eax = 0;
-        static volatile LONG nG4 = 0; if (InterlockedIncrement(&nG4) <= 3) Log("guard: null-this validity check bypassed");
+        if (InterlockedIncrement(&g_guardHits[3]) <= 3) Log("guard: null-this validity check bypassed");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     // ghidra FUN_00660130 (array clear of `this`, no stack args): `this` == null, fault at +9 after push ebx,esi,edi.
@@ -1925,22 +1657,32 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         CONTEXT* c = ep->ContextRecord;
         DWORD* sp = (DWORD*)c->Esp;
         c->Edi = sp[0]; c->Esi = sp[1]; c->Ebx = sp[2]; c->Eip = sp[3]; c->Esp += 16;
-        static volatile LONG nG4 = 0; if (InterlockedIncrement(&nG4) <= 3) Log("guard: null-this array clear bypassed");
+        if (InterlockedIncrement(&g_guardHits[4]) <= 3) Log("guard: null-this array clear bypassed");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     // log only serious exceptions
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
         void* addr = ep->ExceptionRecord->ExceptionAddress;
+        BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
         HMODULE m = nullptr;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &m);
+        if (m == g_self) {   // our own probes fault inside __try blocks and handle it: count, log only the first few
+            if (g_crashTest) { g_crashTest = 0; WriteCrashDump(ep, "test"); }
+            if (InterlockedIncrement(&g_excSelf) > 5) return EXCEPTION_CONTINUE_SEARCH;
+        }
+        bool inExe = m == (HMODULE)base;
+        unsigned long rva = inExe ? (unsigned long)((BYTE*)addr - base) : 0;
+        bool benign = inExe && rva == kBenignFaultRva;
+        if (benign) { if (InterlockedIncrement(&g_excBenign) > 1) return EXCEPTION_CONTINUE_SEARCH; }
+        else if (inExe) InterlockedIncrement(&g_excExe);
         char name[MAX_PATH] = "?";
-        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &m)) GetModuleFileNameA(m, name, MAX_PATH);
-        Log("EXCEPTION %08lx at %p in %s (base %p) info0=%p info1=%p", code, addr, name, m, (void*)ep->ExceptionRecord->ExceptionInformation[0], (void*)ep->ExceptionRecord->ExceptionInformation[1]);
+        if (m) GetModuleFileNameA(m, name, MAX_PATH);
+        Log("EXCEPTION %08lx at %p in %s (base %p) ghidra=%lx info0=%p info1=%p%s", code, addr, name, m, inExe ? 0x400000 + rva : 0, (void*)ep->ExceptionRecord->ExceptionInformation[0], (void*)ep->ExceptionRecord->ExceptionInformation[1], benign ? " (known startup fault, handled by the game)" : "");
         if (code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord) {
             CONTEXT* c = ep->ContextRecord;
             Log("REGS eax=%08lx ebx=%08lx ecx=%08lx edx=%08lx esi=%08lx edi=%08lx ebp=%08lx esp=%08lx", c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
-            BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
             DWORD* sp = (DWORD*)c->Esp;
-            char line[3000]; size_t k = _snprintf_s(line, _TRUNCATE, "CRASHSTACK:");
+            char line[3000]; size_t k = _snprintf_s(line, _TRUNCATE, "CRASHSTACK (ghidra VAs of return addresses):");
             int n = 0;
             __try {
                 for (int i = 0; i < 4096 && n < 50; i++) {
@@ -1948,11 +1690,12 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
                     if (v < base + 0x1000 || v >= base + 0x1000 + 0xf5fc71) continue;
                     bool call = (v[-5] == 0xE8) || (v[-2] == 0xFF && (v[-1] & 0x38) == 0x10) || (v[-3] == 0xFF && (v[-2] & 0x38) == 0x10) || (v[-6] == 0xFF && (v[-5] & 0x38) == 0x10);
                     if (!call) continue;
-                    if (k + 24 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %d:%lx", i, (unsigned long)(0x470000 + (v - base)));
+                    if (k + 24 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %d:%lx", i, (unsigned long)(0x400000 + (v - base)));
                     n++;
                 }
             } __except (EXCEPTION_EXECUTE_HANDLER) {}
             Log("%s", line);
+            if (inExe && !benign) { LogRegObjects(c); WriteCrashDump(ep, "crash"); }
         }
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -2009,6 +1752,8 @@ static void LoadConfig(const wchar_t* dir) {
         g_snap1 = GetPrivateProfileIntW(L"foc_coop", L"snap1", 0, ini2);
         g_snap2 = GetPrivateProfileIntW(L"foc_coop", L"snap2", 0, ini2);
         g_charFixFlag = GetPrivateProfileIntW(L"foc_coop", L"charfix", 0, ini2) != 0;
+        g_tickMs = GetPrivateProfileIntW(L"foc_coop", L"tickms", 200, ini2);
+        if (g_tickMs < 20) g_tickMs = 20;
         if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
             g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;
             g_maxPlayers = 5;
@@ -2017,6 +1762,7 @@ static void LoadConfig(const wchar_t* dir) {
     }
 }
 
+#include "gametick.inc"
 #include "overlay.inc"
 
 // ---------------------------------------------------------------- proxy export
@@ -2034,6 +1780,7 @@ extern "C" HRESULT WINAPI DirectInput8Create(HINSTANCE h, DWORD ver, REFIID riid
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(inst);
+        g_self = inst;
         InitializeCriticalSection(&g_cs);
         g_t0 = GetTickCount();
         wchar_t sys[MAX_PATH];

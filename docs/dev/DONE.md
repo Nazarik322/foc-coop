@@ -3,6 +3,25 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (afternoon, stage 1 of the new plan)
+
+- **Game-thread tick** (`src/proxy_dinput8/gametick.inc`): forcechar, maxplayers, ctrlshare, hostfirst, rescue and ctrldiag
+  now run on the game thread (posted message every 200 ms, one GObjects pass by class id) instead of background
+  threads that wrote engine objects. Verified in chapter 6 with host + guest: tick 0.5-1.5 ms (first one ~130 ms),
+  both players have a pawn, spawn state 3, guest sees its own and the host's pawn. `stat:` line every 3 s (B8 closed).
+  Found on the way: the old ctrldiag code on the game thread froze the host for 21 s per tick (full GObjects walk with
+  VirtualQuery); it now uses the tick's object list.
+- **`foc_state.json`** on host and guest (format in NOTES.md), incl. the real map name (UWorld.URL) and the host port.
+- **Spawn-helper state from memory**: TnCampaignGame+0x378 -> spawn helper, Players at +0x28 (campaign and Escalation).
+- **Crash dumps**: `crashtest` wrote `foc_crash_<pid>_test0.dmp` (633 KB) and the game kept running; B7 crashes wrote
+  real dumps with CRASHSTACK in ghidra VAs.
+- **B7 explained** (environment: undisplayed remote desktop session), see BUGS.md.
+- `tools/matrix.ps1` rewritten: checks the state files, prints `RESULT: PASS/FAIL/SKIP`, copies logs and dumps;
+  `Stop-Foc` only stops test copies. **Not yet verified end to end**: the remote desktop session stopped being displayed
+  during the run (all chapter starts hit B7), so the matrix PASS for Ark / chapter 1 / chapter 6 is still open.
+- Written but not run yet: `shot [file]` (back-buffer BMP) and `input key <sc> <ms>` / `input mouse <dx> <dy> <ms>`
+  (injected DirectInput) commands in `foc_cmd.txt` (stage 6).
+
 ## 2026-10-19
 
 - **Movement of both players verified in Escalation Ark.** Host as Shockwave, guest as Cliffjumper.

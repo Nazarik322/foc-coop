@@ -76,7 +76,15 @@ static void QueueCommand(const char* cmd) {
     SetEvent(g_cmdEvent);
 }
 
+// `crashtest` (foc_cmd.txt): fault inside this DLL on purpose; the VEH writes a test minidump and our handler recovers.
+static void CrashTest() {
+    g_crashTest = 1;
+    __try { *(volatile int*)(UINT_PTR)8 = 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    Log("crashtest: done (dump requested: %s)", g_crashTest ? "not written" : "written");
+}
+
 static void RunCommandNow(const std::string& cmd) {
+    if (cmd == "crashtest") { CrashTest(); return; }
     if (!g_exec && !FindExec()) { Log("menu: cannot run '%s': %s", cmd.c_str(), g_execStatus); return; }
     wchar_t w[512]; MultiByteToWideChar(CP_ACP, 0, cmd.c_str(), -1, w, 512);
     Log("menu: exec '%s'", cmd.c_str());
@@ -86,6 +94,22 @@ static void RunCommandNow(const std::string& cmd) {
     __try { r = CallExecSafe((void*)g_exec, g_execSelf, w, g_outDev); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("menu: exec raised an exception"); strcpy_s(g_execStatus, "command crashed"); return; }
     Log("menu: exec returned %d", (int)r);
     _snprintf_s(g_execStatus, _TRUNCATE, r ? "ok: %s" : "engine did not handle: %s", cmd.c_str());
+}
+
+static void InjectCommand(const char* args);
+static volatile LONG g_shotReq = 0;      // set by `shot`, served by the next final EndScene (SaveBackBuffer)
+static wchar_t g_shotPath[MAX_PATH];
+static bool HandleLocalCommand(const std::string& c) {   // test commands that do not need the game thread
+    if (c == "shot" || c.rfind("shot ", 0) == 0) {
+        wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH);
+        wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
+        if (c.size() > 5) MultiByteToWideChar(CP_ACP, 0, c.c_str() + 5, -1, g_shotPath, MAX_PATH);
+        else _snwprintf_s(g_shotPath, _TRUNCATE, L"%s\\foc_shot.bmp", dir);
+        g_shotReq = 1;
+        return true;
+    }
+    if (c.rfind("input ", 0) == 0) { InjectCommand(c.c_str() + 6); return true; }
+    return false;
 }
 
 static DWORD WINAPI CmdThread(LPVOID) {
@@ -101,6 +125,7 @@ static DWORD WINAPI CmdThread(LPVOID) {
             FILE* f = _wfopen(cmdFile, L"rb");
             if (f) { char b[512] = {0}; size_t n = fread(b, 1, sizeof(b) - 1, f); fclose(f); DeleteFileW(cmdFile); while (n && (b[n - 1] == '\r' || b[n - 1] == '\n' || b[n - 1] == ' ')) b[--n] = 0; c = b; }
         }
+        if (!c.empty() && HandleLocalCommand(c)) continue;
         if (!c.empty()) {
             if (g_gameWnd && IsWindow(g_gameWnd)) {   // run on the game thread (window procedure)
                 EnterCriticalSection(&g_cmdCs); g_cmdForGame = c; LeaveCriticalSection(&g_cmdCs);
@@ -111,6 +136,9 @@ static DWORD WINAPI CmdThread(LPVOID) {
 }
 
 static HHOOK g_msgHook = nullptr;
+static const UINT kTickMsg = WM_APP + 0x4F1;   // posted by TickThread; runs GameTickSafe() on the game thread
+static volatile LONG g_tickPosted = 0;
+static volatile DWORD g_tickPostedAt = 0;
 static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0 && lp) {
         MSG* m = (MSG*)lp;
@@ -118,9 +146,26 @@ static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
             std::string c; EnterCriticalSection(&g_cmdCs); c.swap(g_cmdForGame); LeaveCriticalSection(&g_cmdCs);
             if (!c.empty()) RunCommandNow(c);
             m->message = WM_NULL;
+        } else if (m->message == kTickMsg && wp == PM_REMOVE) {
+            g_tickPosted = 0;
+            GameTickSafe();
+            m->message = WM_NULL;
         }
     }
     return CallNextHookEx(g_msgHook, code, wp, lp);
+}
+
+// Posts kTickMsg every g_tickMs while the game thread keeps up (one message in flight at a time; a message lost
+// for 5 s, for example while a map loads without pumping messages, is re-posted).
+static DWORD WINAPI TickThread(LPVOID) {
+    for (;;) {
+        Sleep(g_tickMs);
+        HWND w = g_gameWnd;
+        if (!w || !g_msgHook || !IsWindow(w)) continue;
+        if (g_tickPosted && GetTickCount() - g_tickPostedAt < 5000) continue;
+        g_tickPosted = 1; g_tickPostedAt = GetTickCount();
+        PostMessageW(w, kTickMsg, 0, 0);
+    }
 }
 // Commands must run on the game thread (the thread that owns the window); a message hook on that thread does it.
 static void SubclassGameWindow(HWND w) {
@@ -485,6 +530,43 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
     ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
 }
 
+// ---------------------------------------------------------------- in-game screenshot (`shot [file]` in foc_cmd.txt)
+// Copies the back buffer of the next final frame to a 32-bit BMP: only the game's own image, no desktop capture.
+static void SaveBackBuffer(IDirect3DDevice9* dev) {
+    IDirect3DSurface9 *bb = nullptr, *res = nullptr, *sys = nullptr;
+    D3DSURFACE_DESC d = {};
+    HRESULT hr = dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb);
+    if (SUCCEEDED(hr)) hr = bb->GetDesc(&d);
+    IDirect3DSurface9* src = bb;
+    if (SUCCEEDED(hr) && d.MultiSampleType != D3DMULTISAMPLE_NONE) {   // resolve MSAA first
+        hr = dev->CreateRenderTarget(d.Width, d.Height, d.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &res, nullptr);
+        if (SUCCEEDED(hr)) hr = dev->StretchRect(bb, nullptr, res, nullptr, D3DTEXF_NONE);
+        src = res;
+    }
+    if (SUCCEEDED(hr)) hr = dev->CreateOffscreenPlainSurface(d.Width, d.Height, d.Format, D3DPOOL_SYSTEMMEM, &sys, nullptr);
+    if (SUCCEEDED(hr)) hr = dev->GetRenderTargetData(src, sys);
+    D3DLOCKED_RECT lr = {};
+    if (SUCCEEDED(hr) && (d.Format == D3DFMT_X8R8G8B8 || d.Format == D3DFMT_A8R8G8B8)) hr = sys->LockRect(&lr, nullptr, D3DLOCK_READONLY);
+    else if (SUCCEEDED(hr)) hr = E_NOTIMPL;
+    if (SUCCEEDED(hr)) {
+        FILE* f = nullptr; _wfopen_s(&f, g_shotPath, L"wb");
+        if (f) {
+            BITMAPFILEHEADER fh = {}; BITMAPINFOHEADER ih = {};
+            DWORD row = d.Width * 4, img = row * d.Height;
+            fh.bfType = 0x4D42; fh.bfOffBits = sizeof(fh) + sizeof(ih); fh.bfSize = fh.bfOffBits + img;
+            ih.biSize = sizeof(ih); ih.biWidth = d.Width; ih.biHeight = -(LONG)d.Height; ih.biPlanes = 1; ih.biBitCount = 32; ih.biCompression = BI_RGB; ih.biSizeImage = img;
+            fwrite(&fh, sizeof(fh), 1, f); fwrite(&ih, sizeof(ih), 1, f);
+            for (UINT y = 0; y < d.Height; y++) fwrite((BYTE*)lr.pBits + y * lr.Pitch, 1, row, f);
+            fclose(f);
+        } else hr = E_ACCESSDENIED;
+        sys->UnlockRect();
+    }
+    Log("shot: %ls %ux%u format %d -> hr %08lx", g_shotPath, d.Width, d.Height, (int)d.Format, hr);
+    if (sys) sys->Release();
+    if (res) res->Release();
+    if (bb) bb->Release();
+}
+
 static HRESULT WINAPI h_EndScene(IDirect3DDevice9* dev) {
     IDirect3DSurface9 *rt = nullptr, *bb = nullptr;
     bool isFinal = false;
@@ -494,6 +576,7 @@ static HRESULT WINAPI h_EndScene(IDirect3DDevice9* dev) {
     if ((++nEnd % 600) == 1) Log("menu: EndScene calls=%ld final=%ld rt=%p bb=%p", nEnd, nFinal, rt, bb);
     if (rt) rt->Release();
     if (bb) bb->Release();
+    if (isFinal && InterlockedExchange(&g_shotReq, 0)) { __try { SaveBackBuffer(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("shot: exception"); } }
     if (isFinal) { __try { RenderOverlay(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { static int n = 0; if (n++ < 3) Log("menu: exception in overlay render"); } }
     return D3dFor(dev)->end(dev);
 }
@@ -540,6 +623,13 @@ static IDirect3D9* WINAPI h_Direct3DCreate9(UINT v) {
             DWORD old; VirtualProtect(&vt[16], 4, PAGE_READWRITE, &old); vt[16] = (void*)h_CreateDevice; VirtualProtect(&vt[16], 4, old, &old);
             Log("menu: IDirect3D9::CreateDevice hooked");
         }
+        // B7: without a usable display (remote desktop window minimized, session locked) the game gets no device and
+        // its render thread crashes at ghidra 0x64d247. Log what D3D9 sees so that case is recognisable in the log.
+        UINT n = d9->GetAdapterCount();
+        D3DADAPTER_IDENTIFIER9 id = {}; D3DDISPLAYMODE dm = {};
+        HRESULT hi = n ? d9->GetAdapterIdentifier(0, 0, &id) : E_FAIL;
+        HRESULT hm = n ? d9->GetAdapterDisplayMode(0, &dm) : E_FAIL;
+        Log("menu: D3D9 adapters=%u [0] '%s' mode=%ux%u (hr %08lx/%08lx)", n, SUCCEEDED(hi) ? id.Description : "?", dm.Width, dm.Height, hi, hm);
     }
     return d9;
 }
@@ -553,17 +643,80 @@ static void* g_diVtCreate[2] = {nullptr, nullptr};
 
 static DiHook* FindDiHook(void* self) { void** vt = *(void***)self; for (int i = 0; i < g_diCount; i++) if (g_diHooks[i].vt == vt) return &g_diHooks[i]; return nullptr; }
 
+// Injected input for tests (`input key <scancode hex> <ms>`, `input mouse <dx> <dy> <ms>` in foc_cmd.txt): keys read
+// as held and the mouse moves inside the game's own DirectInput reads, so tests need no focus and no real input.
+static void* g_kbDev = nullptr; static void* g_mouseDev = nullptr;   // from CreateDevice: GUID_SysKeyboard / GUID_SysMouse
+static volatile DWORD g_injKeyUntil[256];
+static volatile LONG g_injKeyEdge[256];      // 1 = key-down event pending, 2 = key-up event pending (buffered reads)
+static volatile LONG g_injMouseDx = 0, g_injMouseDy = 0;      // motion still to deliver
+static volatile DWORD g_injMouseUntil = 0, g_injMouseLast = 0;
+static bool InjectActive() {
+    DWORD now = GetTickCount();
+    for (int k = 0; k < 256; k++) if ((LONG)(g_injKeyUntil[k] - now) > 0 || g_injKeyEdge[k]) return true;
+    return g_injMouseDx || g_injMouseDy;
+}
+static void InjectMouseStep(LONG* dx, LONG* dy) {   // the part of the remaining motion that is due by now
+    DWORD now = GetTickCount();
+    LONG rx = g_injMouseDx, ry = g_injMouseDy;
+    if (!rx && !ry) { *dx = *dy = 0; return; }
+    LONG left = (LONG)(g_injMouseUntil - now), dt = (LONG)(now - g_injMouseLast);
+    g_injMouseLast = now;
+    if (left <= 0 || dt >= left) { *dx = rx; *dy = ry; }
+    else { *dx = (LONG)((long long)rx * dt / (dt + left)); *dy = (LONG)((long long)ry * dt / (dt + left)); }
+    InterlockedExchangeAdd(&g_injMouseDx, -*dx); InterlockedExchangeAdd(&g_injMouseDy, -*dy);
+}
 static HRESULT WINAPI h_GetDeviceState(void* self, DWORD cb, void* data) {
     DiHook* h = FindDiHook(self);
     HRESULT r = ((HRESULT(WINAPI*)(void*, DWORD, void*))h->getState)(self, cb, data);
+    { static void* seen[4]; static int ns = 0; bool k = false; for (int i = 0; i < ns; i++) if (seen[i] == self) k = true; if (!k && ns < 4) { seen[ns++] = self; Log("input: device %p (%s) GetDeviceState cb=%lu hr=%08lx", self, self == g_kbDev ? "keyboard" : self == g_mouseDev ? "mouse" : "?", cb, r); } }
     if (g_menuOpen && SUCCEEDED(r) && data) memset(data, 0, cb);
+    if (data && !g_menuOpen && InjectActive()) {
+        if (FAILED(r)) { memset(data, 0, cb); r = S_OK; }   // not acquired without focus: report the injected state anyway
+        if (cb == 256) {
+            DWORD now = GetTickCount();
+            for (int k = 0; k < 256; k++) if ((LONG)(g_injKeyUntil[k] - now) > 0) ((BYTE*)data)[k] = 0x80;
+        } else if (cb == 16 || cb == 20) {   // DIMOUSESTATE / DIMOUSESTATE2: lX, lY first
+            LONG dx, dy; InjectMouseStep(&dx, &dy); ((LONG*)data)[0] += dx; ((LONG*)data)[1] += dy;
+        }
+    }
     return r;
 }
 static HRESULT WINAPI h_GetDeviceData(void* self, DWORD cb, void* data, DWORD* inout, DWORD flags) {
     DiHook* h = FindDiHook(self);
+    DWORD room = inout ? *inout : 0;
     HRESULT r = ((HRESULT(WINAPI*)(void*, DWORD, void*, DWORD*, DWORD))h->getData)(self, cb, data, inout, flags);
+    { static void* seen[4]; static int ns = 0; bool k = false; for (int i = 0; i < ns; i++) if (seen[i] == self) k = true; if (!k && ns < 4) { seen[ns++] = self; Log("input: device %p (%s) GetDeviceData cbObject=%lu room=%lu hr=%08lx", self, self == g_kbDev ? "keyboard" : self == g_mouseDev ? "mouse" : "?", cb, room, r); } }
     if (g_menuOpen && SUCCEEDED(r) && inout) *inout = 0;
+    if (!g_menuOpen && data && inout && cb >= 16 && !(flags & 1 /*DIGDD_PEEK*/) && InjectActive()) {
+        if (FAILED(r)) { *inout = 0; r = S_OK; }
+        DWORD n = *inout;
+        auto add = [&](DWORD ofs, DWORD val) { if (n < room) { BYTE* e = (BYTE*)data + n * cb; memset(e, 0, cb); ((DWORD*)e)[0] = ofs; ((DWORD*)e)[1] = val; ((DWORD*)e)[2] = GetTickCount(); n++; } };
+        if (self == g_kbDev) {
+            DWORD now = GetTickCount();
+            for (int k = 0; k < 256; k++) {
+                if (g_injKeyEdge[k] == 1) { add(k, 0x80); g_injKeyEdge[k] = 0; }
+                else if (!g_injKeyEdge[k] && g_injKeyUntil[k] && (LONG)(g_injKeyUntil[k] - now) <= 0) { add(k, 0); g_injKeyUntil[k] = 0; }
+            }
+        } else if (self == g_mouseDev) {
+            LONG dx, dy; InjectMouseStep(&dx, &dy);
+            if (dx) add(0 /*DIMOFS_X*/, (DWORD)dx);
+            if (dy) add(4 /*DIMOFS_Y*/, (DWORD)dy);
+        }
+        *inout = n;
+    }
     return r;
+}
+// `input key <sc hex> <ms>` / `input mouse <dx> <dy> <ms>`
+static void InjectCommand(const char* args) {
+    char kind[16] = ""; unsigned a = 0; int b = 0, c = 0;
+    if (sscanf_s(args, "%15s", kind, (unsigned)sizeof(kind)) != 1) return;
+    if (!strcmp(kind, "key") && sscanf_s(args, "%*s %x %d", &a, &b) == 2 && a < 256) {
+        g_injKeyUntil[a] = GetTickCount() + (DWORD)b; g_injKeyEdge[a] = 1;
+        Log("input: key 0x%02x held for %d ms", a, b);
+    } else if (!strcmp(kind, "mouse") && sscanf_s(args, "%*s %d %d %d", &b, &c, (int*)&a) == 3) {
+        g_injMouseLast = GetTickCount(); g_injMouseUntil = g_injMouseLast + a; g_injMouseDx = b; g_injMouseDy = c;
+        Log("input: mouse %d,%d over %u ms", b, c, a);
+    } else Log("input: bad command '%s'", args);
 }
 static void HookDiDevice(void* dev) {
     void** vt = *(void***)dev;
@@ -581,7 +734,11 @@ static HRESULT WINAPI h_DiCreateDevice(void* self, REFGUID g, void** out, void* 
     void** vt = *(void***)self; void* orig = nullptr;
     for (int i = 0; i < g_diVtN; i++) if (g_diVts[i] == vt) orig = g_diOrigCreate[i];
     HRESULT r = ((HRESULT(WINAPI*)(void*, REFGUID, void**, void*))orig)(self, g, out, unk);
-    if (SUCCEEDED(r) && out && *out) HookDiDevice(*out);
+    if (SUCCEEDED(r) && out && *out) {
+        HookDiDevice(*out);
+        if (g.Data1 == 0x6F1D2B61 && g.Data2 == 0xD5A0) g_kbDev = *out;          // GUID_SysKeyboard
+        else if (g.Data1 == 0x6F1D2B60 && g.Data2 == 0xD5A0) g_mouseDev = *out;  // GUID_SysMouse
+    }
     return r;
 }
 static void HookDirectInput(void* di) {
@@ -631,5 +788,6 @@ static void OverlayStart() {
     int n = o_Create9 ? PatchIat((void*)o_Create9, (void*)h_Direct3DCreate9) : 0;
     Log("menu: Direct3DCreate9 import patched (%d)", n);
     CreateThread(nullptr, 0, CmdThread, nullptr, 0, nullptr);
+    CreateThread(nullptr, 0, TickThread, nullptr, 0, nullptr);
     CreateThread(nullptr, 0, BeaconThread, nullptr, 0, nullptr);
 }

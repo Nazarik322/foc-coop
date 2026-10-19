@@ -67,7 +67,21 @@ function Wait-FocWindow([int]$ProcId, [int]$Timeout = 120) {
 function Shot($h, [string]$out) { [W]::Shot($h, $out) }
 function FocusWin($h) { $ok = [W]::Focus($h); if (-not $ok) { Write-Host 'WARNING: could not focus window' }; Start-Sleep -Milliseconds 300 }
 function Send-Cmd([string]$Copy, [string]$Cmd) { Set-Content -Path "E:\FoC-coop\$Copy\Binaries\foc_cmd.txt" -Value $Cmd -NoNewline -Encoding ascii }
-function Stop-Foc { Get-Process TFOC -ErrorAction SilentlyContinue | Stop-Process -Force }
+# Only test copies under E:\FoC-coop are stopped, never a game started from the Steam install.
+function Stop-Foc { Get-Process TFOC -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "E:\FoC-coop\*" } | Stop-Process -Force }
+
+# foc_state.json: written once per second by the DLL (gametick.inc) in each copy's Binaries folder.
+function Read-FocState([string]$Copy) {
+  $f = "E:\FoC-coop\$Copy\Binaries\foc_state.json"
+  if (-not (Test-Path $f)) { return $null }
+  try { return Get-Content $f -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return $null }
+}
+function Clear-FocState([string]$Copy) { Remove-Item "E:\FoC-coop\$Copy\Binaries\foc_state.json" -ErrorAction SilentlyContinue }
+# Poll the state of a copy until $Cond (a scriptblock with param($s)) is true; returns the state or $null on timeout.
+function Wait-FocState([string]$Copy, [scriptblock]$Cond, [int]$Timeout = 90) {
+  for ($i = 0; $i -lt $Timeout; $i++) { $s = Read-FocState $Copy; if ($s -and (& $Cond $s)) { return $s }; Start-Sleep 1 }
+  return $null
+}
 
 function Build-Deploy {
   Stop-Foc; Start-Sleep 2
