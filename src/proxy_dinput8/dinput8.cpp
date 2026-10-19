@@ -1878,6 +1878,25 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         static volatile LONG nG2 = 0; if (InterlockedIncrement(&nG2) <= 3) Log("guard: getdefault(null) returned none");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    // ghidra FUN_006cb310: `void __thiscall Set(int v){ if (v != this->+0x14) {...; this->+0x14 = v;} }` called with this == null when
+    // a guest joins some chapters (host crash in chapters 2a/5). Emulate "pop edi; pop esi; ret 4".
+    if (g_tutGuard && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Esi == 0 &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0x2cb318) {
+        CONTEXT* c = ep->ContextRecord;
+        DWORD* sp = (DWORD*)c->Esp;
+        c->Edi = sp[0]; c->Esi = sp[1]; c->Eip = sp[2]; c->Esp += 8 + 4 + 4;
+        static volatile LONG nG3 = 0; if (InterlockedIncrement(&nG3) <= 3) Log("guard: null-this setter (+0x14) bypassed");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    // ghidra FUN_00660130 (array clear of `this`, no stack args): `this` == null, fault at +9 after push ebx,esi,edi.
+    if (g_tutGuard && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Esi == 0 &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0x260139) {
+        CONTEXT* c = ep->ContextRecord;
+        DWORD* sp = (DWORD*)c->Esp;
+        c->Edi = sp[0]; c->Esi = sp[1]; c->Ebx = sp[2]; c->Eip = sp[3]; c->Esp += 16;
+        static volatile LONG nG4 = 0; if (InterlockedIncrement(&nG4) <= 3) Log("guard: null-this array clear bypassed");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     // log only serious exceptions
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
         void* addr = ep->ExceptionRecord->ExceptionAddress;

@@ -66,7 +66,7 @@ Tested with two game copies on one PC, host and guest, through the menu:
 
 - **Story chapters 2a, 2b, 3b, 4c, 8b, 9: the guest connects but gets no character** (stares at the sky, no HUD).
   The level scripts spawn only one hero; a spawn for the second player is not implemented yet.
-- **Chapter 5 (Soundwave): the host crashed within a minute** in the test run.
+- **Chapters 2a and 5: the host crashes about 50 seconds after the guest joins** (when the chapter's opening scene ends and the level script touches the guest's controller). Two null-object guards were added for it; the crashes then move to other places.
 - **Chapter 4b** was shown as a cutscene for both players; gameplay not verified.
 - **Guest visuals**: characters appear as dark silhouettes on the guest's screen in cutscenes.
 - **The guest starts "downed" in chapter 1** and relies on the rescue teleport.
