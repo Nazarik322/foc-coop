@@ -5,6 +5,16 @@ Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.m
 
 ## 2026-10-19 (afternoon, stage 1 of the new plan)
 
+- **B10 fixed: the host's camera followed the guest's pawn** (reported by the owner). Cause: ctrlshare copied the
+  host's `TnCameraStrategyManager` (PC+0x694) into the guest's controller, so both controllers drove one camera.
+  Fix: `ctrlskip` defaults to `Camera`. Verified with in-game screenshots (matrix `-Look`, only the guest walks):
+  fix off -> host picture diff 27, FAIL; fix on -> diff 4, PASS (chapter 2b).
+- **Matrix runs after the move to the game thread**: Ark, 2a, 2b, 6 PASS (2a/2b: guest has a pawn for the first time;
+  2a 180 s without the old B2 crash). 1, 3b, 4c, 5, 8b, 9: guest stuck in spawn state 2 (B1).
+- **In-game screenshots** (`shot`) work on host and guest (1920x1071 BMP from the back buffer). Injected keys do not
+  move the pawn yet (the game keeps no DirectInput keyboard; window messages are tried next) — the matrix uses real W.
+- `docs/dev/TESTS.md`: regression list (each fix with its test and twin), run before every DLL commit.
+
 - **Game-thread tick** (`src/proxy_dinput8/gametick.inc`): forcechar, maxplayers, ctrlshare, hostfirst, rescue and ctrldiag
   now run on the game thread (posted message every 200 ms, one GObjects pass by class id) instead of background
   threads that wrote engine objects. Verified in chapter 6 with host + guest: tick 0.5-1.5 ms (first one ~130 ms),

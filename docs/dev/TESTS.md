@@ -1,0 +1,24 @@
+# Regression tests
+
+Every fixed bug gets a line here: the test that proves it works and its twin (the same test with the fix switched off
+must FAIL). **Before every commit that changes the DLL, run the "must pass" set**; after a fix, add its line.
+Needs a displayed desktop (BUGS B7). Results go to DONE.md.
+
+## Must pass (about 25 minutes)
+```powershell
+. C:\GitRepo\foc-coop\tools\dev.ps1; Build-Deploy
+C:\GitRepo\foc-coop\tools\matrix.ps1 -Look -AliveSec 60 -Maps ESC_Ark_BASE_m, L02a_DefendTheArk_BASE_m, L02b_DestroyAllMortars_BASE_m, L06_Megatron_BASE_m
+```
+Expected: 4 x `RESULT: PASS`.
+
+## Fixes and their tests
+| Bug / feature | Fix (ini key) | Test | Twin (must FAIL) | Verified |
+|---|---|---|---|---|
+| B10 host camera follows the guest's pawn | ctrlshare skips camera objects (`ctrlskip`, default `Camera`) | matrix `-Look` on 2b: hostImgDiff small while only the guest walks | `ctrlskip=` (empty) in A's ini: FAIL "host camera follows the guest (B10)" | 2026-10-19: twin FAIL (diff 27), fix PASS (diff 4) |
+| B1 guest without pawn in 2a, 2b | game-thread tick (all engine writes on the game thread) | matrix on 2a, 2b: guest spawn=3, pawn | none (old DLL: `launcher/payload/dinput8.dll` from 10:40) | 2026-10-19: 2a, 2b PASS, 180 s alive |
+| B2 host crash ~50 s after join in 2a | same as above | matrix 2a with `-AliveSec 180` | old DLL | 2026-10-19: PASS 180 s (chapter 5 not reached yet: guest has no pawn there) |
+| Escalation join and spawn | tcpdriver, forcechar, maxplayers | matrix ESC_Ark | `forcechar=0`: stuck at "Loading Characters" | 2026-10-19 PASS |
+| Chapter 6 both in game | ctrlshare, tutguard | matrix L06 | - | 2026-10-19 PASS |
+
+## Known open (expected FAIL now)
+- Chapters 1, 3b, 4c, 5, 8b, 9: guest spawn state 2 (`TrySpawnPlayer` fails, a new unpossessed pawn every tick).

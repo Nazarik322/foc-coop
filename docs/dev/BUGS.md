@@ -7,28 +7,16 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 
 ## Critical
 
-### B1. Story: the guest gets no pawn in chapters 2a, 2b, 3b, 4c, 8b, 9 — investigating
-- Symptom: the guest connects and sees only sky (a mirrored cloud picture), with no HUD.
-- Checked in 2b on 2026-10-19: this is **not** a fall out of the map. The host's rescue stat shows
-  `HOST pawn (-242335,123189,23155) | GUEST nopawn`. The guest's controller has `Pawn` (PC+0x1d0) = null.
-- The level holds a pool of pre-spawned `TnPlayerPawn_*` objects at almost the same spot (z≈23171), and none of them
-  is possessed for the guest.
-- Ruled out: the guest PRI `_SelectedCharacter.CharacterName` (PRI+0x34c) is **already set** ("Optimus Prime"),
-  so `HasSelectedCharacter` is not the blocker.
-- Unclear: whether `TnPlayerSpawnHelper` tracks the guest at all. The `Players` array offset was not found;
-  +0x108 read 0 on the live helper even in chapter 6, where both players have pawns.
-- Next step: call script functions natively on the game thread (find `UObject::ProcessEvent` and `FindFunction`),
-  then try `Controller.Possess(pawn)` on a spare pool pawn, or `GameInfo.RestartPlayer(PC)`.
+### B1. Story: the guest gets no pawn — investigating (now chapters 1, 3b, 4c, 5, 8b, 9)
+- 2026-10-19 afternoon: with all engine writes on the game thread (gametick.inc) the guest gets a pawn in **2a and 2b**
+  (spawn state 3, 180 s alive). Still failing: 1 (until the host finishes the tutorial), 3b, 4c, 5, 8b, 9.
+- In the failing chapters the guest stays in spawn state **2**: `TnGame.TrySpawnPlayer` (native) fails every tick and
+  leaves a new unpossessed `TnPlayerPawn` at the start spot each time (47 of them after 2 min in chapter 1).
+- Next: find why TrySpawnPlayer fails (Ghidra on the native, or `Possess` one of those pawns via script calls).
 
-### B2. Story: the host crashes about 50 s after the guest joins (chapters 2a, 5, and sometimes 2b) — investigating
-- It happens when the chapter's opening scene ends.
-- Guards added (they emulate a return when `this` is null): ghidra `0x6cb310`, `0x660130`, `0x4e0ca0`.
-  After each guard the crash moves somewhere else.
-- Last seen crash: runtime `0x8C7202` (ghidra `0x857202`). This is pawn property replication (`GetOptimizedRepList`
-  style: GroundSpeed / WaterSpeed / AirSpeed...). A cached `UProperty*` is null (`*(ushort*)(prop+0x36)`), then
-  execution jumps to EIP=0. It is mid-function, so a simple return-guard is not possible.
-- It probably comes from replicating a pawn the guest should not get, or a pawn with a different class.
-  It is likely linked to B1.
+### B2. Story: the host crashes about 50 s after the guest joins — retest pending
+- Not seen in 2a with the game-thread tick (180 s alive). Chapter 5 not checked yet (guest gets no pawn there, B1).
+- Old analysis: crash at ghidra `0x857202` in pawn property replication (null cached `UProperty*`).
 
 ## Major
 
@@ -47,6 +35,8 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 ### B5. Guest visuals: dark silhouettes in cutscenes — open (owner said: not now)
 
 ### B6. Guest starts "downed" in chapter 1 — workaround (rescue teleport)
+
+### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 
 ## Minor
 

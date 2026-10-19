@@ -9,6 +9,7 @@ param(
   [int]$PawnTimeout = 90,   # seconds after the guest joined until every player must have a pawn
   [int]$AliveSec = 60,      # then both games must stay alive and keep their pawns this long
   [switch]$Move,            # also hold W in each window (real input, needs focus) and require the pawns to move
+  [switch]$Look,            # in-game screenshots of host and guest before/after both walk forward (injected input, no focus)
   [switch]$Keep             # leave both games running after the last map
 )
 . "$PSScriptRoot\dev.ps1"
@@ -25,6 +26,46 @@ function Save-Artifacts($map) {
     Get-ChildItem "$bin\foc_crash_*.dmp" -ErrorAction SilentlyContinue | ForEach-Object { Move-Item $_.FullName "$Out\$map`_$c`_$($_.Name)" -Force }
   }
 }
+function Send-CmdWait([string]$Copy, [string]$Cmd) {   # foc_cmd.txt is read every 0.5 s; wait until it was taken
+  Send-Cmd $Copy $Cmd
+  for ($i = 0; $i -lt 20 -and (Test-Path "E:\FoC-coop\$Copy\Binaries\foc_cmd.txt"); $i++) { Start-Sleep -Milliseconds 250 }
+}
+function Shot-Both($map, $tag) {
+  Add-Type -AssemblyName System.Drawing
+  foreach ($c in "A", "B") { Send-CmdWait $c "shot $Out\$map`_$c`_$tag.bmp" }
+  Start-Sleep 2
+  foreach ($c in "A", "B") {
+    $bmp = "$Out\$map`_$c`_$tag.bmp"
+    if (Test-Path $bmp) { $im = [System.Drawing.Image]::FromFile($bmp); $im.Save(($bmp -replace '\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png); $im.Dispose(); Remove-Item $bmp }
+  }
+}
+function LocalPos($c) { $s = Read-FocState $c; $p = $s.players | Where-Object { $_.local } | Select-Object -First 1; if ($p -and $p.pawn) { @($p.x, $p.y) } else { $null } }
+function Dist($a, $b) { if (-not $a -or -not $b) { return -1 }; [int][math]::Sqrt([math]::Pow($a[0] - $b[0], 2) + [math]::Pow($a[1] - $b[1], 2)) }
+# Look step: screenshots of host and guest, only the guest walks forward (real W key), screenshots again.
+# The host did not move, so its picture must stay about the same; if it changes as much as the guest's, the host
+# camera follows the guest's pawn (BUGS B10). Returns "" or a failure reason, and appends details to $script:detail.
+function ImgDiff($p1, $p2) {   # mean absolute difference of 32x18 grayscale thumbnails, 0..255
+  Add-Type -AssemblyName System.Drawing
+  $t = foreach ($p in $p1, $p2) { $im = [Drawing.Image]::FromFile($p); $b = New-Object Drawing.Bitmap 32, 18; $g = [Drawing.Graphics]::FromImage($b); $g.DrawImage($im, 0, 0, 32, 18); $g.Dispose(); $im.Dispose(); , $b }
+  $sum = 0
+  for ($y = 0; $y -lt 18; $y++) { for ($x = 0; $x -lt 32; $x++) { $c1 = $t[0].GetPixel($x, $y); $c2 = $t[1].GetPixel($x, $y); $sum += [math]::Abs(($c1.R + $c1.G + $c1.B) - ($c2.R + $c2.G + $c2.B)) / 3 } }
+  $t[0].Dispose(); $t[1].Dispose()
+  [int]($sum / (32 * 18))
+}
+function Look-Both($map, $pidA, $pidB) {
+  Shot-Both $map "1before"
+  $a0 = LocalPos A; $b0 = LocalPos B
+  $hB = Wait-FocWindow $pidB 5; HoldKey $hB 0x11 3000; Start-Sleep 2
+  $a1 = LocalPos A; $b1 = LocalPos B
+  Shot-Both $map "2after"
+  $hm = Dist $a0 $a1; $gm = Dist $b0 $b1
+  $da = ImgDiff "$Out\$map`_A_1before.png" "$Out\$map`_A_2after.png"
+  $db = ImgDiff "$Out\$map`_B_1before.png" "$Out\$map`_B_2after.png"
+  $script:detail += " hostMoved=$hm guestMoved=$gm hostImgDiff=$da guestImgDiff=$db"
+  if ($gm -lt 200) { return "guest did not move ($gm uu)" }
+  if ($hm -lt 50 -and $da -gt [math]::Max(12, $db / 2)) { return "host picture changed ($da) although only the guest moved: host camera follows the guest (B10)" }
+  return ""
+}
 function PawnSummary($s) { ($s.players | ForEach-Object { "$(if ($_.local) {'host'} else {'guest'}):$(if ($_.pawn) {'pawn'} else {'nopawn'})/spawn=$($_.spawn)" }) -join ' ' }
 
 foreach ($map in $Maps) {
@@ -38,7 +79,7 @@ foreach ($map in $Maps) {
   Get-ChildItem "E:\FoC-coop\A\Binaries\foc_crash_*.dmp", "E:\FoC-coop\B\Binaries\foc_crash_*.dmp" -ErrorAction SilentlyContinue | Remove-Item
   $isStory = $map -like "L*"
   $game = if ($isStory) { "TnCampaignGame" } else { "TnSurvivalGame" }
-  $reason = $null; $detail = ""
+  $reason = $null; $detail = ""; $pidB = $null
   $pidA = Start-Foc "A" "$map`?Game=TransContent.$game`?listen`?MaxPlayers=$Players" 960 540
   # 1. the host is in the map, with the expected game class (checks the mode before anything else)
   $sA = Wait-FocState A { param($s) $s.map -eq $map -and $s.role -eq "host" -and $s.port -gt 0 } 180
@@ -101,6 +142,7 @@ foreach ($map in $Maps) {
       else { $detail += " $(PawnSummary $s) guards=$($s.guards -join ',') tickMsMax=$($s.tickMsMax)" }
     }
   }
+  if ($Look -and -not $reason -and (Alive $pidA) -and $pidB -and (Alive $pidB)) { $script:detail = $detail; $r = Look-Both $map $pidA $pidB; $detail = $script:detail; if ($r) { $reason = $r + " |" + $detail } }
   Save-Artifacts $map
   $line = if ($reason) { $fail++; "RESULT: FAIL $map $reason" } else { $pass++; "RESULT: PASS $map$detail" }
   Add-Content $report "$(Get-Date -Format s) $line"

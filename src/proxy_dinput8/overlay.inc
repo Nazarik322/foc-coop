@@ -712,7 +712,17 @@ static void InjectCommand(const char* args) {
     if (sscanf_s(args, "%15s", kind, (unsigned)sizeof(kind)) != 1) return;
     if (!strcmp(kind, "key") && sscanf_s(args, "%*s %x %d", &a, &b) == 2 && a < 256) {
         g_injKeyUntil[a] = GetTickCount() + (DWORD)b; g_injKeyEdge[a] = 1;
-        Log("input: key 0x%02x held for %d ms", a, b);
+        // The game keeps only a DirectInput mouse; the keyboard comes through window messages, so post those too.
+        UINT vk = MapVirtualKeyW(a, MAPVK_VSC_TO_VK);
+        struct KeyUp { HWND w; UINT vk, sc; DWORD ms; };
+        KeyUp* ku = new KeyUp{g_gameWnd, vk, a, (DWORD)b};
+        if (g_gameWnd) PostMessageW(g_gameWnd, WM_KEYDOWN, vk, 1 | (a << 16));
+        CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
+            KeyUp* k = (KeyUp*)p; DWORD end = GetTickCount() + k->ms;
+            while ((LONG)(end - GetTickCount()) > 0) { Sleep(100); if (k->w && (LONG)(end - GetTickCount()) > 0) PostMessageW(k->w, WM_KEYDOWN, k->vk, 1 | (k->sc << 16) | (1u << 30)); }
+            if (k->w) PostMessageW(k->w, WM_KEYUP, k->vk, 1 | (k->sc << 16) | (1u << 30) | (1u << 31));
+            delete k; return 0; }, ku, 0, nullptr);
+        Log("input: key 0x%02x (vk 0x%02x) held for %d ms", a, vk, b);
     } else if (!strcmp(kind, "mouse") && sscanf_s(args, "%*s %d %d %d", &b, &c, (int*)&a) == 3) {
         g_injMouseLast = GetTickCount(); g_injMouseUntil = g_injMouseLast + a; g_injMouseDx = b; g_injMouseDy = c;
         Log("input: mouse %d,%d over %u ms", b, c, a);
@@ -736,6 +746,7 @@ static HRESULT WINAPI h_DiCreateDevice(void* self, REFGUID g, void** out, void* 
     HRESULT r = ((HRESULT(WINAPI*)(void*, REFGUID, void**, void*))orig)(self, g, out, unk);
     if (SUCCEEDED(r) && out && *out) {
         HookDiDevice(*out);
+        Log("input: CreateDevice guid %08lx-%04x -> %p", g.Data1, g.Data2, *out);
         if (g.Data1 == 0x6F1D2B61 && g.Data2 == 0xD5A0) g_kbDev = *out;          // GUID_SysKeyboard
         else if (g.Data1 == 0x6F1D2B60 && g.Data2 == 0xD5A0) g_mouseDev = *out;  // GUID_SysMouse
     }

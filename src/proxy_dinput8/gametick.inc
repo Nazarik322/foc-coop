@@ -313,13 +313,14 @@ static void WriteState(const TickObjs& t) {
     J("\"url\":\"%s\",\"map\":\"%s\",\"game\":\"%s\",\"role\":\"%s\",\"port\":%ld,\"players\":[", CmdlineUrl(), map, game, t.ngame ? "host" : "client", g_hostBoundPort);
     for (int a = 0; a < t.npc; a++) {
         BYTE* pc = t.pc[a]; BYTE* pw = PawnOf(pc);
-        char pcn[96], pwn[96], start[96], chr[64] = "";
+        char pcn[96], pwn[96], start[96], view[96], chr[64] = "";
         ObjLabel(pc, pcn, sizeof(pcn)); ObjLabel(pw, pwn, sizeof(pwn)); ObjLabel(*(BYTE**)(pc + 0x220), start, sizeof(start));
+        ObjLabel(*(BYTE**)(pc + 0x378), view, sizeof(view));   // camera view target (PlayerController+0x378)
         BYTE* pri = *(BYTE**)(pc + 0x1d4);
         if (IsObjFast(pri)) FStrAscii(pri + 0x34c, chr, sizeof(chr));
         float* f = pw ? LocOf(pw) : nullptr;
-        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"char\":\"%s\"}",
-          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, chr);
+        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"char\":\"%s\"}",
+          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, chr);
     }
     J("],\"pawns\":[");
     for (int i = 0; i < t.npawn; i++) {
@@ -362,6 +363,23 @@ static void LogStat(const TickObjs& t, bool withPawns) {
 // PRI strings and pawn locations.
 static void CtrlDiag(BYTE** pcs, int npc, TArr* go) {
     Log("pcdiag: %d controllers", npc);
+    // camera: every object the local controller references in 0x600..0x740, and which pawns those objects point at
+    for (int a = 0; a < npc; a++) {
+        if (!IsLocalPC(pcs[a])) continue;
+        for (int off = 0x600; off < 0x740; off += 4) {
+            BYTE* o = *(BYTE**)(pcs[a] + off);
+            if (!IsObjFast(o) || !Rd(o, 0x400)) continue;
+            char on[96], cn[80]; ObjLabel(o, on, sizeof(on)); ClassNameOf(o, cn, sizeof(cn));
+            char line[900]; size_t k = _snprintf_s(line, _TRUNCATE, "camdiag2: PC+%x %s (%s) pawn refs:", off, on, cn);
+            for (int o2 = 0x20; o2 < 0x400; o2 += 4) {
+                BYTE* t = *(BYTE**)(o + o2);
+                if (!IsObjFast(t) || KindOf(t) != K_PAWN) continue;
+                char tn[96]; ObjLabel(t, tn, sizeof(tn));
+                if (k + 60 < sizeof(line)) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " +%x=%s%s", o2, tn, t == PawnOf(pcs[a]) ? "(own)" : "(OTHER)");
+            }
+            Log("%s", line);
+        }
+    }
     for (int a = 0; a < npc; a++) {
         char nm[80]; unsigned num = 0; ObjNameStr(pcs[a], nm, sizeof(nm), &num);
         char line[1200]; size_t k = _snprintf_s(line, _TRUNCATE, "pcdiag: PC %s_%u %p refs:", nm, num - 1, pcs[a]);
@@ -462,6 +480,21 @@ static void CtrlDiag(BYTE** pcs, int npc, TArr* go) {
     }
 }
 
+// ---------------------------------------------------------------- viewfix (B10)
+// On a guest the local controller keeps itself as ViewTarget (PlayerController+0x378) after its pawn spawned, so its
+// camera never follows its own pawn. Point the view target at the pawn.
+static void TickViewFix(const TickObjs& t) {
+    if (!g_viewFix) return;
+    for (int a = 0; a < t.npc; a++) {
+        BYTE* pc = t.pc[a];
+        if (!IsLocalPC(pc)) continue;
+        BYTE* pw = PawnOf(pc); BYTE** vt = (BYTE**)(pc + 0x378);
+        if (!pw || *vt != pc) continue;
+        *vt = pw;
+        static volatile LONG n = 0; if (InterlockedIncrement(&n) <= 10) Log("viewfix: %p view target was the controller, now pawn %p", pc, pw);
+    }
+}
+
 // ---------------------------------------------------------------- the tick
 static void GameTick() {
     TArr* go = GObj();
@@ -476,6 +509,7 @@ static void GameTick() {
     TickHostFirst(t);
     TickRescue(t);
     TickSpawnHelper(t);
+    TickViewFix(t);
     DWORD now = GetTickCount();
     static DWORD lastDiag = 0, lastStat = 0, lastPawns = 0, lastState = 0;
     if (g_ctrlDiag && t.npc >= 1 && now - lastDiag > 4000) { lastDiag = now; CtrlDiag(t.pc, t.npc, go); }

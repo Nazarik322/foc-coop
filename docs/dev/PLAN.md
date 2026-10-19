@@ -4,10 +4,10 @@
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
 ## Next step (where to resume)
-Stage 1 code is in (see DONE.md). Needs a displayed desktop (B7): run
-`tools/matrix.ps1 -Maps ESC_Ark_BASE_m, L01_TheExodus_BASE_m, L06_Megatron_BASE_m` -> expect 3 x PASS, then stage 2:
-`tools/matrix.ps1 -Maps L02b_DestroyAllMortars_BASE_m` and read the guest's `spawn` value in the FAIL line.
-Then try the new `shot` / `input` commands, and the slot tracer (`trace=1`) for ProcessEvent (stage 3).
+**Before every DLL commit run the "must pass" set in [TESTS.md](TESTS.md).**
+1. B1 in chapters 1, 3b, 4c, 5, 8b, 9: guest stuck in spawn state 2 (TrySpawnPlayer fails). Then B2 in chapter 5.
+2. Injected input via window messages (stage 6) so movement tests need no focus.
+3. Stage 3 (ProcessEvent) with the fixed slot tracer.
 
 ## Goals in order
 1. **R1: all 13 story chapters start for 2 players.** Automated check: both have a pawn within 90 s of the guest joining,

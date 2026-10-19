@@ -57,7 +57,8 @@ static char g_findCls[64] = "";
 static bool g_engInfo = false;
 static int g_snap1 = 0, g_snap2 = 0;
 static bool g_charFixFlag = false;
-static int g_tickMs = 200;   // game-thread tick period (gametick.inc)
+static int g_tickMs = 200;
+static bool g_viewFix = true;   // B10: guest camera follows its own pawn (gametick.inc)
 static char g_instClass[64] = "";
 
 static void Log(const char* fmt, ...) {
@@ -1746,13 +1747,15 @@ static void LoadConfig(const wchar_t* dir) {
         g_rescue = GetPrivateProfileIntW(L"foc_coop", L"rescue", 0, ini2) != 0;
         g_spawnAfter = GetPrivateProfileIntW(L"foc_coop", L"spawnafter", 0, ini2);
         g_ctrlDiag = GetPrivateProfileIntW(L"foc_coop", L"ctrldiag", 0, ini2) != 0;
-        { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"ctrlskip", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_ctrlSkipMaskBuf, sizeof(g_ctrlSkipMaskBuf), nullptr, nullptr); if (g_ctrlSkipMaskBuf[0]) g_ctrlSkipMask = g_ctrlSkipMaskBuf; }
+        // ctrlskip (default "Camera", B10): never copy the host camera manager into a guest controller
+        { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"ctrlskip", L"Camera", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_ctrlSkipMaskBuf, sizeof(g_ctrlSkipMaskBuf), nullptr, nullptr); if (g_ctrlSkipMaskBuf[0]) g_ctrlSkipMask = g_ctrlSkipMaskBuf; }
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"findcls", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_findCls, sizeof(g_findCls), nullptr, nullptr); }
         g_engInfo = GetPrivateProfileIntW(L"foc_coop", L"enginfo", 0, ini2) != 0;
         g_snap1 = GetPrivateProfileIntW(L"foc_coop", L"snap1", 0, ini2);
         g_snap2 = GetPrivateProfileIntW(L"foc_coop", L"snap2", 0, ini2);
         g_charFixFlag = GetPrivateProfileIntW(L"foc_coop", L"charfix", 0, ini2) != 0;
         g_tickMs = GetPrivateProfileIntW(L"foc_coop", L"tickms", 200, ini2);
+        g_viewFix = GetPrivateProfileIntW(L"foc_coop", L"viewfix", 1, ini2) != 0;
         if (g_tickMs < 20) g_tickMs = 20;
         if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
             g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;
