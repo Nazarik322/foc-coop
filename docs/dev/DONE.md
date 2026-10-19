@@ -3,6 +3,17 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (night): story co-op identity, deaths, mods
+- Play bot over all chapters (`tools/botall.ps1`): 2a, 2b no problems; 1: guest fell into the pit and was rescued;
+  3a: guest fell through the level and died (B11 open item); 3b onwards SKIP (remote desktop minimized).
+- B11: `coopdeath` (no MISSION FAILED while a player is up, host and guest), `downedsec` (downed players wait for a
+  revive). Tests `tools/deathtest.ps1`, `tools/downtest.ps1`.
+- B12/B13: sync channel host -> guest inside the game's UDP connection (`sync.inc`): objective + markers mirrored on the
+  guest; host waits with a paused level until the guest is in and both intro movies are over.
+- Installer: "Extra mods" page (`installer/Mods.cs`) for the Nexus archives in Downloads (audio logs, FMV remaster,
+  intro skip, Advanced Configurator chain-loaded by our dinput8.dll); backups in `<game>oc_backup`.
+- Test commands: `dump`, `props`, `fall`, `tp`, `hp`, `tpmarker`, `lpexec`.
+
 ## 2026-10-19 (evening): F10 Settings page
 
 - F10 -> Settings: rescue, spawnshift, guest camera fix, ctrlshare, hostfirst, diagnostics apply at once (also in a

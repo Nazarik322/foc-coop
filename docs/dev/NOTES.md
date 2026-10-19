@@ -89,6 +89,8 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   `crashtest` in `foc_cmd.txt` writes `foc_crash_<pid>_test0.dmp` without crashing.
 - Log line `stat:` every 3 s (LOCAL/REMOTE, pawn, xyz, spawn state); player pawns every 15 s.
 
+- `sync.inc`: sync channel host -> guest (objectives, markers, wait for the guest, movie hooks), test commands
+  `tpmarker`; included after gametick.inc.
 ## Steam relay
 - `Binaries\foc_relay\FoCRelay.exe` + `steam_api.dll` (real for players, mock in test copies via `Deploy-Relay`);
   `relay.status` (role, state, lobby, peers, tx, rx) and `relay.cmd` (`quit`, `invite`) next to it.
@@ -115,3 +117,42 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   Scripts: `DecompContaining.java <out> <VA...>` (function containing an address, instructions around it, callers,
   decompiled C; never creates functions), `NameEventCalls.java <out> <maxGlobals> <name...>` (FName registrations of a
   name), `CallPairs.java`, `DecompAt.java`, `XrefStrings.java`, `VtCalls.java`, `TopCallees.java`.
+
+## Script variable offsets by reflection (2026-10-19 night)
+- `props <name...>` (foc_cmd.txt) logs the UProperty objects with that name. **Offset = (word at +0x30) >> 20**
+  (checked: Controller.Pawn 0x1d0, PlayerReplicationInfo 0x1d4, Actor.Location 0xe4). BoolProperty bit mask = word
+  +0x40.
+- TnPawn: +0x350 Health (float), +0x354 HealthMax, +0x5d0 bit 0x80000 `_IsDowned`, bit 0x20000 `_DrainHealthWhenDown`,
+  bit 0x40000 `_CanHealWhenDown`, +0x84c DownedHealth (default 400), +0x850 DownedHealthDrainRate (40/s).
+  Death while downed: Health <= -DownedHealth. Revive heals -Health + RevivalHealth. KillZ damage skips downed.
+- WorldInfo: +0x37c TimeDilation, +0x394 Pauser (PlayerReplicationInfo; non-null pauses the world, net keeps running),
+  +0x1e0 bit 0x80 bPlayersOnly. TnWorldInfo +0x5d0 `_ObjectiveManager`.
+- TnObjectiveManager: +0x28 LocalObjectiveMarkers (TArray, 0x1c per entry: +0 Description FString, +0xc MarkerBase,
+  +0x10 MarkerId, +0x14 MarkerTypeClass, +0x18 MarkerType instance), +0x34 ObjectiveMarkerCounter,
+  +0x38 LocalObjectiveMarkerCounter, +0x3c CurrentObjective, +0x40 LastCompletedObjective, +0x44 LastObjective,
+  +0x48 ObjectiveBank (TArray<FString>), +0x54 DeferredAddObjective, +0x60 DeferredCompleteObjective,
+  +0x6c bit 1 bClearObjective. The HUD calls Update every frame: a non-empty DeferredAddObjective is shown as NEW
+  OBJECTIVE and cleared.
+- GMalloc (ghidra 0x19117b8) vtable slot 3 = Realloc(ptr, size, align), thiscall; `GameRealloc` in sync.inc calls it as
+  fastcall with a dummy edx. Use it for FString/TArray memory the game may free.
+
+## Death and game over (B11)
+- Game over = GotoState('CampaignGameOver') through the thunk ghidra `0x7eb060` (`this` = object + 0x10, plain ret,
+  no stack args); called on the UI controller (host: on any player's death; guest: on its own death).
+- Native TrySpawnPlayer = ghidra `0x8a35b0`: role check, then RestartPlayer (game vtable +0x2b0 = `0x7c2ee0`), returns
+  Controller.Pawn != null. RestartPlayer spawns only when Controller.Pawn (+0x1d0) is null.
+- Spawn helper Tick (TnPlayerSpawnHelper.uc): state 2 calls TrySpawn every tick until it succeeds.
+
+## Sync channel host -> guest (sync.inc, ini `sync`, default on)
+- Datagrams inside the game's own UDP socket: host -> guest "FOCS1\n" + `key=value` lines 4x/s (seq, map, obj,
+  mk=<actor>,<marker class>,<id>), guest -> host "FOCR1\n" (= ready). h_recvfrom swallows them, so the game never sees
+  them; works over LAN, VPN and the Steam relay (relay forwards datagrams).
+- Peers = addresses that sent game datagrams in the last 10 s. Snapshots are full state: losing one is harmless.
+- Movies: BinkOpen/BinkClose (binkw32.dll imports `_BinkOpen@8`, `_BinkClose@4`) hooked in the IAT; a file from the
+  Movies folder open = a movie plays.
+
+## Test commands (foc_cmd.txt in Binaries, one line)
+`shot <file>`, `shotui <file>`, `menu <page>|off`, `dump <Class> <file> [bytes]`, `props <names>`, `fall local|remote`,
+`tp local|remote x y z` (only moves falling pawns; standing pawns are put back by physics), `hp local|remote <value>`,
+`tpmarker [dist]` (same limit), `lpexec <cmd> @<offset>` (experiment: local player FExec; candidates logged, not
+working yet), `crashtest`, `steamjoin`, any other text = engine console command.

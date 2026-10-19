@@ -23,6 +23,10 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | B2 host crash ~50 s after join in 2a | same as above | matrix 2a with `-AliveSec 180` | old DLL | 2026-10-19: PASS 180 s (chapter 5 not reached yet: guest has no pawn there) |
 | Escalation join and spawn | tcpdriver, forcechar, maxplayers | matrix ESC_Ark | `forcechar=0`: stuck at "Loading Characters" | 2026-10-19 PASS |
 | Chapter 6 both in game | ctrlshare, tutguard | matrix L06 | - | 2026-10-19 PASS |
+| B11 one death ends the mission | `coopdeath` (DR2 on game-over thunk 0x7eb060) | `tools/deathtest.ps1` (L06): log "coopdeath: ... SKIPPED", host screen keeps playing, guest screen no MISSION FAILED | `-Twin` (coopdeath=0): MISSION FAILED | 2026-10-19: skip works on host and guest; respawn of a really dead guest FAILS (open) |
+| B11 downed players bleed out in 10 s | `downedsec` (DownedHealth 1e9) | `tools/downtest.ps1` (L06): downed host alive after 45 s; both down -> MISSION FAILED on both | `-Twin` | 2026-10-19: PASS by screenshots (twin not run yet) |
+| B12 objective + marker only on the host | `sync` (sync.inc) | matrix L06 `-Keep`, `shot` both: NEW OBJECTIVE and marker on both; guest log "sync: objective -> 0" | `sync=0` in both inis: guest has no objective | 2026-10-19: PASS (twin not run yet) |
+| B13 intro starts before the guest loaded | `waitguest` (Pauser until guest ready, movies over) | matrix L06: host log "waitguest: guest ready, no movie playing -> unpaused" after the guest's "movie: closed" | `waitguest=0` | 2026-10-19: PASS (twin not run yet) |
 
 ## Known flaky
 - ESC_Ark: the host's character pick uses real key presses; one run of 3 failed (host spawn=0). Needs in-game input.

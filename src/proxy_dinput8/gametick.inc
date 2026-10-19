@@ -353,8 +353,9 @@ static void WriteState(const TickObjs& t) {
         DWORD prif = 0;
         if (IsObjFast(pri)) { FStrAscii(pri + 0x34c, chr, sizeof(chr)); prif = *(DWORD*)(pri + 0x210); }
         float* f = pw ? LocOf(pw) : nullptr;
-        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"state\":\"%s\",\"prif\":%lu,\"char\":\"%s\"}",
-          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, st, prif, chr);
+        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"state\":\"%s\",\"prif\":%lu,\"char\":\"%s\",\"hp\":%.0f,\"downed\":%d}",
+          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, st, prif, chr,
+          pw ? *(float*)(pw + 0x350) : 0.f, pw && (*(unsigned*)(pw + 0x5d0) & 0x80000) ? 1 : 0);   // TnPawn Health, _IsDowned
     }
     J("],\"pawns\":[");
     for (int i = 0; i < t.npawn; i++) {
@@ -362,8 +363,8 @@ static void WriteState(const TickObjs& t) {
         char pwn[96]; ObjLabel(t.pawn[i], pwn, sizeof(pwn)); float* f = LocOf(t.pawn[i]);
         J("%s{\"name\":\"%s\",\"possessed\":%d,\"x\":%.0f,\"y\":%.0f,\"z\":%.0f}", i ? "," : "", pwn, owned ? 1 : 0, f[0], f[1], f[2]);
     }
-    J("],\"guards\":[%ld,%ld,%ld,%ld,%ld,%ld,%ld],\"excExe\":%ld,\"excBenign\":%ld,\"excSelf\":%ld,\"dumps\":%ld}\n",
-      g_guardHits[0], g_guardHits[1], g_guardHits[2], g_guardHits[3], g_guardHits[4], g_guardHits[5], g_guardHits[6], g_excExe, g_excBenign, g_excSelf, g_dumps);
+    J("],\"guards\":[%ld,%ld,%ld,%ld,%ld,%ld,%ld],\"excExe\":%ld,\"excBenign\":%ld,\"excSelf\":%ld,\"dumps\":%ld,\"gameOverSkipped\":%ld,\"respawns\":%ld}\n",
+      g_guardHits[0], g_guardHits[1], g_guardHits[2], g_guardHits[3], g_guardHits[4], g_guardHits[5], g_guardHits[6], g_excExe, g_excBenign, g_excSelf, g_dumps, g_cdSkipped, g_cdRespawns);
 #undef J
     wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH);
     wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
@@ -645,7 +646,8 @@ static DWORD WINAPI SetHwbpThread(LPVOID p) {
     CONTEXT c = {}; c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
     GetThreadContext(th, &c);
     if (a->slot == 0) { c.Dr0 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0x000F0003u) | 0x1; }   // L0, execute
-    else { c.Dr1 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0x00F0000Cu) | 0x4; }               // L1, execute
+    else if (a->slot == 1) { c.Dr1 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0x00F0000Cu) | 0x4; }   // L1, execute
+    else { c.Dr2 = (DWORD)(UINT_PTR)a->addr; c.Dr7 = (c.Dr7 & ~0x0F000030u) | 0x10; }                    // L2, execute
     BOOL ok = SetThreadContext(th, &c);
     ResumeThread(th); CloseHandle(th);
     Log("hwbp: DR%d=%p on thread %lu -> %d", a->slot, a->addr, a->tid, ok);
@@ -773,6 +775,141 @@ static void TickSpawnShift(const TickObjs& t) {
     if (h) CloseHandle(h);
 }
 
+// ---------------------------------------------------------------- coopdeath (B11, ini coopdeath, default on)
+// Single-player logic: a dead player ends the mission (the game object goes to state 'CampaignGameOver' through the
+// thunk ghidra 0x7eb060 and every screen shows MISSION FAILED). DR2 sits on that thunk; while another player is alive
+// the VEH returns from it without the state change, and the tick puts the dead player back into the spawn helper
+// (GameState 0) so the game spawns a new pawn for it (spawnshift places a guest next to the others).
+// TnPawn script variables (offsets from the UProperty objects: Offset = word +0x30 >> 20; checked against Pawn 0x1d0,
+// PlayerReplicationInfo 0x1d4, Location 0xe4): +0x5d0 bit 0x80000 _IsDowned, bit 0x20000 _DrainHealthWhenDown,
+// +0x84c float DownedHealth (default 400), +0x850 float DownedHealthDrainRate (default 40: 10 s to bleed out).
+static bool PawnDowned(BYTE* p) { return p && (*(unsigned*)(p + 0x5d0) & 0x80000) != 0; }
+// dead = no pawn, a dying pawn or the controller in state Dead (a downed pawn is not dead: it can be revived)
+static bool PawnDead(BYTE* pc) {
+    BYTE* p = PawnOf(pc);
+    if (!p) return true;
+    char s[64]; StateName(p, s, sizeof(s)); if (!strcmp(s, "Dying")) return true;
+    StateName(pc, s, sizeof(s)); return !strcmp(s, "Dead");
+}
+static bool PawnAlive(BYTE* pc) {
+    BYTE* p = PawnOf(pc);
+    if (!p || PawnDowned(p)) return false;
+    char s[64]; StateName(p, s, sizeof(s)); if (!strcmp(s, "Dying")) return false;
+    StateName(pc, s, sizeof(s)); if (!strcmp(s, "Dead")) return false;
+    return true;
+}
+// Called by the VEH on the game thread when the game wants the game-over state. true = skip it.
+static bool CoopDeathSkip(BYTE* obj) {
+    int alive = 0, down = 0, n = g_to.npc;
+    char line[600]; size_t k = 0;
+    char on[96] = ""; ObjLabel(obj, on, sizeof(on));
+    k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, "coopdeath: game over requested on %s;", on);
+    for (int a = 0; a < n && a < 16; a++) {
+        BYTE* pc = g_to.pc[a];
+        if (!IsObjFast(pc)) continue;
+        bool al = PawnAlive(pc); if (al) alive++; else down++;
+        char st[64]; StateName(pc, st, sizeof(st));
+        k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " pc%d %s %s%s", a, IsLocalPC(pc) ? "local" : "remote", st, al ? " alive" : " down");
+    }
+    // only a death ends the mission here: with everybody alive it is a scripted failure (objective lost) and stays
+    bool skip = g_coopDeath && n >= 2 && alive >= 1 && down >= 1;
+    if (g_to.ngame == 0 && n >= 1) {   // client: its own UI decides on its own pawn's death; the other players' pawns
+        BYTE* own = nullptr;           // are the unpossessed player pawns it sees
+        for (int a = 0; a < n; a++) if (IsObjFast(g_to.pc[a]) && IsLocalPC(g_to.pc[a])) own = PawnOf(g_to.pc[a]);
+        int others = 0;
+        for (int i = 0; i < g_to.npawn; i++) {
+            BYTE* p = g_to.pawn[i];
+            if (p == own || !IsObjFast(p)) continue;
+            char ps[64]; StateName(p, ps, sizeof(ps));
+            if (strcmp(ps, "Dying") != 0) others++;
+        }
+        k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " client: other live player pawns %d", others);
+        skip = g_coopDeath && others >= 1 && down >= 1;
+    }
+    if (skip) InterlockedIncrement(&g_cdSkipped);
+    Log("%s -> %s", line, skip ? "SKIPPED (a player is alive)" : "allowed");
+    return skip;
+}
+static void TickCoopDeath(const TickObjs& t) {
+    if (!g_coopDeath || t.npc < 1 || (t.ngame >= 1 && t.npc < 2)) return;
+    static bool armed = false;
+    if (!armed) {
+        armed = true;
+        g_cdAddr = (BYTE*)GetModuleHandleW(nullptr) + (0x7eb060 - 0x400000);
+        static HwbpArgs args; args.tid = GetCurrentThreadId(); args.addr = g_cdAddr; args.slot = 2;
+        HANDLE h = CreateThread(nullptr, 0, SetHwbpThread, &args, 0, nullptr);
+        if (h) CloseHandle(h);
+        Log("coopdeath: watching the game-over thunk (%s)", t.ngame ? "host" : "client");
+    }
+    if (t.ngame < 1) return;   // respawning is the host's job
+    // respawn: a controller without a pawn whose spawn helper entry still says "in game" (3) for 4 s goes back to 0
+    static BYTE* deadPc[16]; static DWORD deadSince[16];
+    DWORD now = GetTickCount();
+    if (g_shGameOff < 0 || g_shPlayersOff < 0) return;
+    BYTE* helper = *(BYTE**)(t.game[0] + g_shGameOff);
+    if (!InList(helper, t.helper, t.nhelper)) return;
+    TArr* arr = PlayersArrayAt(helper, g_shPlayersOff, t);
+    if (!arr) return;
+    bool anyAlive = false; for (int a = 0; a < t.npc; a++) if (PawnAlive(t.pc[a])) anyAlive = true;   // up, not downed
+    for (int i = 0; i < arr->Num; i++) {
+        BYTE* e = (BYTE*)arr->Data + i * 8; BYTE* pc = *(BYTE**)e;
+        int slot = -1; for (int j = 0; j < 16; j++) if (deadPc[j] == pc) slot = j;
+        if (!IsObjFast(pc) || !PawnDead(pc) || e[4] != 3 || !anyAlive) { if (slot >= 0) deadPc[slot] = nullptr; continue; }
+        if (slot < 0) { for (int j = 0; j < 16 && slot < 0; j++) if (!deadPc[j]) { slot = j; deadPc[j] = pc; deadSince[j] = now; } continue; }
+        if (now - deadSince[slot] < 4000) continue;
+        char pn[96]; ObjLabel(pc, pn, sizeof(pn));
+        char st[64]; StateName(pc, st, sizeof(st));
+        BYTE* raw = *(BYTE**)(pc + 0x1d0);
+        char rn[96] = "-"; if (IsObjFast(raw)) ObjLabel(raw, rn, sizeof(rn));
+        Log("coopdeath: %s (%s, state %s, Pawn field %p %s) dead for 4 s -> Pawn field cleared, spawn helper state 0 (respawn)",
+            pn, IsLocalPC(pc) ? "local" : "remote", st, raw, rn);
+        // native RestartPlayer only spawns when Controller.Pawn (+0x1d0) is null; a dead pawn can stay referenced there
+        *(BYTE**)(pc + 0x1d0) = nullptr;
+        e[4] = 0; deadPc[slot] = nullptr;
+        if (!g_rpAddr) {   // diagnosis: is native RestartPlayer reached for the respawn? (DR0, logged by the VEH)
+            g_rpAddr = (BYTE*)GetModuleHandleW(nullptr) + (0x8a35b0 - 0x400000);   // TrySpawnPlayer (calls RestartPlayer)
+            static HwbpArgs ra; ra.tid = GetCurrentThreadId(); ra.addr = g_rpAddr; ra.slot = 0;
+            HANDLE h = CreateThread(nullptr, 0, SetHwbpThread, &ra, 0, nullptr);
+            if (h) CloseHandle(h);
+        }
+        InterlockedIncrement(&g_cdRespawns);
+    }
+}
+
+// ---------------------------------------------------------------- downed (B11, ini downedsec, default 0 = forever)
+// A downed player stays down until a teammate revives it: DownedHealth (how far below zero the health may go before
+// death) is raised to 1e9, so neither the bleed-out drain nor enemy fire kills it; self-destruct (2.1e9 damage) still
+// does. downedsec > 0 sets the drain so that bleeding out takes that many seconds. Revive heals by -Health +
+// RevivalHealth, so a deep negative health does not matter. Applied to every player pawn on host and guest (HUD bar).
+static void TickDowned(const TickObjs& t) {
+    if (!g_coopDeath || t.npc < 1 || (t.ngame >= 1 && t.npc < 2)) return;
+    const float big = 1.0e9f, rate = g_downedSec > 0 ? big / (float)g_downedSec : 0.0f;
+    // host: everybody down (downed or dead) for 5 s -> nobody can revive; let them bleed out within a second so the game
+    // shows its normal MISSION FAILED / restart-from-checkpoint menu
+    static DWORD allDownSince = 0; static bool allDown = false;
+    if (t.ngame >= 1) {
+        int up = 0, downed = 0;
+        for (int a = 0; a < t.npc; a++) { if (PawnAlive(t.pc[a])) up++; else if (PawnDowned(PawnOf(t.pc[a]))) downed++; }
+        if (up > 0 || downed == 0) { allDownSince = 0; allDown = false; }
+        else if (!allDownSince) allDownSince = GetTickCount();
+        else if (!allDown && GetTickCount() - allDownSince > 5000) { allDown = true; Log("downed: every player is down -> bleeding out (mission failed, restart from checkpoint)"); }
+    }
+    if (allDown) {
+        for (int a = 0; a < t.npc; a++) { BYTE* p = PawnOf(t.pc[a]); if (PawnDowned(p) && Rd(p + 0x84c, 8)) { *(float*)(p + 0x84c) = 400.0f; *(float*)(p + 0x850) = 400.0f; } }
+        return;
+    }
+    for (int i = 0; i < t.npawn; i++) {
+        BYTE* p = t.pawn[i];
+        if (!Rd(p + 0x84c, 8)) continue;
+        float* dh = (float*)(p + 0x84c); float* dr = (float*)(p + 0x850);
+        if (*dh == big && *dr == rate) continue;
+        if (*dh != big && (*dh < 1.0f || *dh > 100000.0f)) continue;   // not the expected layout: leave it alone
+        static volatile LONG n = 0;
+        if (InterlockedIncrement(&n) <= 8) { char pn[96]; ObjLabel(p, pn, sizeof(pn)); Log("downed: %s DownedHealth %.0f -> %.0f, drain %.1f -> %.1f/s", pn, *dh, big, *dr, rate); }
+        *dh = big; *dr = rate;
+    }
+}
+
 // ---------------------------------------------------------------- chardiag (one-time): host vs guest PRI around
 // _SelectedCharacter (+0x34c) when a guest waits in spawn state 0 (no character chosen, chapter 8b)
 static void TickCharDiag(const TickObjs& t) {
@@ -795,6 +932,7 @@ static void TickCharDiag(const TickObjs& t) {
 }
 
 // ---------------------------------------------------------------- the tick
+static void TickSync(const TickObjs& t);   // sync.inc
 static void GameTick() {
     TArr* go = GObj();
     if (go->Num < 1000 || !go->Data) return;
@@ -818,6 +956,9 @@ static void GameTick() {
     TickSpecFix(t);
     TickStartFix(t);
     TickSpawnShift(t);
+    TickCoopDeath(t);
+    TickDowned(t);
+    TickSync(t);
     TickCharDiag(t);
     DWORD now = GetTickCount();
     static DWORD lastDiag = 0, lastStat = 0, lastPawns = 0, lastState = 0;

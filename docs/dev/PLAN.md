@@ -4,6 +4,14 @@
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
 ## Next step (where to resume)
+**Owner priority 2026-10-19: chapter 6 (L06_Megatron) host and guest identical, then the same fix for every chapter.**
+Order: UI → cutscene sync → camera in scripted scenes → streaming triggers → deaths. Full list: B12-B16 in BUGS.md.
+- Root cause of most of it: Kismet runs only on the host; objectives, chapter title, markers, matinee and streaming are
+  host-local. Plan: a **sync channel** between the two DLLs (host → guest events: objective, chapter, markers by actor
+  name, cutscene start/stop, teleports, "wait for the guest"), applied on the guest by memory writes (the objective
+  manager shows a new objective when `DeferredAddObjective` is set, no script call needed).
+- Deaths (B11): downed players never bleed out (`downedsec`, done); still to do: revive test both ways, automatic
+  checkpoint restart when everybody is down (now the MISSION FAILED menu), guest respawn after a real death (KillZ).
 0. Real Steam test with a friend (owner): both need the mod with `Binaries\foc_relay` (real steam_api.dll); host F10 -> Host
    (Through Steam), friend F10 -> Join -> "Join a friend through Steam".
 **Before every DLL commit run the "must pass" set in [TESTS.md](TESTS.md).**
@@ -12,7 +20,14 @@ Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.c
 2. Injected input via window messages (stage 6) so movement tests need no focus.
 3. Stage 3: ProcessEvent looks unusable (script mostly native, see NOTES); go for native calls found in Ghidra.
 
-## Owner request 2026-10-19: Nexus mods in the installer + settings menu
+## Owner request 2026-10-19: Nexus mods in the installer + settings menu (go given 2026-10-19, archives in Downloads)
+- Done (not yet tested in game): installer page "Extra mods" (`installer/Mods.cs`) finds the archives in Downloads,
+  extracts them with Windows tar.exe, backs up replaced files to `<game>\foc_backup\`; uninstall restores them.
+  Audio logs (TransGame.xxx), FMV remaster (Movies\*.bik), intro skip (after FMV), Advanced Configurator (its
+  dinput8.dll becomes `Binaries\TFOCAdvancedConfigurator.dll`, chain-loaded by our dinput8.dll).
+- Texture pack (Authentic HQ, mod 62) is a UPK Explorer texture pack: needs **TFC Installer** (nexusmods.com/site/mods/587,
+  owner has to download it). Not wired yet.
+- Next: install all into A and B, play chapter 6 with both, check F1 (configurator) + F10 menus and FPS cap vs network.
 - Mods: nexusmods.com/transformersfallofcybertron/mods/17, /12, /9, /120, /62. Texture mods and audio-log mods: always
   installed; intro skip: a choice in the installer; other mods: decide per mod. All of them tested together with co-op
   (online, host + guest, matrix + playbot).

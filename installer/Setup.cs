@@ -1,7 +1,9 @@
 // foc-coop installer: Next -> Next -> game folder (found automatically) -> Install.
 // Puts dinput8.dll and foc_relay\ (FoCRelay.exe + steam_api.dll) into <game>\Binaries. The files are embedded as
 // resources (build_installer.bat). An existing foreign dinput8.dll is kept as dinput8.dll.foccoop-backup.
-// Command line for tests: FoCCoopSetup.exe /install "<game folder>" /silent   or   /uninstall "<game folder>" /silent
+// Command line for tests: FoCCoopSetup.exe /install "<game folder>" /silent [/mods audiologs,fmv,nointro,configurator]
+//   [/modsdir <folder with the mod archives>]   or   /uninstall "<game folder>" /silent
+// Optional Nexus mods (Mods.cs) are installed from archives the player downloaded.
 // Compiled with the .NET Framework csc.exe that ships with Windows (C# 5 syntax only).
 using System;
 using System.Collections.Generic;
@@ -20,16 +22,23 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
-        string mode = null, path = null; bool silent = false;
+        string mode = null, path = null, mods = "", modsDir = null; bool silent = false;
         for (int i = 0; i < args.Length; i++)
         {
             string a = args[i].ToLowerInvariant();
             if ((a == "/install" || a == "/uninstall") && i + 1 < args.Length) { mode = a.Substring(1); path = args[++i]; }
             else if (a == "/silent") silent = true;
+            else if (a == "/mods" && i + 1 < args.Length) mods = args[++i];
+            else if (a == "/modsdir" && i + 1 < args.Length) modsDir = args[++i];
         }
         if (mode != null && silent)
         {
             string msg; bool ok = mode == "install" ? Installer.Install(path, out msg) : Installer.Uninstall(path, out msg);
+            if (ok && mode == "install" && mods.Length > 0)
+            {
+                try { Mods.Find(modsDir); Mods.Install(Installer.GameOf(path), new List<string>(mods.Split(',')), l => Console.WriteLine(l)); msg += Environment.NewLine + "mods: " + mods; }
+                catch (Exception e) { msg += Environment.NewLine + "mods failed: " + e.Message; ok = false; }
+            }
             Console.WriteLine(msg);
             return ok ? 0 : 1;
         }
@@ -103,6 +112,8 @@ static class Installer
         return null;
     }
 
+    public static string GameOf(string path) { string b = BinariesOf(path); return b == null ? null : Path.GetDirectoryName(b); }
+
     public static string Sha256(string file)
     {
         using (var s = File.OpenRead(file)) using (var h = SHA256.Create())
@@ -166,6 +177,7 @@ static class Installer
             if (File.Exists(backup) && !File.Exists(dll)) File.Move(backup, dll);
             string relay = Path.Combine(bin, "foc_relay");
             if (Directory.Exists(relay)) Directory.Delete(relay, true);
+            Mods.Uninstall(Path.GetDirectoryName(bin));
             msg = T.S("The mod was removed from ", "Мод удалён из ") + bin;
             return true;
         }
@@ -176,13 +188,16 @@ static class Installer
 
 class Wizard : Form
 {
+    // pages: 0 welcome, 1 before you install, 2 game folder, 3 mods, 4 done
     int page;
     readonly Label title = new Label(), body = new Label();
-    readonly Button back = new Button(), next = new Button(), cancel = new Button(), browse = new Button();
+    readonly Button back = new Button(), next = new Button(), cancel = new Button(), browse = new Button(), modBrowse = new Button();
     readonly ComboBox pathBox = new ComboBox();
     readonly CheckBox uninstall = new CheckBox();
-    readonly Label pathInfo = new Label();
-    bool done;
+    readonly Label pathInfo = new Label(), modInfo = new Label();
+    readonly CheckedListBox modList = new CheckedListBox();
+    string modDir;
+    bool busy;
 
     public Wizard(string mode, string path)
     {
@@ -197,29 +212,43 @@ class Wizard : Form
         browse.Text = T.S("Browse...", "Обзор..."); browse.SetBounds(502, 199, 94, 28); Controls.Add(browse);
         pathInfo.SetBounds(24, 234, 572, 60); pathInfo.AutoSize = false; Controls.Add(pathInfo);
         uninstall.Text = T.S("Remove the mod from this folder instead", "Вместо установки удалить мод из этой папки"); uninstall.SetBounds(24, 296, 572, 24); Controls.Add(uninstall);
-        pathBox.BringToFront(); browse.BringToFront(); pathInfo.BringToFront(); uninstall.BringToFront();
+        modList.SetBounds(24, 150, 572, 112); modList.CheckOnClick = true; modList.IntegralHeight = false; Controls.Add(modList);
+        modInfo.SetBounds(24, 268, 470, 76); modInfo.AutoSize = false; Controls.Add(modInfo);
+        modBrowse.Text = T.S("Folder...", "Папка..."); modBrowse.SetBounds(502, 268, 94, 28); Controls.Add(modBrowse);
+        pathBox.BringToFront(); browse.BringToFront(); pathInfo.BringToFront(); uninstall.BringToFront(); modList.BringToFront(); modInfo.BringToFront(); modBrowse.BringToFront();
         back.Text = T.S("< Back", "< Назад"); back.SetBounds(300, 352, 94, 30); Controls.Add(back);
         next.SetBounds(400, 352, 94, 30); Controls.Add(next);
         cancel.Text = T.S("Cancel", "Отмена"); cancel.SetBounds(502, 352, 94, 30); Controls.Add(cancel);
-        back.Click += (s, e) => { if (page > 0) Show(page - 1); };
+        back.Click += (s, e) => { if (page > 0 && !busy) Show(page - 1); };
         next.Click += (s, e) => Next();
-        cancel.Click += (s, e) => Close();
+        cancel.Click += (s, e) => { if (!busy) Close(); };
         browse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { d.Description = T.S("Fall of Cybertron folder", "Папка Fall of Cybertron"); if (d.ShowDialog(this) == DialogResult.OK) { pathBox.Text = d.SelectedPath; CheckPath(); } } };
+        modBrowse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { d.Description = T.S("Folder with the downloaded mod archives", "Папка со скачанными архивами модов"); if (d.ShowDialog(this) == DialogResult.OK) { modDir = d.SelectedPath; FillMods(); } } };
         pathBox.TextChanged += (s, e) => CheckPath();
+        uninstall.CheckedChanged += (s, e) => { if (page == 2) next.Text = NextText(); };
         foreach (var g in Installer.FindGame()) pathBox.Items.Add(g);
         if (!string.IsNullOrEmpty(path)) pathBox.Text = path; else if (pathBox.Items.Count > 0) pathBox.SelectedIndex = 0;
         if (mode == "uninstall") uninstall.Checked = true;
         Show(mode != null ? 2 : 0);
     }
 
+    string NextText()
+    {
+        if (page == 2) return uninstall.Checked ? T.S("Remove", "Удалить") : T.S("Next >", "Далее >");
+        if (page == 3) return T.S("Install", "Установить");
+        if (page == 4) return T.S("Finish", "Готово");
+        return T.S("Next >", "Далее >");
+    }
+
     void Show(int p)
     {
         page = p;
-        bool pathPage = p == 2;
-        pathBox.Visible = browse.Visible = pathInfo.Visible = uninstall.Visible = pathPage;
-        back.Enabled = p > 0 && p < 3;
-        next.Text = p == 2 ? (uninstall.Checked ? T.S("Remove", "Удалить") : T.S("Install", "Установить")) : p == 3 ? T.S("Finish", "Готово") : T.S("Next >", "Далее >");
-        cancel.Visible = p < 3;
+        pathBox.Visible = browse.Visible = pathInfo.Visible = uninstall.Visible = p == 2;
+        modList.Visible = modInfo.Visible = modBrowse.Visible = p == 3;
+        back.Enabled = p > 0 && p < 4;
+        next.Enabled = true;
+        next.Text = NextText();
+        cancel.Visible = p < 4;
         if (p == 0)
         {
             title.Text = T.S("Fall of Cybertron Co-op", "Кооператив для Fall of Cybertron");
@@ -229,19 +258,50 @@ class Wizard : Form
         else if (p == 1)
         {
             title.Text = T.S("Before you install", "Перед установкой");
-            body.Text = T.S("• Every player needs their own copy of the game and this mod.\n• Steam must be running: friends join you through Steam, no IP addresses or port forwarding.\n• Host: F10 → Host a game. Friend: F10 → Join a game → Join a friend through Steam.\n• The mod adds dinput8.dll and the foc_relay folder to the game's Binaries folder; nothing else is changed.",
-                            "• Каждому игроку нужна своя копия игры и этот мод.\n• Steam должен быть запущен: друзья подключаются через Steam, без IP-адресов и проброса портов.\n• Хост: F10 → Host a game. Друг: F10 → Join a game → Join a friend through Steam.\n• Мод добавляет dinput8.dll и папку foc_relay в папку Binaries игры, больше ничего не меняется.");
+            body.Text = T.S("• Every player needs their own copy of the game and this mod.\n• Steam must be running: friends join you through Steam, no IP addresses or port forwarding.\n• Host: F10 → Host a game. Friend: F10 → Join a game → Join a friend through Steam.\n• The mod adds dinput8.dll and the foc_relay folder to the game's Binaries folder. Optional mods (next pages) back up every file they replace.",
+                            "• Каждому игроку нужна своя копия игры и этот мод.\n• Steam должен быть запущен: друзья подключаются через Steam, без IP-адресов и проброса портов.\n• Хост: F10 → Host a game. Друг: F10 → Join a game → Join a friend through Steam.\n• Мод добавляет dinput8.dll и папку foc_relay в папку Binaries игры. Дополнительные моды (дальше) сохраняют копии всех файлов, которые заменяют.");
         }
         else if (p == 2)
         {
             title.Text = T.S("Game folder", "Папка с игрой");
-            body.Text = pathBox.Items.Count > 0 ? T.S("The game was found automatically. Check the folder and press Install.", "Игра найдена автоматически. Проверьте папку и нажмите «Установить».")
+            body.Text = pathBox.Items.Count > 0 ? T.S("The game was found automatically. Check the folder and press Next.", "Игра найдена автоматически. Проверьте папку и нажмите «Далее».")
                                                 : T.S("The game was not found automatically. Choose the Fall of Cybertron folder.", "Игру не удалось найти автоматически. Укажите папку Fall of Cybertron.");
             CheckPath();
         }
-        uninstall.CheckedChanged -= OnUninstallChanged; uninstall.CheckedChanged += OnUninstallChanged;
+        else if (p == 3)
+        {
+            title.Text = T.S("Extra mods (optional)", "Дополнительные моды (по желанию)");
+            body.Text = T.S("Mods from Nexus Mods that work with co-op. Download them from Nexus yourself; the installer finds the archives in Downloads. All players should pick the same mods.",
+                            "Моды с Nexus Mods, проверенные с кооперативом. Скачайте их с Nexus сами — установщик найдёт архивы в «Загрузках». Всем игрокам лучше выбрать одинаковые моды.");
+            FillMods();
+        }
     }
-    void OnUninstallChanged(object s, EventArgs e) { if (page == 2) next.Text = uninstall.Checked ? T.S("Remove", "Удалить") : T.S("Install", "Установить"); }
+
+    void FillMods()
+    {
+        Mods.Find(modDir);
+        string game = Installer.GameOf(pathBox.Text);
+        var have = game != null ? Mods.Installed(game) : new List<string>();
+        modList.Items.Clear();
+        int found = 0;
+        foreach (var m in Mods.All)
+        {
+            string name = T.S(m.Name, m.NameRu);
+            string state = m.Archive != null ? Path.GetFileName(m.Archive) : T.S("archive not found", "архив не найден");
+            if (have.Contains(m.Id)) state = T.S("installed; ", "уже установлен; ") + state;
+            int i = modList.Items.Add(name + "  —  " + state);
+            if (m.Archive != null) { found++; modList.SetItemChecked(i, m.Default || have.Contains(m.Id)); }
+        }
+        modInfo.Text = T.S("Searched: ", "Поиск в: ") + string.Join("; ", Mods.SearchDirs(modDir).ToArray()) +
+                       (found == 0 ? T.S("\nNo mod archives found: you can skip this page.", "\nАрхивы модов не найдены — эту страницу можно пропустить.") : "");
+    }
+
+    List<string> CheckedMods()
+    {
+        var ids = new List<string>();
+        for (int i = 0; i < Mods.All.Length && i < modList.Items.Count; i++) if (modList.GetItemChecked(i) && Mods.All[i].Archive != null) ids.Add(Mods.All[i].Id);
+        return ids;
+    }
 
     void CheckPath()
     {
@@ -259,28 +319,59 @@ class Wizard : Form
 
     void Next()
     {
+        if (busy) return;
         if (page < 2) { Show(page + 1); return; }
-        if (page == 3) { Close(); return; }
-        string msg;
-        bool ok = uninstall.Checked ? Installer.Uninstall(pathBox.Text, out msg) : Installer.Install(pathBox.Text, out msg);
+        if (page == 4) { Close(); return; }
+        if (page == 2 && !uninstall.Checked) { Show(3); return; }
+        bool removing = page == 2;
+        var ids = removing ? new List<string>() : CheckedMods();
+        string folder = pathBox.Text;
+        busy = true; next.Enabled = back.Enabled = false; cancel.Visible = false;
+        modList.Visible = modInfo.Visible = modBrowse.Visible = false;
+        pathBox.Visible = browse.Visible = pathInfo.Visible = uninstall.Visible = false;
+        title.Text = removing ? T.S("Removing...", "Удаление...") : T.S("Installing...", "Установка...");
+        body.Text = "";
+        var th = new System.Threading.Thread(() => {
+            string msg; bool ok;
+            try
+            {
+                ok = removing ? Installer.Uninstall(folder, out msg) : Installer.Install(folder, out msg);
+                if (ok && ids.Count > 0)
+                {
+                    try { Mods.Install(Installer.GameOf(folder), ids, l => BeginInvoke(new Action(() => body.Text = l))); msg += T.S("\nMods: ", "\nМоды: ") + string.Join(", ", ids.ToArray()); }
+                    catch (UnauthorizedAccessException) { ok = false; msg = "ACCESS"; }
+                    catch (Exception e) { ok = false; msg = e.Message; }
+                }
+            }
+            catch (Exception e) { ok = false; msg = e.Message; }
+            BeginInvoke(new Action(() => Finish(ok, msg, removing, ids, folder)));
+        });
+        th.IsBackground = true; th.Start();
+    }
+
+    void Finish(bool ok, string msg, bool removing, List<string> ids, string folder)
+    {
+        busy = false;
         if (!ok && msg == "ACCESS")
         {   // e.g. Program Files: run again elevated
             try
             {
-                var psi = new ProcessStartInfo(Application.ExecutablePath, (uninstall.Checked ? "/uninstall" : "/install") + " \"" + pathBox.Text + "\" /silent") { Verb = "runas", UseShellExecute = true };
+                string args = (removing ? "/uninstall" : "/install") + " \"" + folder + "\" /silent";
+                if (ids.Count > 0) args += " /mods " + string.Join(",", ids.ToArray()) + (modDir != null ? " /modsdir \"" + modDir + "\"" : "");
+                var psi = new ProcessStartInfo(Application.ExecutablePath, args) { Verb = "runas", UseShellExecute = true };
+                body.Text = T.S("Waiting for administrator rights...", "Ожидание прав администратора...");
                 var p = Process.Start(psi); p.WaitForExit();
                 ok = p.ExitCode == 0;
-                msg = ok ? (uninstall.Checked ? T.S("The mod was removed.", "Мод удалён.") : T.S("Installed into ", "Установлено в ") + Installer.BinariesOf(pathBox.Text))
+                msg = ok ? (removing ? T.S("The mod was removed.", "Мод удалён.") : T.S("Installed into ", "Установлено в ") + Installer.BinariesOf(folder))
                          : T.S("Installing with administrator rights failed.", "Установка с правами администратора не удалась.");
             }
             catch { msg = T.S("Administrator rights are needed for this folder.", "Для этой папки нужны права администратора."); }
         }
-        if (!ok) { MessageBox.Show(this, msg, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-        done = true;
-        Show(3);
+        if (!ok) { MessageBox.Show(this, msg, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); Show(removing ? 2 : 3); return; }
+        Show(4);
         title.Text = T.S("Done", "Готово");
-        body.Text = msg + (uninstall.Checked ? "" : T.S("\n\nStart the game from Steam and press F10.", "\n\nЗапустите игру из Steam и нажмите F10."));
+        body.Text = msg + (removing ? "" : T.S("\n\nStart the game from Steam and press F10.", "\n\nЗапустите игру из Steam и нажмите F10."));
     }
 
-    protected override void OnFormClosing(FormClosingEventArgs e) { base.OnFormClosing(e); }
+    protected override void OnFormClosing(FormClosingEventArgs e) { if (busy) e.Cancel = true; base.OnFormClosing(e); }
 }

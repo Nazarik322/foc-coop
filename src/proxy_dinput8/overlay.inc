@@ -83,8 +83,135 @@ static void CrashTest() {
     Log("crashtest: done (dump requested: %s)", g_crashTest ? "not written" : "written");
 }
 
+// `dump <Class> <file> [bytes]` (foc_cmd.txt, game thread): raw bytes of every live instance of a class, for diffing
+// an object before and after an event. Per object: "OBJ <name> <address>" and hex words, 8 per line.
+static void DumpClass(const char* args) {
+    char cls[80] = "", file[MAX_PATH] = ""; int size = 0x800;
+    if (sscanf_s(args, "%79s %259s %i", cls, (unsigned)sizeof(cls), file, (unsigned)sizeof(file), &size) < 2) { Log("dump: usage dump <Class> <file> [bytes]"); return; }
+    unsigned cid = ClassIdByName(cls);
+    if (!cid) { Log("dump: no class %s", cls); return; }
+    FILE* f = nullptr; fopen_s(&f, file, "w");
+    if (!f) { Log("dump: cannot write %s", file); return; }
+    TArr* go = (TArr*)((BYTE*)GetModuleHandleW(nullptr) + kGObjRva);
+    int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i];
+        if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid || !Rd(o, size)) continue;
+        char nm[80] = ""; unsigned num = 0; ObjNameStr(o, nm, sizeof(nm), &num);
+        fprintf(f, "OBJ %s_%u %p\n", nm, num, o);
+        for (int w = 0; w < size / 4; w++) fprintf(f, "%08x%s", ((unsigned*)o)[w], (w % 8 == 7) ? "\n" : " ");
+        n++;
+    }
+    fclose(f);
+    Log("dump: %d object(s) of %s -> %s", n, cls, file);
+}
+
+// `fall <local|remote>` / `tp <local|remote> <x> <y> <z>` (foc_cmd.txt, host, game thread): test deaths and teleports.
+// `fall` drops the pawn far below the level so the game kills it (KillZ), like a fall into a pit.
+static void MovePawnCommand(const char* args, bool fall) {
+    char who[16] = ""; float p[3] = {0, 0, 0};
+    int got = sscanf_s(args, "%15s %f %f %f", who, (unsigned)sizeof(who), &p[0], &p[1], &p[2]);
+    if (got < 1 || (!fall && got < 4)) { Log("tp/fall: bad arguments '%s'", args); return; }
+    bool local = !strcmp(who, "local");
+    for (int a = 0; a < g_to.npc; a++) {
+        BYTE* pc = g_to.pc[a];
+        if (!IsObjFast(pc) || IsLocalPC(pc) != local) continue;
+        BYTE* pawn = PawnOf(pc);
+        if (!pawn) { Log("tp/fall: %s player has no pawn", who); continue; }
+        float* loc = LocOf(pawn);
+        float n[3] = {loc[0], loc[1], loc[2] - 1000000.0f};
+        if (!fall) memcpy(n, p, sizeof(n));
+        Log("%s: %s pawn (%.0f,%.0f,%.0f) -> (%.0f,%.0f,%.0f)", fall ? "fall" : "tp", who, loc[0], loc[1], loc[2], n[0], n[1], n[2]);
+        memcpy(loc, n, 12); memcpy(pawn + 0x134, n, 12);
+    }
+}
+
+// `props <name> [name...]` (foc_cmd.txt, game thread): log every object with one of these names (UProperty objects
+// of script variables) with its class and first 0x60 bytes, to find UProperty::Offset and the variables' offsets.
+static void PropsCommand(const char* args) {
+    char want[8][64]; int nw = 0;
+    for (const char* p = args; *p && nw < 8;) {
+        while (*p == ' ') p++;
+        int k = 0; while (*p && *p != ' ' && k < 63) want[nw][k++] = *p++;
+        want[nw][k] = 0; if (k) nw++;
+    }
+    TArr* go = (TArr*)((BYTE*)GetModuleHandleW(nullptr) + kGObjRva);
+    int found = 0;
+    for (int i = 0; i < go->Num && found < 200; i++) {
+        BYTE* o = (BYTE*)go->Data[i];
+        if (!o || !Rd(o, 0x60)) continue;
+        char nm[80]; unsigned num = 0;
+        if (!ObjNameStr(o, nm, sizeof(nm), &num) || num != 0) continue;
+        bool hit = false; for (int w = 0; w < nw; w++) if (!strcmp(nm, want[w])) hit = true;
+        if (!hit) continue;
+        char cn[80] = "?"; ClassNameOf(o, cn, sizeof(cn));
+        if (!strstr(cn, "Property")) continue;
+        char line[700]; size_t k = _snprintf_s(line, _TRUNCATE, "props: %s %s %p:", nm, cn, o);
+        for (int w = 0; w < 0x60 / 4; w++) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %x", ((unsigned*)o)[w]);
+        Log("%s", line); found++;
+    }
+    Log("props: %d object(s)", found);
+}
+
+// `hp <local|remote> <value>` (foc_cmd.txt, host): set a player pawn's Health (TnPawn float +0x350; HealthMax +0x354)
+static void HpCommand(const char* args) {
+    char who[16] = ""; float v = 0;
+    if (sscanf_s(args, "%15s %f", who, (unsigned)sizeof(who), &v) < 2) { Log("hp: bad arguments '%s'", args); return; }
+    bool local = !strcmp(who, "local");
+    for (int a = 0; a < g_to.npc; a++) {
+        BYTE* pc = g_to.pc[a];
+        if (!IsObjFast(pc) || IsLocalPC(pc) != local) continue;
+        BYTE* pawn = PawnOf(pc);
+        if (!pawn) { Log("hp: %s player has no pawn", who); continue; }
+        float* h = (float*)(pawn + 0x350);
+        Log("hp: %s pawn health %.0f/%.0f -> %.0f", who, h[0], h[1], v);
+        h[0] = v;
+    }
+}
+
+// `lpexec <console command>` (foc_cmd.txt, game thread): run a console command through the local player
+// (ULocalPlayer::Exec, the FExec subobject of TnLocalPlayer: the first word after the object header that points at a
+// vtable whose first slot is code). Unlike the engine Exec this reaches the controller's, the pawn's and the cheat
+// manager's exec functions.
+static void LpExecCommand(const char* cmd) {
+    if (g_to.nlp < 1) { Log("lpexec: no local player"); return; }
+    BYTE* lp = g_to.lp[0];
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    BYTE* end = base + nt->OptionalHeader.SizeOfImage;
+    int want = -1; const char* sp = strstr(cmd, "@"); if (sp) { want = strtol(sp + 1, nullptr, 16); }   // "cmd @off" picks the subobject
+    for (int off = 0; off < 0x100; off += 4) {   // candidates, for the log
+        BYTE* vt = *(BYTE**)(lp + off);
+        if (vt < base || vt >= end || !Rd(vt, 16)) continue;
+        Log("lpexec: candidate +0x%x vtable ghidra %lx slots %lx %lx %lx %lx", off, (unsigned long)(0x400000 + (vt - base)),
+            (unsigned long)(0x400000 + (((BYTE**)vt)[0] - base)), (unsigned long)(0x400000 + (((BYTE**)vt)[1] - base)), (unsigned long)(0x400000 + (((BYTE**)vt)[2] - base)), (unsigned long)(0x400000 + (((BYTE**)vt)[3] - base)));
+    }
+    if (want < 0) { Log("lpexec: add @<offset> to choose the subobject"); return; }
+    char c2[400]; strncpy_s(c2, cmd, _TRUNCATE); char* at = strstr(c2, " @"); if (at) *at = 0; cmd = c2;
+    for (int off = want; off == want; off += 4) {
+        BYTE* vt = *(BYTE**)(lp + off);
+        if (vt < base || vt >= end || !Rd(vt, 4)) continue;
+        BYTE* fn = *(BYTE**)vt;
+        if (fn < base + 0x1000 || fn >= base + 0x1000 + 0xf5fc71) continue;
+        wchar_t w[512]; MultiByteToWideChar(CP_ACP, 0, cmd, -1, w, 512);
+        Log("lpexec: '%s' via TnLocalPlayer %p +0x%x fn ghidra %lx", cmd, lp, off, (unsigned long)(0x400000 + (fn - base)));
+        BOOL r = FALSE;
+        __try { r = CallExecSafe(fn, lp + off, w, g_outDev); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("lpexec: exception %08lx", GetExceptionCode()); return; }
+        Log("lpexec: returned %d", (int)r);
+        return;
+    }
+    Log("lpexec: no FExec subobject found");
+}
+
 static void RunCommandNow(const std::string& cmd) {
+    if (cmd.rfind("lpexec ", 0) == 0) { LpExecCommand(cmd.c_str() + 7); return; }
+    if (cmd.rfind("hp ", 0) == 0) { HpCommand(cmd.c_str() + 3); return; }
+    if (cmd.rfind("tpmarker", 0) == 0) { TpMarkerCommand(cmd.size() > 9 ? cmd.c_str() + 9 : ""); return; }
+    if (cmd.rfind("props ", 0) == 0) { PropsCommand(cmd.c_str() + 6); return; }
     if (cmd == "crashtest") { CrashTest(); return; }
+    if (cmd.rfind("dump ", 0) == 0) { DumpClass(cmd.c_str() + 5); return; }
+    if (cmd.rfind("fall ", 0) == 0) { MovePawnCommand(cmd.c_str() + 5, true); return; }
+    if (cmd.rfind("tp ", 0) == 0) { MovePawnCommand(cmd.c_str() + 3, false); return; }
     if (!g_exec && !FindExec()) { Log("menu: cannot run '%s': %s", cmd.c_str(), g_execStatus); return; }
     wchar_t w[512]; MultiByteToWideChar(CP_ACP, 0, cmd.c_str(), -1, w, 512);
     Log("menu: exec '%s'", cmd.c_str());
@@ -655,6 +782,11 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
         if (g_hosting) _snprintf_s(t, _TRUNCATE, "co-op: hosting %s - %s   [F10 menu]", g_hostModeName, g_hostTitle);
         else strcpy_s(t, "Co-op menu: F10");
         ImGui::GetForegroundDrawList()->AddText(ImVec2(10, io.DisplaySize.y - 24 * (io.DisplaySize.y > 900 ? 1.5f : 1.f)), IM_COL32(255, 255, 255, 170), t);
+    }
+    if (g_waitingGuest > 0 && !g_menuOpen) {   // sync.inc: the host's story map is paused until a friend has loaded it
+        char t[160]; _snprintf_s(t, _TRUNCATE, "Waiting for your friend to load the level... (%ld s)", g_waitingGuest);
+        ImVec2 sz = ImGui::CalcTextSize(t);
+        ImGui::GetForegroundDrawList()->AddText(ImVec2((io.DisplaySize.x - sz.x) / 2, io.DisplaySize.y * 0.45f), IM_COL32(255, 255, 255, 230), t);
     }
     ImGui::EndFrame();
     ImGui::Render();

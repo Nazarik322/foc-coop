@@ -1,4 +1,4 @@
-// dinput8.dll proxy for Transformers: Fall of Cybertron (32-bit, UE3 / High Moon).
+﻿// dinput8.dll proxy for Transformers: Fall of Cybertron (32-bit, UE3 / High Moon).
 // Phase 1 goal: see what the game does (log file next to the exe) and let several copies run on one PC.
 //
 // What it does:
@@ -69,6 +69,11 @@ static bool g_startFix = false;   // superseded by spawnshift
 static bool g_spawnShiftFlag = true;   // B1: shift the guest pawn spawn location away from the host (gametick.inc + VEH)
 static BYTE* volatile g_ssAddr = nullptr; static BYTE* volatile g_ssClass = nullptr; static volatile LONG g_ssActive = 0, g_ssCount = 0;   // B1: move a blocked start spot so the guest spawn does not collide (gametick.inc)   // B1: clear the guest PRI spectator bit so Possess works (gametick.inc)   // B1 experiment (gametick.inc)   // B1: call stacks of player-pawn allocations (gametick.inc)
 static BYTE* volatile g_hwbpAddr = nullptr; static BYTE* volatile g_hwbpClass = nullptr; static volatile LONG g_hwbpHits = 0;   // locate ProcessEvent through a PlayerTick thunk (gametick.inc)   // B1 experiment (gametick.inc)   // B10: guest camera follows its own pawn (gametick.inc)
+static bool g_coopDeath = true;   // B11: no MISSION FAILED while a player is alive; respawn the dead one (gametick.inc + VEH)
+static int g_downedSec = 0;   // B11: seconds a downed player can wait for a revive (0 = forever)
+static BYTE* volatile g_cdAddr = nullptr; static volatile LONG g_cdSkipped = 0, g_cdRespawns = 0;
+static bool CoopDeathSkip(BYTE* obj);   // gametick.inc
+static BYTE* volatile g_rpAddr = nullptr; static volatile LONG g_rpHits = 0;   // B11 diagnosis: RestartPlayer calls
 static char g_instClass[64] = "";
 
 static void Log(const char* fmt, ...) {
@@ -193,8 +198,13 @@ static void hexdump(const char* p, int n, char* out, size_t outsz) {
     out[o] = 0;
 }
 
+static int g_waitGuestSec = 300;   // host pauses a freshly loaded story map until a guest joins (sync.inc), ini waitguest
+static bool g_syncOn = true;   // co-op sync channel host -> guest (sync.inc), ini sync
+static void SyncNoteOut(SOCKET s);
+static bool SyncFilterIn(const char* buf, int len, const sockaddr* from);
 static int WSAAPI h_sendto(SOCKET s, const char* buf, int len, int flags, const sockaddr* to, int tolen) {
     int r = o_sendto(s, buf, len, flags, to, tolen);
+    SyncNoteOut(s);
     if (g_traceLen && len == g_traceLen) { static volatile LONG nTr = 0; if (InterlockedIncrement(&nTr) <= 3) LogCallers("sendto len match"); }
     if (InterlockedIncrement(&g_netLines) < 4000) {
         char hx[200];
@@ -212,7 +222,12 @@ static int WSAAPI h_sendto(SOCKET s, const char* buf, int len, int flags, const 
 }
 
 static int WSAAPI h_recvfrom(SOCKET s, char* buf, int len, int flags, sockaddr* from, int* fromlen) {
+    int fl0 = fromlen ? *fromlen : 0;
     int r = o_recvfrom(s, buf, len, flags, from, fromlen);
+    for (int k = 0; r > 0 && k < 16 && SyncFilterIn(buf, r, from); k++) {   // our sync snapshots never reach the game
+        if (fromlen) *fromlen = fl0;
+        r = o_recvfrom(s, buf, len, flags, from, fromlen);
+    }
     InterlockedIncrement(&g_recvfromCalls);
     if (r < 0) {
         int e = WSAGetLastError();
@@ -1639,6 +1654,29 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         c->EFlags |= 0x10000;
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    // coopdeath (B11): DR2 on the game-over thunk ghidra 0x7eb060 (`this` = object + 0x10, plain `ret`). Return from it
+    // without the state change while another player is alive.
+    if (code == EXCEPTION_SINGLE_STEP && g_cdAddr && (BYTE*)ep->ExceptionRecord->ExceptionAddress == g_cdAddr) {
+        CONTEXT* c = ep->ContextRecord; DWORD* sp = (DWORD*)c->Esp;
+        bool skip = false;
+        __try { skip = CoopDeathSkip((BYTE*)(UINT_PTR)(c->Ecx - 0x10)); } __except (EXCEPTION_EXECUTE_HANDLER) { skip = false; }
+        if (skip) { c->Eip = sp[0]; c->Esp += 4; }
+        else c->EFlags |= 0x10000;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (code == EXCEPTION_SINGLE_STEP && g_rpAddr && (BYTE*)ep->ExceptionRecord->ExceptionAddress == g_rpAddr) {
+        CONTEXT* c = ep->ContextRecord; DWORD* sp = (DWORD*)c->Esp;
+        LONG n = InterlockedIncrement(&g_rpHits);
+        if (n <= 20) {
+            char g[96] = "?", pc[96] = "?";
+            ObjAt(c->Ecx, g, sizeof(g)); ObjAt(sp[1] >= 0x10 ? sp[1] - 0x10 : 0, pc, sizeof(pc));
+            BYTE* pco = (BYTE*)(UINT_PTR)(sp[1] - 0x10);
+            Log("rptrace: TrySpawnPlayer #%ld game=%s pc=%s pawnfield=%p ret=%lx", n, g, pc, Rd(pco + 0x1d0, 4) ? *(void**)(pco + 0x1d0) : nullptr,
+                (unsigned long)(0x400000 + (sp[0] - (DWORD)(UINT_PTR)GetModuleHandleW(nullptr))));
+        }
+        c->EFlags |= 0x10000;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     // spawntrace: hardware breakpoint on the object allocator; log who allocates objects of the player pawn class
     if (code == EXCEPTION_SINGLE_STEP && g_hwbpAddr && (BYTE*)ep->ExceptionRecord->ExceptionAddress == g_hwbpAddr) {
         CONTEXT* c = ep->ContextRecord; DWORD* sp = (DWORD*)c->Esp;
@@ -1843,6 +1881,10 @@ static void LoadConfig(const wchar_t* dir) {
         g_specFix = GetPrivateProfileIntW(L"foc_coop", L"specfix", 0, ini2) != 0;
         g_startFix = GetPrivateProfileIntW(L"foc_coop", L"startfix", 0, ini2) != 0;
         g_spawnShiftFlag = GetPrivateProfileIntW(L"foc_coop", L"spawnshift", 1, ini2) != 0;
+        g_coopDeath = GetPrivateProfileIntW(L"foc_coop", L"coopdeath", 1, ini2) != 0;
+        g_syncOn = GetPrivateProfileIntW(L"foc_coop", L"sync", 1, ini2) != 0;
+        g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
+        g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);
         if (g_tickMs < 20) g_tickMs = 20;
         if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
             g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;
@@ -1853,6 +1895,7 @@ static void LoadConfig(const wchar_t* dir) {
 }
 
 #include "gametick.inc"
+#include "sync.inc"
 #include "overlay.inc"
 
 // ---------------------------------------------------------------- proxy export
@@ -1872,24 +1915,30 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         DisableThreadLibraryCalls(inst);
         g_self = inst;
         InitializeCriticalSection(&g_cs);
+        SyncInit();
         g_t0 = GetTickCount();
         wchar_t sys[MAX_PATH];
         GetSystemDirectoryW(sys, MAX_PATH);
         wcscat_s(sys, L"\\dinput8.dll");
-        g_real = LoadLibraryW(sys);
-
         wchar_t exe[MAX_PATH];
         GetModuleFileNameW(nullptr, exe, MAX_PATH);
         wchar_t* slash = wcsrchr(exe, L'\\');
         if (slash) *slash = 0;
+        // Chain load: another dinput8 proxy mod (TFOC Advanced Configurator, renamed by the installer) is loaded in
+        // place of the system dll; its DirectInput8Create forwards to the system one.
+        wchar_t chain[MAX_PATH]; _snwprintf_s(chain, _TRUNCATE, L"%s\\TFOCAdvancedConfigurator.dll", exe);
+        HMODULE chained = GetFileAttributesW(chain) != INVALID_FILE_ATTRIBUTES ? LoadLibraryW(chain) : nullptr;
+        g_real = chained && GetProcAddress(chained, "DirectInput8Create") ? chained : LoadLibraryW(sys);
         LoadConfig(exe);
         wchar_t logp[MAX_PATH];
         _snwprintf_s(logp, _TRUNCATE, L"%s\\foc_coop.log", exe);
         g_log = _wfsopen(logp, L"w", _SH_DENYNO);
         Log("foc_coop proxy attached, pid=%lu, instance suffix='%s', real dinput8=%p", GetCurrentProcessId(), g_suffix, g_real);
         Log("cmdline: %ls", GetCommandLineW());
+        if (chained) Log("chain: TFOCAdvancedConfigurator.dll loaded at %p (%s)", chained, g_real == chained ? "DirectInput goes through it" : "no DirectInput8Create, using the system dll");
         AddVectoredExceptionHandler(1, VehHandler);
         InstallHooks();
+        SyncInstallBink();
         OverlayStart();
     }
     return TRUE;

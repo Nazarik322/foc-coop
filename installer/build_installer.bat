@@ -13,5 +13,5 @@ if not exist "%ROOT%\dist" mkdir "%ROOT%\dist"
   /resource:"%ROOT%\build\dinput8.dll",dinput8.dll ^
   /resource:"%ROOT%\relay\build\FoCRelay.exe",FoCRelay.exe ^
   /resource:"%STEAMAPI%",steam_api.dll ^
-  "%~dp0Setup.cs"
+  "%~dp0Setup.cs" "%~dp0Mods.cs"
 exit /b %ERRORLEVEL%

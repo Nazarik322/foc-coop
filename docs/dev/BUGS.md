@@ -44,6 +44,56 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 
 ### B6. Guest starts "downed" in chapter 1 — workaround (rescue teleport)
 
+### B11. One player dies -> MISSION FAILED for both — partly fixed 2026-10-19 (`coopdeath`, `downedsec`)
+- Found by the play bot in chapter 6: the host was downed, bled out (10 s) and both screens showed MISSION FAILED.
+- Cause: single-player logic. On a death the game object (the host's `TnUIControllerCampaign`, and on the guest its own
+  UI controller) goes to state `CampaignGameOver` through the thunk ghidra `0x7eb060` (GotoState 'CampaignGameOver').
+- Fix `coopdeath` (default on): DR2 on that thunk on host and guest; while another player is up the VEH returns
+  without the state change. Everybody down -> the game over goes through (MISSION FAILED, restart from checkpoint).
+- Fix `downedsec` (default 0 = forever): a downed player never bleeds out and enemies cannot finish it (TnPawn
+  DownedHealth 400 -> 1e9); it waits for a revive (or gets up by killing an enemy, game rule). With everybody down for
+  5 s the mod lets them bleed out so the game shows MISSION FAILED.
+- Verified (chapter 6, `tools/deathtest.ps1`, `tools/downtest.ps1`): no game over on host and guest when one dies;
+  downed host survived 45 s; both down -> MISSION FAILED on both with "Restart From Last Checkpoint".
+- Open: (a) a really dead guest (fall into a pit, KillZ) gets no new pawn: its spawn helper entry goes back to state 2
+  but native TrySpawnPlayer (ghidra 0x8a35b0) is never called for it (the host's own respawn works); (b) owner wants an
+  automatic checkpoint restart when everybody is down (now the menu); (c) revive test both ways (owner's order:
+  down host -> guest revives, down guest -> host revives, both down -> restart).
+- Also seen: the guest shows difficulty EASY while the host plays NORMAL (difficulty is per client).
+
+### B12. Objectives, markers and the chapter title only on the host — mostly fixed 2026-10-19 (`sync`)
+- Kismet runs only on the host; `SeqAct_TnSetCurrentObjective` and `SeqAct_TnObjectiveMarker` write the host's own
+  TnObjectiveManager, nothing is replicated (`GRI.ActiveObjectives` is not replicated either).
+- Fix: sync channel (`sync.inc`): the host sends the objective index and the marker list 4x per second inside the game's
+  UDP connection; the guest writes them into its own objective manager. Verified in chapter 6: NEW OBJECTIVE panel and
+  the objective marker on both screens.
+- Open: chapter title ("CHAPTER 10 THE FINAL COUNTDOWN") is a direct Flash call on the host's HUD; markers on
+  replicated actors (pawns) are not mirrored (names differ per side).
+
+### B13. Intro starts on the host before the guest has loaded — fixed 2026-10-19 (`waitguest`, chapter 6)
+- The host keeps a freshly loaded story map paused (`WorldInfo.Pauser`) until a guest is in the map, reports ready and
+  no intro movie (Bink, `TransGame\Movies`) plays on either side; max `waitguest` seconds (default 300). The host sees
+  "Waiting for your friend to load the level...".
+- Open: movies that play during loading still run separately on each side (they are local), only the level start is
+  synchronised.
+
+### B14. Scripted scenes: the guest sees the host's cutscene from its own position — open
+- Owner wants: guest camera switched to the main character or the cutscene played for both, then both placed next to
+  each other without collision pushing them apart.
+
+### B15. Streaming trigger: one player reaches a marker, the other's area unloads and he falls — open
+- Owner wants: teleport the other player next to him, or keep the area loaded and hold the first player (input lock or
+  invisible wall) until the other one reaches the marker.
+- Note: writing Actor.Location (+0xe4/+0x134) does not move a standing pawn (physics puts it back); a real teleport
+  needs a native move (FarMoveActor / SetLocation) or a console command through the local player.
+
+### B16. Chapter title shown to only one player — open (see B12)
+- Owner 2026-10-19: "Chapter ..." at the start shows in the UI of only one player (which one: check).
+
+### B17. Intro animation: one player has no character animation — open (owner report 2026-10-19)
+- The intro now plays on host and guest at the same time, but on one of them (probably the host) the player
+  character's animation is missing. Check with screenshots of both at the level start.
+
 ### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 
 ## Minor

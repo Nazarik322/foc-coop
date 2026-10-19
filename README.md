@@ -9,6 +9,11 @@ Unofficial, early development. English | [Русский](README.ru.md)
 2. Next → Next → the game folder is found automatically (or press Browse) → **Install**.
 
 That's it. To remove the mod, run the installer again and tick "Remove the mod".
+
+**Extra mods (optional).** The installer can also put in these Nexus mods if you downloaded them (it finds the archives
+in your Downloads folder): High Quality Audio Logs, FMV Remaster, No-Intro Splash Fix, TFOC Advanced Configurator (F1
+menu; runs together with the co-op mod). Replaced game files are backed up and restored on removal. All players should
+pick the same mods.
 Works with the Steam version of the game (build 12831). Every player needs their own copy.
 
 ## Play with friends
@@ -26,11 +31,18 @@ or by IP.
 - Escalation for 2 players on all 4 maps.
 - Story chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9: both players spawn, each with their own camera and HUD.
 - Joining through Steam (tested on one PC; a test with two real Steam accounts is still to come).
+- Story: the host waits until the friend has loaded the level, then it starts for both; the current objective and the
+  objective marker show on both screens (tested in chapter 6).
+- A downed player stays down until the other one revives them; one player dying no longer ends the mission. Only when
+  everybody is down: MISSION FAILED, restart from the checkpoint.
 
 ## Known problems
 
 - 3–5 players are not tested yet.
 - Cutscenes and scripted events are only partly in sync; the guest can see dark silhouettes in cutscenes.
+- If the friend really dies (e.g. falls into a pit), they do not come back until a checkpoint restart.
+- Reaching some markers loads the next area only around that player: stay together.
+- The chapter title only shows on the host.
 - Hosting or joining restarts the game once (about 20–30 s).
 
 Bugs and progress: [docs/dev](docs/dev/README.md).
