@@ -86,7 +86,12 @@ __declspec(dllexport) int API SteamAPI_InitFlat(char* err) {
     WSADATA wd; WSAStartup(MAKEWORD(2, 2), &wd);
     g_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = htons(PortOf(g_me));
-    if (bind(g_sock, (struct sockaddr*)&a, sizeof(a))) { if (err) strcpy(err, "mock: message port busy"); return 1; }
+    if (bind(g_sock, (struct sockaddr*)&a, sizeof(a))) {
+        /* a second process of the same "user" (the lobby browser next to a session relay; real Steam allows it):
+           any port; it can send but receives no messages, which the lobby browser does not need */
+        a.sin_port = 0;
+        if (bind(g_sock, (struct sockaddr*)&a, sizeof(a))) { if (err) strcpy(err, "mock: message port busy"); return 1; }
+    }
     u_long nb = 1; ioctlsocket(g_sock, FIONBIO, &nb);
     WriteUser(0);
     g_init = 1; if (err) err[0] = 0;

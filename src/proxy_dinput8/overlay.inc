@@ -318,9 +318,14 @@ static HHOOK g_msgHook = nullptr;
 static const UINT kTickMsg = WM_APP + 0x4F1;   // posted by TickThread; runs GameTickSafe() on the game thread
 static volatile LONG g_tickPosted = 0;
 static volatile DWORD g_tickPostedAt = 0;
+static volatile LONG g_menuOpen = 0;
 static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0 && lp) {
         MSG* m = (MSG*)lp;
+        // F10 menu open: keyboard, mouse and raw input never reach the game (its own menus read window messages; the
+        // DirectInput hooks already return "nothing pressed"). Our menu reads keys with GetAsyncKeyState.
+        if (g_menuOpen && ((m->message >= WM_KEYFIRST && m->message <= WM_KEYLAST) || (m->message >= WM_MOUSEFIRST && m->message <= WM_MOUSELAST) || m->message == WM_INPUT))
+            m->message = WM_NULL;
         if (m->message == WM_APP + 0x4F0) {
             std::string c; EnterCriticalSection(&g_cmdCs); c.swap(g_cmdForGame); LeaveCriticalSection(&g_cmdCs);
             if (!c.empty()) RunCommandNow(c);
@@ -355,7 +360,6 @@ static void SubclassGameWindow(HWND w) {
 }
 
 // ---------------------------------------------------------------- menu state
-static volatile LONG g_menuOpen = 0;
 
 struct MapEntry { const char* title; const char* map; };
 static const char kEscalationOptions[] = "?GameModeTag=SV?GameTeamStatus=2?GameRules=TransGame.TnGameRules_CompetitiveScoring";
@@ -754,7 +758,9 @@ static void DrawMainPage() {
     if (g_relayState[0]) {
         ImGui::Text("Steam: %s", g_relayState);
         if (g_relayLobby) { ImGui::SameLine(); ImGui::TextDisabled("(lobby %llu, friends %d)", g_relayLobby, g_relayPeers); }
-        if (!strcmp(g_relayRole, "host") && ImGui::Button("Invite friends (Steam overlay)")) RelayCommand("invite");
+        // no Steam invite button: the invite dialog only opens for the process that owns the lobby (the relay, which has
+        // no window), so it only showed the overlay; friends find the game in their Join list instead
+        if (!strcmp(g_relayRole, "host")) ImGui::TextDisabled("Friends see your game in F10 > Join a game.");
     }
     if (ImGui::Button(g_fastTravel ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; if (g_fastTravel) QueueCommand("disconnect"); else RelaunchWithUrl(""); }
     if (ImGui::Button("Settings", bs)) g_page = 4;
@@ -864,6 +870,8 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
     ImGui_ImplDX9_NewFrame();
     ImGui::NewFrame();
     if (g_menuOpen) {
+        // dark backdrop over the whole game while the menu is open (the game gets no input then, see GetMsgProc)
+        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 150));
         DrawMenu(io);
         // software cursor
         ImGui::GetForegroundDrawList()->AddTriangleFilled(io.MousePos, ImVec2(io.MousePos.x + 14 * io.FontGlobalScale, io.MousePos.y + 10 * io.FontGlobalScale), ImVec2(io.MousePos.x + 5 * io.FontGlobalScale, io.MousePos.y + 17 * io.FontGlobalScale), IM_COL32(255, 255, 255, 255));

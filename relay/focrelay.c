@@ -410,7 +410,7 @@ int main(int argc, char** argv) {
         Dispatch(); if (!g_isList) { PumpSteam(); PumpLocal(); }
         DWORD now = GetTickCount();
         if (g_isList && now - g_listAsked > (g_listPending ? 15000u : 3000u)) RequestList();
-        if (!g_isHost && !g_inLobby && !strcmp(argv[2], "auto") && now - lastSearch > 2000) {
+        if (!g_isHost && !g_isList && !g_inLobby && !strcmp(argv[2], "auto") && now - lastSearch > 2000) {   /* list mode has no argv[2] */
             lastSearch = now; uint64_t l = FindHostingFriend(); if (l) { SetState("joining lobby"); SteamAPI_ISteamMatchmaking_JoinLobby(g_mm, l); }
         }
         if (now - lastKeep > 1000 && g_inLobby) {

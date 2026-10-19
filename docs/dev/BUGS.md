@@ -114,7 +114,13 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   new pickup when TnSurvivalGame.RespectsWeaponTypes). Not reproduced yet; check after the B18 fix. Note: ctrlshare
   gives the guest the host's TnUIControllerSurvival, ProfileSettings and online objects (PickupManager is not shared).
 
-### B20. Steam join was hard (restarts, friend did not see the lobby) — fix built 2026-10-19, not tested yet
+### B20. Steam join was hard (restarts, friend did not see the lobby) — fixed 2026-10-19 (v0.4.1)
+- v0.4.0 bug: `FoCRelay list` crashed on real Steam (strcmp on the missing argv[2] in the main loop; with the mock the
+  search result arrived before that line). Fixed; checked with the owner's real Steam account in a scratch folder:
+  the lobby list shows the hosted game. The Steam invite button only opened the overlay (the invite dialog belongs to
+  the process that owns the lobby, the windowless relay): removed.
+- F10 menu: the game gets no keyboard/mouse input while it is open (window messages swallowed in GetMsgProc, the
+  DirectInput hooks already returned nothing) and the screen behind it is darkened.
 - Lobbies were friends-only and the guest relay looked only for friends whose Steam "game played" was 480 with a
   lobby; the game itself showed as 213120 until v0.3.2.
 - Fix: host lobby public, tagged foccoop=1 with name/mode/map/max; `FoCRelay list` searches Steam (string filter,
