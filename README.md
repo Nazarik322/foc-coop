@@ -27,9 +27,17 @@ Supported game build: Steam, `TFOC.exe` SHA-256
 
 ## Install
 
-1. Copy the game folder (do not patch your Steam installation) or back up `Binaries\dinput8.dll` if one exists.
-2. Put `dinput8.dll` (from `launcher/payload/` or your own build) next to `TFOC.exe` in `Binaries`.
-3. Start `TFOC.exe`. With no `foc_coop.ini` present, the co-op defaults are used automatically.
+**Installer:** run `FoCCoopSetup.exe` → Next → Next → game folder (found automatically through your Steam libraries) →
+Install. It puts `dinput8.dll` and the `foc_relay` folder into the game's `Binaries` (a foreign `dinput8.dll` is kept as
+`dinput8.dll.foccoop-backup`), checks the `TFOC.exe` version and can remove the mod again (checkbox on the folder step).
+A folder under Program Files asks for administrator rights.
+
+**Playing with friends through Steam:** Steam running for everyone, you are Steam friends. Host: F10 → Host a game
+("Through Steam" is on) → pick a chapter → Start hosting. Friend: F10 → Join a game → **Join a friend through Steam**.
+No IP addresses or port forwarding (traffic goes over Steam's network as the Spacewar app, AppID 480).
+
+By hand: `dinput8.dll` into `Binaries`, `FoCRelay.exe` and `steam_api.dll` into `Binaries\foc_relay`.
+With no `foc_coop.ini` present, the co-op defaults are used.
 
 ## Using the in-game menu
 

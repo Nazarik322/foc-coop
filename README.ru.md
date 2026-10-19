@@ -27,9 +27,17 @@
 
 ## Установка
 
-1. Скопируйте папку с игрой (установку Steam не патчьте) или сохраните `Binaries\dinput8.dll`, если он есть.
-2. Положите `dinput8.dll` (из `launcher/payload/` или своей сборки) рядом с `TFOC.exe` в `Binaries`.
-3. Запустите `TFOC.exe`. Если файла `foc_coop.ini` нет, автоматически используются настройки для кооператива.
+**Установщик:** запустите `FoCCoopSetup.exe` → «Далее» → «Далее» → папка с игрой (находится автоматически по библиотекам
+Steam) → «Установить». Он кладёт `dinput8.dll` и папку `foc_relay` в `Binaries` игры (чужой `dinput8.dll` сохраняется
+как `dinput8.dll.foccoop-backup`), проверяет версию `TFOC.exe` и умеет удалять мод (галочка на шаге с папкой).
+Для папки в Program Files попросит права администратора.
+
+**Игра с друзьями через Steam:** Steam запущен у всех, вы друзья в Steam. Хост: F10 → Host a game (галочка
+«Through Steam» включена) → выбрать главу → Start hosting. Друг: F10 → Join a game → **Join a friend through Steam**.
+IP и проброс портов не нужны (трафик идёт через сеть Steam, приложение Spacewar 480).
+
+Вручную: положите `dinput8.dll` в `Binaries`, а `FoCRelay.exe` и `steam_api.dll` в `Binaries\foc_relay`.
+Если файла `foc_coop.ini` нет, используются настройки для кооператива.
 
 ## Меню в игре
 

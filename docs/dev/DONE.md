@@ -3,6 +3,16 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (evening): installer
+
+- **`installer/Setup.cs` -> `dist/FoCCoopSetup.exe`** (`installer/build_installer.bat` builds DLL, relay and embeds them
+  with the real steam_api.dll): wizard Welcome -> Before you install -> Game folder (found from the Steam registry path
+  and every library in libraryfolders.vdf) -> Install/Remove; Russian or English by Windows language; TFOC.exe hash
+  check; backup of a foreign dinput8.dll; self-elevates (UAC) when the folder needs admin rights.
+  Verified: detection finds `C:\Program Files (x86)\Steam\steamapps\common\Transformers Fall of Cybertron` (read only);
+  `/install E:\FoC-coop\A /silent` -> exit 0, all three files byte-identical to the build; `/uninstall` removes them;
+  wizard pages captured (window only). Not tested: the UAC path (needs a click).
+
 ## 2026-10-19 (evening): Steam (Spacewar 480) relay
 
 - **`relay/focrelay.c` -> `FoCRelay.exe`** (32-bit, flat Steam API loaded at run time, playbook HXCoop pattern):
