@@ -93,6 +93,8 @@ static PFN_SOCKET o_socket;
 static PFN_CLOSE o_close;
 static PFN_RECV o_recv;
 static PFN_SEND o_send;
+typedef int(WSAAPI* PFN_CONNECT)(SOCKET, const sockaddr*, int);
+static PFN_CONNECT o_connect;
 static LONG g_recvfromCalls = 0, g_recvfromErr = 0, g_recvfromOk = 0;
 
 static void trimEol(char* s) {
@@ -261,9 +263,14 @@ static void fmtAddr(const sockaddr* a, char* out, size_t n) {
     }
 }
 
+static volatile LONG g_captureBind = 0, g_hostBoundPort = 0;   // port the game really listens on once hosting started
 static int WSAAPI h_bind(SOCKET s, const sockaddr* a, int len) {
     int r = o_bind(s, a, len);
     int e = WSAGetLastError();
+    if (r == 0 && g_captureBind && a && a->sa_family == AF_INET) {
+        int port = ntohs(((const sockaddr_in*)a)->sin_port);
+        if (port >= 7777 && port <= 7800) g_hostBoundPort = port;
+    }
     char ad[64];
     fmtAddr(a, ad, sizeof(ad));
     Log("NET bind sock=%u %s ret=%d err=%d", (unsigned)s, ad, r, r ? e : 0);
@@ -291,6 +298,22 @@ static int WSAAPI h_recv(SOCKET s, char* buf, int len, int flags) {
         hexdump(buf, r < 16 ? r : 16, hx, sizeof(hx));
         Log("NET recv sock=%u len=%d %s", (unsigned)s, r, hx);
     }
+    return r;
+}
+
+static bool g_blockDw = true;   // Demonware (port 3074) is dead; failing its TCP connects at once keeps the online layer calm
+static int WSAAPI h_connect(SOCKET s, const sockaddr* a, int len) {
+    if (g_blockDw && a && a->sa_family == AF_INET && ntohs(((const sockaddr_in*)a)->sin_port) == 3074) {
+        char ad0[64]; fmtAddr(a, ad0, sizeof(ad0));
+        Log("NET connect sock=%u %s blocked (Demonware)", (unsigned)s, ad0);
+        WSASetLastError(WSAENETUNREACH);
+        return SOCKET_ERROR;
+    }
+    int r = o_connect(s, a, len);
+    int e = WSAGetLastError();
+    char ad[64]; fmtAddr(a, ad, sizeof(ad));
+    Log("NET connect sock=%u %s ret=%d err=%d", (unsigned)s, ad, r, r ? e : 0);
+    WSASetLastError(e);
     return r;
 }
 
@@ -1804,6 +1827,7 @@ static void InstallHooks() {
     int hc = PatchBoth("closesocket", (void**)&o_close, (void*)h_closesocket);
     int hr = PatchBoth("recv", (void**)&o_recv, (void*)h_recv);
     int hn = PatchBoth("send", (void**)&o_send, (void*)h_send);
+    PatchBoth("connect", (void**)&o_connect, (void*)h_connect);
     Log("IAT patched more: bind=%d socket=%d closesocket=%d recv=%d send=%d", hb, hs, hc, hr, hn);
     CreateThread(nullptr, 0, StatsThread, nullptr, 0, nullptr);
     if (g_tcpDriver) CreateThread(nullptr, 0, DelayedNetDriverPatch, nullptr, 0, nullptr);
@@ -1933,9 +1957,15 @@ static void LoadConfig(const wchar_t* dir) {
         g_snap1 = GetPrivateProfileIntW(L"foc_coop", L"snap1", 0, ini2);
         g_snap2 = GetPrivateProfileIntW(L"foc_coop", L"snap2", 0, ini2);
         g_charFixFlag = GetPrivateProfileIntW(L"foc_coop", L"charfix", 0, ini2) != 0;
+        if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
+            g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;
+            g_maxPlayers = 5;
+        }
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"instclass", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_instClass, sizeof(g_instClass), nullptr, nullptr); }
     }
 }
+
+#include "overlay.inc"
 
 // ---------------------------------------------------------------- proxy export
 typedef HRESULT(WINAPI* PFN_DI8Create)(HINSTANCE, DWORD, REFIID, LPVOID*, LPVOID);
@@ -1944,7 +1974,9 @@ extern "C" HRESULT WINAPI DirectInput8Create(HINSTANCE h, DWORD ver, REFIID riid
     static PFN_DI8Create real = nullptr;
     if (!real && g_real) real = (PFN_DI8Create)GetProcAddress(g_real, "DirectInput8Create");
     if (!real) return E_FAIL;
-    return real(h, ver, riid, out, unk);
+    HRESULT hr = real(h, ver, riid, out, unk);
+    if (SUCCEEDED(hr) && out && *out) HookDirectInput(*out);
+    return hr;
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
@@ -1969,6 +2001,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         Log("cmdline: %ls", GetCommandLineW());
         AddVectoredExceptionHandler(1, VehHandler);
         InstallHooks();
+        OverlayStart();
     }
     return TRUE;
 }
