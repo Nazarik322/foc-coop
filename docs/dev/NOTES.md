@@ -155,8 +155,21 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
 - Movies: BinkOpen/BinkClose (binkw32.dll imports `_BinkOpen@8`, `_BinkClose@4`) hooked in the IAT; a file from the
   Movies folder open = a movie plays.
 
+## Script calls (2026-10-20)
+- FName from a string: ghidra 0xcc13e0 (thiscall on a 4-byte packed FName: name, 0, 1). FindFunction: object vtable
+  +0xC8 (FName, 0) - finds nothing on the native-only TnCampaignGame; CallScript then takes the Function object from
+  GObjects. ProcessEvent: ghidra 0x728c60 (thiscall: Function, Parms, Result); UFunction +0x5e ParmsSize, +0x54 flags.
+- GotoState: ghidra 0x70df30 (thiscall: FName state, label 0, 0, 0). ScriptConsoleExec: 0xbf1f70.
+- Not callable (no Function object): GetNumPlayers, SetLocation, NotifyChapterChanged, RestartFromActiveCheckpoint
+  (native only), ClientTeleport. Callable: ClientSetLocation (moves the local pawn), TrySpawnPlayer (false for a dead
+  player), TestDowned/TestRevive, exec functions.
+- PlayerController: +0x360 bit 0x20000 bCinematicMode, +0x3b4 myHUD. PRI +0x1e0 PlayerName. TnSeqAct_SetChapter +0x8c
+  ChapterNumber. GameInfo +0x280 GameRulesModifiers, GameRules +0x1d0 NextGameRules.
+
 ## Test commands (foc_cmd.txt in Binaries, one line)
 `shot <file>`, `shotui <file>`, `menu <page>|off`, `dump <Class> <file> [bytes]`, `props <names>`, `fall local|remote`,
 `tp local|remote x y z` (only moves falling pawns; standing pawns are put back by physics), `hp local|remote <value>`,
-`tpmarker [dist]` (same limit), `lpexec <cmd> @<offset>` (experiment: local player FExec; candidates logged, not
-working yet), `crashtest`, `steamjoin`, any other text = engine console command.
+`tpmarker [dist]` (same limit), `lpexec <cmd> @<offset>` (experiment, use oexec), `oexec <target> <exec cmd>`,
+`call <target> <Function> [i: f: b: o:]`, `funcs <name parts>`, `gotostate <target> <State>`, `key <vk>`,
+`vtfind <target> <ghidra hex>`, `restartplayer` (crashes the host, do not use), `poke`, `crashtest`, `steamjoin`;
+targets: pc pawn rpc rpawn game pri rpri obj:Name_N. Any other text = engine console command.

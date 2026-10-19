@@ -317,6 +317,85 @@ static void TickWaitGuest(const TickObjs& t) {
     else g_waitingGuest = (LONG)(g_waitGuestSec - (GetTickCount() - since) / 1000);
 }
 
+// ---------------------------------------------------------------- calling script functions (game thread only)
+// Found through UObject::ScriptConsoleExec (ghidra 0xbf1f70): FName from a string = ghidra 0xcc13e0 (thiscall on the
+// 4-byte packed FName, args: name, 0, 1), FindFunction = object vtable +0xC8 (thiscall: FName, global=0),
+// ProcessEvent = ghidra 0x728c60 (thiscall: UFunction*, void* Parms, void* Result). UFunction +0x5e = ParmsSize.
+// The calls run with every register and the stack pointer saved around them (the conventions are taken from the
+// decompiler, not verified).
+static DWORD __declspec(noinline) CallThis3(void* fn, void* self, DWORD a1, DWORD a2, DWORD a3) {
+    DWORD r = 0, savedEsp = 0;
+    __asm {
+        pushad
+        mov savedEsp, esp
+        mov ecx, self
+        push a3
+        push a2
+        push a1
+        call fn
+        mov esp, savedEsp
+        mov r, eax
+        popad
+    }
+    return r;
+}
+static BYTE* FindScriptFunction(BYTE* obj, const char* name) {
+    if (!IsObjFast(obj)) return nullptr;
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    wchar_t w[96]; MultiByteToWideChar(CP_ACP, 0, name, -1, w, 96);
+    DWORD fname = 0;
+    DWORD ret = CallThis3(base + (0xcc13e0 - 0x400000), &fname, (DWORD)(UINT_PTR)w, 0, 1);
+    void* findFn = (*(void***)obj)[0xC8 / 4];
+    BYTE* f = fname ? (BYTE*)(UINT_PTR)CallThis3(findFn, obj, fname, 0, 0) : nullptr;
+    (void)ret;
+    if (!IsObjFast(f)) {
+        // FindFunction finds nothing on the native-only game class (TnCampaignGame): take the Function object with that
+        // name from GObjects (the one whose +0x28 word is not another Function, i.e. not a nested copy)
+        unsigned fid = ClassIdByName("Function"); TArr* go = GObj();
+        for (int i = 0; i < go->Num && !f; i++) {
+            BYTE* o = (BYTE*)go->Data[i];
+            if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != fid) continue;
+            char nm[96]; if (!ObjNameStr(o, nm, sizeof(nm)) || strcmp(nm, name)) continue;
+            BYTE* w28 = *(BYTE**)(o + 0x28);
+            if (IsObjFast(w28) && (*(unsigned*)(w28 + 0x14) & 0x1fff) == fid) continue;
+            f = o;
+        }
+        if (f) Log("call: %s taken from GObjects (FindFunction found nothing)", name);
+    }
+    return IsObjFast(f) ? f : nullptr;
+}
+// UObject::GotoState (ghidra 0x70df30, thiscall: FName State, FName Label, bForceEvents, bKeepStack); returns false
+// when the state name is unknown to the name table
+static bool GotoStateNamed(BYTE* obj, const char* state) {
+    if (!IsObjFast(obj)) return false;
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    wchar_t w[64]; MultiByteToWideChar(CP_ACP, 0, state, -1, w, 64);
+    DWORD fname = 0; CallThis3(base + (0xcc13e0 - 0x400000), &fname, (DWORD)(UINT_PTR)w, 0, 1);
+    if (!fname) return false;
+    __try { CallThis3(base + (0x70df30 - 0x400000), obj, fname, 0, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { Log("gotostate: raised %08lx", GetExceptionCode()); return false; }
+    return true;
+}
+// The campaign game's RestartPlayer (vtable +0x2b0 of TnCampaignGame) is an empty function (ghidra 0x803d20, ret 8),
+// so a dead player is never spawned again. The base GameInfo::RestartPlayer is ghidra 0x7c2ee0 (thiscall on the game,
+// arg: the controller's +0x10 subobject); it spawns only when Controller.Pawn is null.
+static bool NativeRestartPlayer(BYTE* game, BYTE* pc) {
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    __try { CallThis3(base + (0x7c2ee0 - 0x400000), game, (DWORD)(UINT_PTR)(pc + 0x10), 0, 0); return true; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { Log("restartplayer: raised %08lx", GetExceptionCode()); return false; }
+}
+// parms: buffer of at least the function's ParmsSize (zero-filled by the caller); returns false when not found
+static bool CallScript(BYTE* obj, const char* name, void* parms, int parmsCap) {
+    BYTE* f = FindScriptFunction(obj, name);
+    if (!f) { Log("call: %s not found on the object", name); return false; }
+    int size = *(unsigned short*)(f + 0x5e);
+    if (size > parmsCap) { Log("call: %s needs %d bytes of parameters", name, size); return false; }
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    __try { CallThis3(base + (0x728c60 - 0x400000), obj, (DWORD)(UINT_PTR)f, (DWORD)(UINT_PTR)parms, 0); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { Log("call: %s raised %08lx", name, GetExceptionCode()); return false; }
+    return true;
+}
+
 // ---------------------------------------------------------------- player names
 // Each game takes the player name from its own profile ("Default" when Demonware is offline), so both players could
 // show the same name. Once the local pawn exists, the local controller runs `SetName <name>` (PlayerController exec ->
@@ -364,9 +443,16 @@ static void SyncGetStr(const char* snap, const char* key, char* out, size_t n) {
     p += strlen(k); size_t i = 0; while (p[i] && p[i] != '\n' && i + 1 < n) { out[i] = p[i]; i++; } out[i] = 0;
 }
 
+static void PostKey(UINT vk);   // overlay.inc
 static void TickSync(const TickObjs& t) {
     TickWaitGuest(t);
     TickEscalationRules(t);
+    // B11: everybody is down and the host shows MISSION FAILED: its first item is "Restart From Last Checkpoint";
+    // press Enter for the host after 4 s (window message, no focus needed). Tested: the level restarts, the guest stays.
+    // A second Enter 1.5 s later confirms "Load Checkpoint - all unsaved progress will be lost" (Continue is selected).
+    static DWORD confirmAt = 0;
+    if (g_autoRestart && g_gameOverAt && GetTickCount() - g_gameOverAt > 4000) { g_gameOverAt = 0; PostKey(VK_RETURN); confirmAt = GetTickCount() + 1500; Log("autorestart: Enter on the game-over menu (restart from the last checkpoint)"); }
+    if (confirmAt && (LONG)(GetTickCount() - confirmAt) >= 0) { confirmAt = 0; PostKey(VK_RETURN); Log("autorestart: Enter on the Load Checkpoint confirmation"); }
     if (g_setNames) TickNames(t);
     if (!g_syncOn) return;
     static DWORD last = 0, lastLog = 0; DWORD now = GetTickCount();

@@ -74,6 +74,9 @@ static bool g_coopDeath = true;   // B11: no MISSION FAILED while a player is al
 static int g_downedSec = 0;   // B11: seconds a downed player can wait for a revive (0 = forever)
 static BYTE* volatile g_cdAddr = nullptr; static volatile LONG g_cdSkipped = 0, g_cdRespawns = 0;
 static bool CoopDeathSkip(BYTE* obj);   // gametick.inc
+static volatile DWORD g_gameOverAt = 0;
+static BYTE* volatile g_cdSkippedObj = nullptr; static volatile DWORD g_cdSkippedAt = 0;   // last skipped game over (host)   // host: when the story game over went through (sync.inc auto restart)
+static bool g_autoRestart = true;         // B11: Enter on the MISSION FAILED menu = restart from the last checkpoint, ini autorestart
 static BYTE* volatile g_rpAddr = nullptr; static volatile LONG g_rpHits = 0;   // B11 diagnosis: RestartPlayer calls
 static char g_instClass[64] = "";
 
@@ -1914,6 +1917,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_syncOn = GetPrivateProfileIntW(L"foc_coop", L"sync", 1, ini2) != 0;
         g_killRules = GetPrivateProfileIntW(L"foc_coop", L"killrules", 1, ini2) != 0;
         g_setNames = GetPrivateProfileIntW(L"foc_coop", L"setnames", 1, ini2) != 0;
+        g_autoRestart = GetPrivateProfileIntW(L"foc_coop", L"autorestart", 1, ini2) != 0;
         g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
         g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);
         if (g_tickMs < 20) g_tickMs = 20;

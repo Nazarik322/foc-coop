@@ -35,7 +35,7 @@ static class Mods
             Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/12?tab=files",
             Pattern = @"No.?Intro.*\.(zip|rar|7z)$",
             Target = f => f.EndsWith(".bik", StringComparison.OrdinalIgnoreCase) ? @"TransGame\Movies\" + Path.GetFileName(f) : null },
-        new ModDef { Id = "configurator", Name = "Advanced Configurator (F1 menu: FPS, FOV, graphics)", NameRu = "Advanced Configurator (меню F1: FPS, FOV, графика)", Default = false,
+        new ModDef { Id = "configurator", Name = "Advanced Configurator (F1 menu: FPS, FOV, graphics)", NameRu = "Advanced Configurator (меню F1: FPS, FOV, графика)", Default = true,
             Pattern = @"Advanced.?Configurator.*\.(zip|rar|7z)$",
             Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/120?tab=files",
             Note = "loaded by the co-op mod", NoteRu = "загружается кооп-модом",

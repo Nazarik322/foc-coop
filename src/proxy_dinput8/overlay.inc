@@ -246,7 +246,85 @@ static void PokeCommand(const char* args) {
     char on[96]; ObjLabel(obj, on, sizeof(on)); Log("poke: %s +0x%x %d -> %d", on, off, old, v);
 }
 
+// `call <target> <Function> [i:int f:float b:0|1 o:target ...]` (foc_cmd.txt, game thread): ProcessEvent on a script
+// function (sync.inc CallScript). Arguments are 4-byte slots in order (a vector = three f:); the parameter block
+// after the call is logged (return values and out parameters).
+static void CallCommand(const char* args) {
+    char target[96] = "", fn[96] = ""; int n = 0;
+    if (sscanf_s(args, "%95s %95s%n", target, (unsigned)sizeof(target), fn, (unsigned)sizeof(fn), &n) < 2) { Log("call: usage call <target> <Function> [args]"); return; }
+    BYTE* obj = OexecTarget(target);
+    if (!IsObjFast(obj)) { Log("call: no target '%s'", target); return; }
+    static BYTE parms[512]; memset(parms, 0, sizeof(parms)); int k = 0;
+    for (const char* p = args + n; *p && k < 120;) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        char tok[96]; int i = 0; while (p[i] && p[i] != ' ' && i < 95) { tok[i] = p[i]; i++; } tok[i] = 0; p += i;
+        DWORD v = 0;
+        if (!strncmp(tok, "f:", 2)) { float f = (float)atof(tok + 2); memcpy(&v, &f, 4); }
+        else if (!strncmp(tok, "o:", 2)) v = (DWORD)(UINT_PTR)OexecTarget(tok + 2);
+        else v = (DWORD)strtol(tok + 2, nullptr, 0);   // i: or b:
+        ((DWORD*)parms)[k++] = v;
+    }
+    char on[96]; ObjLabel(obj, on, sizeof(on));
+    bool ok = CallScript(obj, fn, parms, sizeof(parms));
+    char line[300]; size_t l = _snprintf_s(line, _TRUNCATE, "call: %s.%s -> %s; parms:", on, fn, ok ? "done" : "failed");
+    for (int i = 0; i < 12; i++) l += _snprintf_s(line + l, sizeof(line) - l, _TRUNCATE, " %08lx", ((DWORD*)parms)[i]);
+    Log("%s", line);
+}
+
+// `funcs <part> [part...]` (foc_cmd.txt): log the Function objects whose name contains one of the parts, with their
+// outer (class / state) and ParmsSize, to see what can be called
+static void FuncsCommand(const char* args) {
+    unsigned fid = ClassIdByName("Function");
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num && n < 150; i++) {
+        BYTE* o = (BYTE*)go->Data[i];
+        if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != fid) continue;
+        char nm[96]; if (!ObjNameStr(o, nm, sizeof(nm))) continue;
+        bool hit = false; char buf[200]; strncpy_s(buf, args, _TRUNCATE); char* ctx = nullptr;
+        for (char* t = strtok_s(buf, " ", &ctx); t; t = strtok_s(nullptr, " ", &ctx)) if (strstr(nm, t)) hit = true;
+        if (!hit) continue;
+        char outer[96] = "?"; BYTE* ou = *(BYTE**)(o + 0x28); if (IsObjFast(ou)) ObjNameStr(ou, outer, sizeof(outer));
+        Log("funcs: %s.%s parms=%u flags=%08lx", outer, nm, *(unsigned short*)(o + 0x5e), *(unsigned*)(o + 0x54)); n++;
+    }
+    Log("funcs: %d found", n);
+}
+
+// `key <vk>` (foc_cmd.txt): post a key press (WM_KEYDOWN + WM_KEYUP) to the game window; the game's own menus read
+// window messages, so this works without focus (e.g. 13 = Enter on the MISSION FAILED menu)
+static void PostKey(UINT vk) {
+    if (!g_gameWnd) return;
+    UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    PostMessageW(g_gameWnd, WM_KEYDOWN, vk, 1 | (sc << 16));
+    PostMessageW(g_gameWnd, WM_KEYUP, vk, 1 | (sc << 16) | (1u << 30) | (1u << 31));
+}
+
 static void RunCommandNow(const std::string& cmd) {
+    if (cmd.rfind("restartplayer ", 0) == 0) {   // `restartplayer <pc|rpc>`: base GameInfo::RestartPlayer (ghidra 0x7c2ee0) on the host
+        BYTE* pc = OexecTarget(cmd.c_str() + 14);
+        if (!pc || !g_to.ngame) { Log("restartplayer: no controller or not the host"); return; }
+        bool ok = NativeRestartPlayer(g_to.game[0], pc);
+        char pn[96]; ObjLabel(PawnOf(pc), pn, sizeof(pn)); Log("restartplayer: %s -> pawn %s", ok ? "called" : "raised", pn); return;
+    }
+    if (cmd.rfind("vtfind ", 0) == 0) {   // `vtfind <target> <ghidra hex>`: vtable of the object (ghidra VA) and the slots holding that address
+        char t[96] = ""; unsigned long want = 0; sscanf_s(cmd.c_str() + 7, "%95s %lx", t, (unsigned)sizeof(t), &want);
+        BYTE* o = OexecTarget(t); if (!o) { Log("vtfind: no target"); return; }
+        BYTE* base = (BYTE*)GetModuleHandleW(nullptr); BYTE** vt = *(BYTE***)o;
+        Log("vtfind: %s vtable ghidra %lx", t, (unsigned long)(0x400000 + ((BYTE*)vt - base)));
+        for (int i = 0; i < 400 && Rd(vt + i, 4); i++) if ((unsigned long)(0x400000 + (vt[i] - base)) == want) Log("vtfind: slot %d (+0x%x)", i, i * 4);
+        return;
+    }
+    if (cmd.rfind("gotostate ", 0) == 0) {
+        char t[96] = "", st[64] = ""; sscanf_s(cmd.c_str() + 10, "%95s %63s", t, (unsigned)sizeof(t), st, (unsigned)sizeof(st));
+        BYTE* o = OexecTarget(t); char s0[64] = "", s1[64] = "";
+        if (o) StateName(o, s0, sizeof(s0));
+        bool ok = GotoStateNamed(o, st);
+        if (o) StateName(o, s1, sizeof(s1));
+        Log("gotostate: %s %s -> %s (%s)", t, s0, s1, ok ? "called" : "failed"); return;
+    }
+    if (cmd.rfind("key ", 0) == 0) { PostKey((UINT)strtol(cmd.c_str() + 4, nullptr, 0)); Log("key: posted %s", cmd.c_str() + 4); return; }
+    if (cmd.rfind("funcs ", 0) == 0) { FuncsCommand(cmd.c_str() + 6); return; }
+    if (cmd.rfind("call ", 0) == 0) { CallCommand(cmd.c_str() + 5); return; }
     if (cmd.rfind("oexec ", 0) == 0) { OexecCommand(cmd.c_str() + 6); return; }
     if (cmd.rfind("poke ", 0) == 0) { PokeCommand(cmd.c_str() + 5); return; }
     if (cmd.rfind("lpexec ", 0) == 0) { LpExecCommand(cmd.c_str() + 7); return; }

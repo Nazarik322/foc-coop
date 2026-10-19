@@ -55,10 +55,15 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   5 s the mod lets them bleed out so the game shows MISSION FAILED.
 - Verified (chapter 6, `tools/deathtest.ps1`, `tools/downtest.ps1`): no game over on host and guest when one dies;
   downed host survived 45 s; both down -> MISSION FAILED on both with "Restart From Last Checkpoint".
-- Open: (a) a really dead guest (fall into a pit, KillZ) gets no new pawn: its spawn helper entry goes back to state 2
-  but native TrySpawnPlayer (ghidra 0x8a35b0) is never called for it (the host's own respawn works); (b) owner wants an
-  automatic checkpoint restart when everybody is down (now the menu); (c) revive test both ways (owner's order:
-  down host -> guest revives, down guest -> host revives, both down -> restart).
+- Fixed 2026-10-20 (v0.5.0): (b) everybody down -> MISSION FAILED -> `autorestart` posts Enter (WM_KEYDOWN to the
+  game window, no focus needed) on "Restart From Last Checkpoint" and again 1.5 s later on the "Load Checkpoint"
+  confirmation; (a) a really dead player (fall/KillZ) cannot be spawned alone (the campaign game's RestartPlayer,
+  vtable +0x2b0, is an empty function, ghidra 0x803d20; the native base 0x7c2ee0 called directly crashed the host), so
+  15 s after the skipped game over the mod lets it through (GotoState 'CampaignGameOver' on the same UI controller) and
+  the same auto restart follows. After a checkpoint restart the host's spawn collided with the guest (48 pawns in one
+  place): `spawnshift` now covers the host too. Verified (chapter 6): both down -> restart, both up; guest falls ->
+  restart after ~24 s, both up.
+- Open: (c) revive test both ways by real play (commands: TestDowned / TestRevive work in Escalation).
 - Also seen: the guest shows difficulty EASY while the host plays NORMAL (difficulty is per client).
 
 ### B12. Objectives, markers and the chapter title only on the host — mostly fixed 2026-10-19 (`sync`)
@@ -81,13 +86,18 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Owner wants: guest camera switched to the main character or the cutscene played for both, then both placed next to
   each other without collision pushing them apart.
 
-### B15. Streaming trigger: one player reaches a marker, the other's area unloads and he falls — open
+### B15. Streaming trigger: one player reaches a marker, the other's area unloads and he falls — mitigated
+- The falling player is rescued next to the other (`rescue`) or, if he dies, the checkpoint restart (B11) brings both
+  back. A clean teleport: `call pc ClientSetLocation` moves the host's own pawn; nothing tried so far moves the guest's
+  pawn (ClientSetLocation on either side, ServerSetLocationAndRotation; ClientTeleport has no Function object).
 - Owner wants: teleport the other player next to him, or keep the area loaded and hold the first player (input lock or
   invisible wall) until the other one reaches the marker.
 - Note: writing Actor.Location (+0xe4/+0x134) does not move a standing pawn (physics puts it back); a real teleport
   needs a native move (FarMoveActor / SetLocation) or a console command through the local player.
 
 ### B16. Chapter title shown to only one player — open (see B12)
+- Note 2026-10-20: HUD.NotifyChapterChanged has no Function object in this build (cannot be called). Next idea: run the
+  level's TnSeqAct_SetChapter (ChapterNumber at +0x8c) on the guest with the guest's controller as target.
 - Owner 2026-10-19: "Chapter ..." at the start shows in the UI of only one player (which one: check).
 
 ### B17. Intro animation: one player has no character animation — open (owner report 2026-10-19)
@@ -149,6 +159,11 @@ elay.log; mod logs of the last 10 runs in Binariesoc_logs.
 - Owner's 41-minute Escalation session: npc=4 for 2 players at the end, two controllers shared one PRI
   (pridiag PC0 and PC2 -> the same PRI). Probably old controllers of a guest who reconnected. Check what the game does
   with them (scoreboard rows, spawn helper, sync peers).
+
+### B25. Guest has blurry / broken textures, host fine — explained 2026-10-20
+- The owner's game runs the Advanced Configurator (texture pool 1024 MB, TextureFix4K, AF 16x); the friend's did not
+  (game defaults from 2012). The installer now ticks the configurator by default (it was checked with co-op in ch6 and
+  Escalation). If the friend still sees broken textures with it, compare both ReShade/configurator settings.
 
 ### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 

@@ -783,7 +783,8 @@ static void TickStartFix(const TickObjs& t) {
 static void TickSpawnShift(const TickObjs& t) {
     if (!g_spawnShiftFlag || t.ngame < 1) return;
     bool stuck = false;
-    for (int a = 0; a < t.npc; a++) if (!IsLocalPC(t.pc[a]) && !PawnOf(t.pc[a]) && g_spawnState[a] == 2) stuck = true;
+    // any player, also the host: after a checkpoint restart the host's own spawn collides with the guest (2026-10-20)
+    for (int a = 0; a < t.npc; a++) if (!PawnOf(t.pc[a]) && g_spawnState[a] == 2) stuck = true;
     g_ssActive = stuck;
     static bool armed = false;
     if (!stuck || armed || t.npawn < 1) return;
@@ -850,12 +851,26 @@ static bool CoopDeathSkip(BYTE* obj) {
         k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " client: other live player pawns %d", others);
         skip = g_coopDeath && others >= 1 && down >= 1;
     }
-    if (skip) InterlockedIncrement(&g_cdSkipped);
+    if (skip) { InterlockedIncrement(&g_cdSkipped); if (g_to.ngame > 0) { g_cdSkippedObj = obj; g_cdSkippedAt = GetTickCount(); } }
+    else if (g_to.ngame > 0 && down >= 1) g_gameOverAt = GetTickCount();   // host: everybody down -> sync.inc restarts the checkpoint
     Log("%s -> %s", line, skip ? "SKIPPED (a player is alive)" : "allowed");
     return skip;
 }
+static bool GotoStateNamed(BYTE* obj, const char* state);   // sync.inc
 static void TickCoopDeath(const TickObjs& t) {
     if (!StoryMapNow(t)) return;
+    // a really dead player (fall, KillZ) cannot be spawned again in the story (the campaign RestartPlayer is empty):
+    // when still dead 15 s after the skipped game over, let the game over through (same object, same state) -> the
+    // MISSION FAILED menu -> autorestart presses Enter -> both restart at the last checkpoint (like single player)
+    if (g_cdSkippedObj && t.ngame > 0 && GetTickCount() - g_cdSkippedAt > 15000) {
+        bool anyDead = false; for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && PawnDead(t.pc[a])) anyDead = true;
+        BYTE* o = g_cdSkippedObj; g_cdSkippedObj = nullptr;
+        if (anyDead && IsObjFast(o)) {
+            bool ok = GotoStateNamed(o, "CampaignGameOver");
+            g_gameOverAt = GetTickCount();
+            char on[96]; ObjLabel(o, on, sizeof(on)); Log("coopdeath: a player is still dead after 15 s -> game over on %s (%s), checkpoint restart follows", on, ok ? "ok" : "failed");
+        }
+    }
     if (!g_coopDeath || t.npc < 1 || (t.ngame >= 1 && t.npc < 2)) return;
     static bool armed = false;
     if (!armed) {
