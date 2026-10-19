@@ -15,6 +15,8 @@ class ModDef
     public bool Default;
     public Func<string, string> Target;   // file inside the archive (relative) -> path under the game folder, or null = skip
     public string Archive;                // found archive, or null
+    public string Resource;               // bundled in the installer (zip resource name) instead of a downloaded archive
+    public bool KeepExisting(string rel) { return rel.EndsWith(".ini", StringComparison.OrdinalIgnoreCase) && (Id == "configurator" || rel.EndsWith("ReShade.ini", StringComparison.OrdinalIgnoreCase)); }
 }
 
 static class Mods
@@ -38,6 +40,13 @@ static class Mods
                 if (n.Equals("dinput8.dll", StringComparison.OrdinalIgnoreCase)) return @"Binaries\TFOCAdvancedConfigurator.dll";
                 if (n.Equals("TFOCAdvancedConfigurator.ini", StringComparison.OrdinalIgnoreCase)) return @"Binaries\TFOCAdvancedConfigurator.ini";
                 return null; } },
+        new ModDef { Id = "reshade", Name = "ReShade 6.8 + colour preset (bundled; Home = ReShade menu)", NameRu = "ReShade 6.8 + цветовой пресет (встроен; Home — меню ReShade)", Default = true,
+            Resource = "reshade.zip",
+            Target = f => {
+                string n = Path.GetFileName(f);
+                if (n.StartsWith("LICENSE", StringComparison.OrdinalIgnoreCase) || n.Equals("README.txt", StringComparison.OrdinalIgnoreCase))
+                    return @"Binaries\reshade-shaders\" + (n == "README.txt" ? "FoCCoop_ReShade_README.txt" : n);
+                return @"Binaries\" + f; } },
     };
 
     public static List<string> SearchDirs(string extra)
@@ -55,6 +64,7 @@ static class Mods
         foreach (var m in All)
         {
             m.Archive = null; DateTime best = DateTime.MinValue;
+            if (m.Resource != null) { if (System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceInfo(m.Resource) != null) m.Archive = "(" + T.S("bundled", "встроен") + ")"; continue; }
             foreach (var dir in SearchDirs(extraDir))
             {
                 if (!Directory.Exists(dir)) continue;
@@ -96,18 +106,25 @@ static class Mods
         {
             if (!ids.Contains(m.Id)) continue;
             if (m.Archive == null) throw new Exception(m.Name + ": " + T.S("archive not found", "архив не найден"));
-            progress(T.S("Unpacking ", "Распаковка: ") + Path.GetFileName(m.Archive));
+            progress(T.S("Unpacking ", "Распаковка: ") + (m.Resource ?? Path.GetFileName(m.Archive)));
             string tmp = Path.Combine(Path.GetTempPath(), "foccoop_mod_" + m.Id + "_" + Guid.NewGuid().ToString("N").Substring(0, 8));
             try
             {
-                Extract(m.Archive, tmp);
+                if (m.Resource != null)
+                {
+                    string zip = tmp + ".zip";
+                    using (var src = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(m.Resource)) using (var dst = File.Create(zip)) src.CopyTo(dst);
+                    System.IO.Compression.ZipFile.ExtractToDirectory(zip, tmp);
+                    File.Delete(zip);
+                }
+                else Extract(m.Archive, tmp);
                 int n = 0;
                 foreach (var f in Directory.GetFiles(tmp, "*", SearchOption.AllDirectories))
                 {
                     string rel = m.Target(f.Substring(tmp.Length).TrimStart('\\'));
                     if (rel == null) continue;
                     string dst = Path.Combine(game, rel), bak = Path.Combine(backup, rel);
-                    if (m.Id == "configurator" && rel.EndsWith(".ini", StringComparison.OrdinalIgnoreCase) && File.Exists(dst)) continue;   // keep the player's settings
+                    if (m.KeepExisting(rel) && File.Exists(dst)) continue;   // keep the player's settings
                     Directory.CreateDirectory(Path.GetDirectoryName(dst));
                     if (File.Exists(dst) && !File.Exists(bak) && !Listed(added, rel)) { Directory.CreateDirectory(Path.GetDirectoryName(bak)); File.Copy(dst, bak); }
                     else if (!File.Exists(dst) && !File.Exists(bak) && !Listed(added, rel)) File.AppendAllText(added, rel + "\r\n");

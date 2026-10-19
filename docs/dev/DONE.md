@@ -13,6 +13,8 @@ Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.m
 - Installer: "Extra mods" page (`installer/Mods.cs`) for the Nexus archives in Downloads (audio logs, FMV remaster,
   intro skip, Advanced Configurator chain-loaded by our dinput8.dll); backups in `<game>oc_backup`.
 - Test commands: `dump`, `props`, `fall`, `tp`, `hp`, `tpmarker`, `lpexec`.
+- ReShade bundled in the installer; all extra mods installed into A and B with the installer (silent mode) and played
+  in chapter 6 on LAN and through the Steam relay mock: PASS (see PLAN, mods section).
 
 ## 2026-10-19 (evening): F10 Settings page
 

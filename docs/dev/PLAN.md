@@ -25,6 +25,11 @@ Order: UI → cutscene sync → camera in scripted scenes → streaming triggers
   extracts them with Windows tar.exe, backs up replaced files to `<game>\foc_backup\`; uninstall restores them.
   Audio logs (TransGame.xxx), FMV remaster (Movies\*.bik), intro skip (after FMV), Advanced Configurator (its
   dinput8.dll becomes `Binaries\TFOCAdvancedConfigurator.dll`, chain-loaded by our dinput8.dll).
+- ReShade 6.8.0 bundled (installer/reshade: d3d9.dll from the official setup, preset "good color preset" by fpc without
+  Clarity, SweetFX/bacondither shaders, licenses). No depth effects (normal ReShade blocks depth while network traffic).
+- Checked 2026-10-19 in chapter 6 with host + guest (LAN and Steam mock): audio logs, FMV, intro skip, ReShade, then
+  + Advanced Configurator: PASS, sync and waitguest work, F10 menu works. Configurator's DirectInput hooks fail next to
+  ours (its F1 menu polls input itself; not checked by screenshot because it draws after our capture). Default off.
 - Texture pack (Authentic HQ, mod 62) is a UPK Explorer texture pack: needs **TFC Installer** (nexusmods.com/site/mods/587,
   owner has to download it). Not wired yet.
 - Next: install all into A and B, play chapter 6 with both, check F1 (configurator) + F10 menus and FPS cap vs network.

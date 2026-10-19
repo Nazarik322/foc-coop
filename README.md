@@ -12,8 +12,10 @@ That's it. To remove the mod, run the installer again and tick "Remove the mod".
 
 **Extra mods (optional).** The installer can also put in these Nexus mods if you downloaded them (it finds the archives
 in your Downloads folder): High Quality Audio Logs, FMV Remaster, No-Intro Splash Fix, TFOC Advanced Configurator (F1
-menu; runs together with the co-op mod). Replaced game files are backed up and restored on removal. All players should
-pick the same mods.
+menu; runs together with the co-op mod). ReShade 6.8 with a colour/sharpness preset is bundled (on by default, Home opens
+its menu; colour effects only, so it looks the same online). Replaced game files are backed up and restored on removal.
+All players should pick the same mods. The texture pack (Authentic High-Quality Textures) needs the separate TFC
+Installer and is not handled yet.
 Works with the Steam version of the game (build 12831). Every player needs their own copy.
 
 ## Play with friends
