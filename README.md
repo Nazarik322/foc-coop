@@ -1,89 +1,112 @@
-# foc-coop — co-op for Transformers: Fall of Cybertron (DEV / work in progress)
+<div align="center">
 
-**Languages:** **English** | [Русский](README.ru.md)
+# foc-coop
 
-Unofficial co-op layer for **Transformers: Fall of Cybertron** (Steam app 213120, build 12831,
-`TFOC.exe` SHA-256 `c1dab177f81503ecb831d63a3d799f928dd9823242ca3689482c684396acfedc`).
-The campaign is single-player and the official online services are dead, so this project builds
-co-op on top of the engine's own Unreal Engine 3 replication, using plain TCP (direct IP).
+**Unofficial co-op mod for Transformers: Fall of Cybertron**
 
-> **Status: early development build.** It is a proof of concept, not a finished mod. Expect crashes,
-> visual glitches and missing features. No game files are included; you need your own copy of the game.
+English | [Русский](README.ru.md)
+
+![status](https://img.shields.io/badge/status-early%20development-orange)
+![platform](https://img.shields.io/badge/platform-Windows%20x86-blue)
+![game](https://img.shields.io/badge/game-Steam%20build%2012831-lightgrey)
+
+</div>
+
+---
+
+> **Early development build.** This is a proof of concept, not a finished mod. Expect crashes, visual glitches
+> and missing features. The repository contains no game files; you need your own copy of the game.
 > Not affiliated with Hasbro, High Moon Studios or Activision.
 
-(Кратко по-русски: ранняя dev-версия кооператива для Fall of Cybertron по прямому IP. Работают
-Escalation на двоих и первая глава кампании на двоих; остальное не проверено. Нужна своя копия игры.)
+The Fall of Cybertron campaign is single-player and its official online services are gone. This project adds
+co-op on top of the engine's own Unreal Engine 3 replication, using plain TCP with a direct IP address.
+It is a `dinput8.dll` proxy that is loaded by the game, plus a small launcher.
 
-## What works
+Supported game build: Steam, `TFOC.exe` SHA-256
+`c1dab177f81503ecb831d63a3d799f928dd9823242ca3689482c684396acfedc`.
 
-- **Two-player Escalation** (Ark map tested) between two game copies on one PC: host and client both
-  get into the match and play.
-- **Campaign chapter 1 (The Exodus), two players**: the host starts the map, the second player joins by
-  direct IP and loads in. A *rescue teleport* brings a fallen/stuck pawn back to the host.
-- **Direct-IP networking** through `IpDrv.TcpNetDriver` (the Demonware driver is switched off).
-- **Launcher** (`launcher/FoCCoop.exe`, WinForms): installs the proxy DLL into a game copy and starts a
-  host or guest session; chapter / Escalation map pickers, player count, port, windowed mode.
-- **Several game copies on one PC** (`instance=` renames the single-instance mutex) for testing.
+## Status
 
-## What does not work / known issues
+| Feature | State |
+|---|---|
+| Escalation, 2 players (Ark map tested) | Works |
+| Campaign chapter 1 "The Exodus", 2 players | Works, with a rescue teleport for the guest |
+| Direct-IP connection (no online services) | Works |
+| Launcher (install, host, join) | Works |
+| Several game copies on one PC | Works |
+| Campaign chapters 2-9 | Untested |
+| 3-5 players | Untested |
+| Play over the internet | Not solved (LAN, localhost or VPN only) |
+| Versus modes other than Escalation | Not attempted |
+| Installer | Not available |
 
-- **Guest visuals**: on the client some characters appear as dark silhouettes / with dark textures.
-- **Guest starts downed** in the campaign and relies on the rescue teleport.
-- **Chapters 2–9 are untested** (they are in the launcher list but may crash or soft-lock).
-- **3–5 players are untested**; only 2 players were verified.
-- **Internet play is not solved**: only LAN / localhost / VPN with a reachable IP. No Steam relay yet.
+### Known issues
+
+- Characters look like dark silhouettes or have dark textures on the guest's screen.
+- The guest starts the campaign "downed" and relies on the rescue teleport.
 - Cutscenes and scripted sequences are only partly synchronised.
-- Versus multiplayer modes other than Escalation: not attempted.
-- No installer; the launcher needs a copy of the game that you point it at (it checks the exe hash).
-- Only the Steam build with the SHA-256 above is supported (offsets/patches are build-specific).
-- Windows only, 32-bit game.
+- Only the Steam build with the hash above is supported; patches and offsets are build-specific.
+- Windows only (the game is 32-bit).
+
+## Quick start
+
+You need two copies of the game folder, one for the host and one for the guest. Do not patch your Steam
+installation; work on copies.
+
+1. Run `launcher/FoCCoop.exe` and point it at each game copy. It checks the exe hash, installs `dinput8.dll`
+   and writes `foc_coop.ini`.
+2. **Host:** choose a campaign chapter or an Escalation map and press *Host*.
+3. **Guest:** enter the host IP (`127.0.0.1` on the same PC) and port `7778`, then press *Join*.
+
+Manual equivalent: the host opens
+`ESC_Ark_BASE_m?Game=TransContent.TnSurvivalGame?listen?MaxPlayers=5` and the guest connects to `127.0.0.1:7778`.
+
+## Configuration
+
+Settings are read from `foc_coop.ini` next to the game exe, section `[foc_coop]`.
+
+| Key | Effect |
+|---|---|
+| `instance=B` | Suffix for the single-instance mutex, so several copies can run on one PC |
+| `tcpdriver=1` | Use `IpDrv.TcpNetDriver` instead of the Demonware driver |
+| `forcechar=1` | Force "characters loaded" (needed to leave the Escalation loading screen) |
+| `maxplayers=N` | Player limit on the host |
+| `tutguard=1`, `skiptut=1` | Guards and patches for the tutorial logic that crashes the campaign host |
+| `ctrlshare=1`, `hostfirst=1` | Controller sharing and host-first controller order (campaign) |
+| `rescue=1` | Teleport a fallen pawn back next to another player |
+| `holdspawn=1`, `spawnafter=N` | Delay the guest's spawn |
+| `ctrldiag`, `scan`, `dump`, `trace`, `lp` | Diagnostics and experiments that write extra logs |
+
+All activity is logged to `foc_coop.log` next to the exe (network calls, exceptions, crash registers and stack).
 
 ## How it works
 
-`src/proxy_dinput8/dinput8.cpp` builds a 32-bit `dinput8.dll` proxy that is dropped next to `TFOC.exe`.
-The game loads it instead of the system DLL; it then
-- finds engine structures (GNames / GObjObjects) and needed classes at runtime,
-- swaps the net driver to TCP in the loaded config strings,
-- raises the player cap, forces `TnLocalPlayer._CharactersLoaded`, patches the tutorial logic that
-  crashes the campaign host, and shares/orders player controllers so the guest can spawn,
-- logs everything to `foc_coop.log` (network calls, exceptions, crash registers/stack).
+The proxy `dinput8.dll` sits next to `TFOC.exe` and is loaded instead of the system DLL. At runtime it:
 
-Settings live in `foc_coop.ini` next to the exe, section `[foc_coop]`:
+- locates the engine's name and object tables and the classes it needs,
+- switches the net driver to TCP in the loaded config strings,
+- raises the player limit and forces `TnLocalPlayer._CharactersLoaded`,
+- patches the tutorial logic that crashes the campaign host,
+- shares and orders player controllers so that the guest can spawn.
 
-| key | effect |
-|---|---|
-| `instance=B` | appended to the single-instance mutex name so several copies run on one PC |
-| `tcpdriver=1` | use `IpDrv.TcpNetDriver` instead of Demonware |
-| `forcechar=1` | force the characters-loaded flag (needed to leave the Escalation loading screen) |
-| `maxplayers=N` | player cap for the host |
-| `tutguard`, `skiptut` | guards/patches for the tutorial script that crashes the campaign host |
-| `ctrlshare`, `hostfirst` | controller sharing and host-first controller order (campaign) |
-| `rescue=1` | rescue teleport for fallen pawns |
-| `holdspawn`, `spawnafter` | delay the guest spawn |
-| `ctrldiag`, `scan`, `dump`, `trace`, `lp`, ... | diagnostics and experiments, write extra logs |
+## Building
 
-## Quick start (2 players, one PC or LAN)
-
-1. Make **two copies** of your game folder (never patch the Steam install itself).
-2. Run `launcher/FoCCoop.exe`, point it at each copy; it installs `dinput8.dll` and writes `foc_coop.ini`.
-3. Host: pick a chapter (or an Escalation map) and press Host.
-   Guest: enter the host IP (`127.0.0.1` on the same PC), port `7778`, press Join.
-4. Manual equivalent: the host opens `ESC_Ark_BASE_m?Game=TransContent.TnSurvivalGame?listen?MaxPlayers=5`,
-   the guest opens `127.0.0.1:7778`.
-
-## Build
-
-`build.bat` (Visual Studio 2022 Build Tools, x86) builds the proxy DLL. The launcher is a single C# file
-compiled with the .NET Framework `csc.exe` that ships with Windows (C# 5 syntax). Prebuilt
-`launcher/FoCCoop.exe` and `launcher/payload/dinput8.dll` are checked in for convenience.
-`lpdiff.py` / `snapdiff.py` are helpers for diffing memory snapshots of the running game.
+- Proxy DLL: run `build.bat` (Visual Studio 2022 Build Tools, x86). Source: `src/proxy_dinput8/`.
+- Launcher: a single C# file, `launcher/FoCCoop.cs`, compiled with the .NET Framework `csc.exe` that ships
+  with Windows (C# 5 syntax).
+- Prebuilt `launcher/FoCCoop.exe` and `launcher/payload/dinput8.dll` are included.
+- `lpdiff.py` and `snapdiff.py` are helper scripts for diffing memory snapshots of the running game.
 
 ## Roadmap
 
-1. Fix guest visuals and the downed start. 2. Walk through chapters 2–9. 3. 3–5 players.
-4. Internet play (Steam relay / VPN guide). 5. Installer. 6. More Escalation maps and versus modes.
+1. Fix the guest's visuals and the downed start.
+2. Play through chapters 2-9.
+3. Support 3-5 players.
+4. Internet play (Steam relay or a VPN guide).
+5. Installer.
+6. More Escalation maps and versus modes.
 
 ## Disclaimer
 
-Interoperability research for personal use with a legitimately owned copy of the game. Use at your own
-risk. Not intended for use with any official online services.
+This is interoperability research for personal use with a legitimately owned copy of the game. Use it at your
+own risk. It is not intended for use with any official online services.
