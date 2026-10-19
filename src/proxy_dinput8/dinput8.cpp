@@ -59,6 +59,7 @@ static int g_snap1 = 0, g_snap2 = 0;
 static bool g_charFixFlag = false;
 static int g_tickMs = 200;
 static bool g_viewFix = true;
+static int g_ctrlShareDelay = 8000;   // ms after a guest controller appears before ctrlshare touches it
 static bool g_possessFix = false;
 static bool g_peFind = false;
 static bool g_spawnTrace = false;
@@ -1561,7 +1562,7 @@ static void InstallHooks() {
 
 // ---------------------------------------------------------------- crash reporting
 static HMODULE g_self = nullptr;                 // this DLL
-static volatile LONG g_guardHits[6];             // VEH guards below, in order
+static volatile LONG g_guardHits[7];             // VEH guards below, in order
 static volatile LONG g_excExe = 0, g_excBenign = 0, g_excSelf = 0, g_dumps = 0;
 static volatile LONG g_crashTest = 0;            // set by the `crashtest` command: dump on our own test fault
 static const unsigned long kBenignFaultRva = 0x15432c;   // the game writes to null here once at startup and handles it
@@ -1729,6 +1730,16 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         if (InterlockedIncrement(&g_guardHits[5]) <= 3) Log("guard: none-this checkpoint update (0x641e10) bypassed");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    // ghidra FUN_00b4e5a0 = PlayerController.ServerUpdatePing (thiscall, ret 4): writes PRI.ExactPing (+0x220) while the
+    // guest's PlayerReplicationInfo is null (host crash in 2b, 2026-10-19). Skip the update: pop edi, pop ebx, ret 4.
+    if (g_tutGuard && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Eax == 0 &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0x74e610) {
+        CONTEXT* c = ep->ContextRecord;
+        DWORD* sp = (DWORD*)c->Esp;
+        c->Edi = sp[0]; c->Ebx = sp[1]; c->Eip = sp[2]; c->Esp += 12 + 4;
+        if (InterlockedIncrement(&g_guardHits[6]) <= 3) Log("guard: ServerUpdatePing with null PRI skipped");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     // log only serious exceptions
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
         void* addr = ep->ExceptionRecord->ExceptionAddress;
@@ -1824,6 +1835,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_charFixFlag = GetPrivateProfileIntW(L"foc_coop", L"charfix", 0, ini2) != 0;
         g_tickMs = GetPrivateProfileIntW(L"foc_coop", L"tickms", 200, ini2);
         g_viewFix = GetPrivateProfileIntW(L"foc_coop", L"viewfix", 1, ini2) != 0;
+        g_ctrlShareDelay = GetPrivateProfileIntW(L"foc_coop", L"ctrlsharedelay", 8000, ini2);
         g_possessFix = GetPrivateProfileIntW(L"foc_coop", L"possessfix", 0, ini2) != 0;
         g_peFind = GetPrivateProfileIntW(L"foc_coop", L"pefind", 0, ini2) != 0;
         g_spawnTrace = GetPrivateProfileIntW(L"foc_coop", L"spawntrace", 0, ini2) != 0;

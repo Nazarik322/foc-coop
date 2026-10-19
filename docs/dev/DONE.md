@@ -3,6 +3,19 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (evening): owner playtest fixes
+
+- **"Teleported back" (host and guest)**: the rescue teleport fired when one player simply walked down the level
+  (2b drops 6000 uu). Now it needs a real fall: 4 one-second samples in a row dropping > 800 uu each.
+- **Host crash in 2b (owner playtest)**: native ServerUpdatePing (ghidra 0xb4e5a0) wrote the ping into a null PRI of
+  the guest. New VEH guard (counter 6) skips the update.
+- **Guest dropped to the main menu right after loading (~1 in 6 runs)**: ctrlshare touched the guest controller
+  during its login. Now it waits 8 s after a controller appears (`ctrlsharedelay`). 2a/2b 6/6 PASS.
+- **`tools/playbot.ps1`**: host and guest walk through a chapter (real keys/mouse), checks desync between what the
+  host and the guest see, teleports, crashes, screenshots every step. 2b, 3 min: no crash, positions in sync
+  (0-25 uu while moving), guard 6 fired once (the owner's crash).
+- **`tools/record.ps1`**: records a play session (in-game screenshots + state every 20 s).
+
 ## 2026-10-19 (evening): installer
 
 - **`installer/Setup.cs` -> `dist/FoCCoopSetup.exe`** (`installer/build_installer.bat` builds DLL, relay and embeds them

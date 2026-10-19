@@ -127,8 +127,13 @@ static void TickCtrlShare(const TickObjs& t) {
         int bestN = -1;
         for (int a = 0; a < t.npc; a++) { int n = 0; for (int off = 0x500; off < 0x740; off += 4) if (IsObjFast(*(BYTE**)(t.pc[a] + off))) n++; if (n > bestN) { bestN = n; best = a; } }
     }
+    // wait 8 s after a controller first appears: sharing during the guest's login sometimes dropped it to the menu
+    static BYTE* seenPc[16]; static DWORD seenAt[16];
     for (int a = 0; a < t.npc; a++) {
         if (a == best) continue;
+        int si = -1; for (int j = 0; j < 16; j++) if (seenPc[j] == t.pc[a]) si = j;
+        if (si < 0) { for (int j = 0; j < 16 && si < 0; j++) if (!seenPc[j] || !InList(seenPc[j], t.pc, t.npc)) { si = j; seenPc[j] = t.pc[a]; seenAt[j] = GetTickCount(); } }
+        if (si >= 0 && GetTickCount() - seenAt[si] < (DWORD)g_ctrlShareDelay) continue;
         int copied = 0;
         for (int off = 0x500; off < 0x740; off += 4) {
             BYTE** dst = (BYTE**)(t.pc[a] + off); BYTE* src = *(BYTE**)(t.pc[best] + off);
@@ -188,12 +193,20 @@ static void TickRescue(const TickObjs& t) {
     BYTE* pawns[16]; int np = 0;
     for (int a = 0; a < t.npc; a++) { BYTE* pw = PawnOf(t.pc[a]); if (pw) pawns[np++] = pw; }
     if (np < 2) return;
+    // Only a real fall: walking down a level is not one (2b goes down 6000 uu and used to pull the lower player back
+    // up). A pawn counts as falling after 4 one-second samples in a row that each dropped more than 800 uu.
+    static BYTE* fp[16]; static float fz[16]; static int fticks[16]; static DWORD lastSample = 0;
+    bool sample = GetTickCount() - lastSample >= 1000; if (sample) lastSample = GetTickCount();
     int hi = 0; for (int a = 1; a < np; a++) if (LocOf(pawns[a])[2] > LocOf(pawns[hi])[2]) hi = a;
     float* ref = LocOf(pawns[hi]);
     for (int a = 0; a < np; a++) {
-        if (a == hi) continue;
+        int k = -1; for (int j = 0; j < 16; j++) if (fp[j] == pawns[a]) k = j;
+        if (k < 0) { for (int j = 0; j < 16 && k < 0; j++) if (!fp[j] || !InList(fp[j], pawns, np)) { k = j; fp[j] = pawns[a]; fz[j] = LocOf(pawns[a])[2]; fticks[j] = 0; } }
+        if (k >= 0 && sample) { float z = LocOf(pawns[a])[2]; fticks[k] = (fz[k] - z > 800.0f) ? fticks[k] + 1 : 0; fz[k] = z; }
+        if (a == hi || k < 0) continue;
         float* loc = LocOf(pawns[a]);
-        if (!(ref[2] - loc[2] > 4000.0f && ref[2] > -20000.0f)) continue;
+        if (!(fticks[k] >= 4 && ref[2] - loc[2] > 4000.0f && ref[2] > -20000.0f)) continue;
+        fticks[k] = 0;
         static volatile LONG nl = 0; if (InterlockedIncrement(&nl) <= 20) Log("rescue: pawn %p fell to z=%.0f, moving next to %p (%.0f,%.0f,%.0f)", pawns[a], loc[2], pawns[hi], ref[0], ref[1], ref[2]);
         float nx = ref[0] + 250.0f * (a + 1), ny = ref[1] + 60.0f, nz = ref[2] + 120.0f;
         loc[0] = nx; loc[1] = ny; loc[2] = nz;
@@ -349,8 +362,8 @@ static void WriteState(const TickObjs& t) {
         char pwn[96]; ObjLabel(t.pawn[i], pwn, sizeof(pwn)); float* f = LocOf(t.pawn[i]);
         J("%s{\"name\":\"%s\",\"possessed\":%d,\"x\":%.0f,\"y\":%.0f,\"z\":%.0f}", i ? "," : "", pwn, owned ? 1 : 0, f[0], f[1], f[2]);
     }
-    J("],\"guards\":[%ld,%ld,%ld,%ld,%ld,%ld],\"excExe\":%ld,\"excBenign\":%ld,\"excSelf\":%ld,\"dumps\":%ld}\n",
-      g_guardHits[0], g_guardHits[1], g_guardHits[2], g_guardHits[3], g_guardHits[4], g_guardHits[5], g_excExe, g_excBenign, g_excSelf, g_dumps);
+    J("],\"guards\":[%ld,%ld,%ld,%ld,%ld,%ld,%ld],\"excExe\":%ld,\"excBenign\":%ld,\"excSelf\":%ld,\"dumps\":%ld}\n",
+      g_guardHits[0], g_guardHits[1], g_guardHits[2], g_guardHits[3], g_guardHits[4], g_guardHits[5], g_guardHits[6], g_excExe, g_excBenign, g_excSelf, g_dumps);
 #undef J
     wchar_t dir[MAX_PATH]; GetModuleFileNameW(nullptr, dir, MAX_PATH);
     wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
