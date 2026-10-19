@@ -57,7 +57,10 @@ public class W {
 function Start-Foc([string]$Copy, [string]$MapUrl = "", [int]$W = 960, [int]$H = 540, [string[]]$Extra = @()) {
   $bin = "E:\FoC-coop\$Copy\Binaries"
   $a = @(); if ($MapUrl) { $a += "`"$MapUrl`"" }; $a += @("-windowed", "ResX=$W", "ResY=$H", "-nohomedir") + @($Extra | Where-Object { $_ })
+  # SteamAppId=480: the DLL would otherwise restart the game as Spacewar and this process id would be gone
+  $env:SteamAppId = "480"; $env:SteamGameId = "480"
   $p = Start-Process -FilePath "$bin\TFOC.exe" -ArgumentList $a -WorkingDirectory $bin -PassThru
+  $env:SteamAppId = $null; $env:SteamGameId = $null
   return $p.Id
 }
 function Wait-FocWindow([int]$ProcId, [int]$Timeout = 120) {

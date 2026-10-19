@@ -143,6 +143,10 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   Controller.Pawn != null. RestartPlayer spawns only when Controller.Pawn (+0x1d0) is null.
 - Spawn helper Tick (TnPlayerSpawnHelper.uc): state 2 calls TrySpawn every tick until it succeeds.
 
+## Steam app id (Spacewar)
+- TFOC has the old Steam DRM (Steam.dll, `TFOC.exe.<pid>.STEAMSTART` files) but runs fine started directly with the
+  environment `SteamAppId=480`/`SteamGameId=480`: Steam then reports RunningAppID 480. DllMain does that restart.
+
 ## Sync channel host -> guest (sync.inc, ini `sync`, default on)
 - Datagrams inside the game's own UDP socket: host -> guest "FOCS1\n" + `key=value` lines 4x/s (seq, map, obj,
   mk=<actor>,<marker class>,<id>), guest -> host "FOCR1\n" (= ready). h_recvfrom swallows them, so the game never sees

@@ -14,7 +14,8 @@ That's it. To remove the mod, run the installer again and tick "Remove the mod".
 in your Downloads folder): High Quality Audio Logs, FMV Remaster, No-Intro Splash Fix, TFOC Advanced Configurator (F1
 menu; runs together with the co-op mod). ReShade 6.8 with a colour/sharpness preset is bundled (on by default, Home opens
 its menu; colour effects only, so it looks the same online). Replaced game files are backed up and restored on removal.
-All players should pick the same mods. The texture pack (Authentic High-Quality Textures) needs the separate TFC
+Ticking a mod you have not downloaded opens its Nexus page in your browser, and the installer waits until the download
+is in Downloads. All players should pick the same mods. The texture pack (Authentic High-Quality Textures) needs the separate TFC
 Installer and is not handled yet.
 Works with the Steam version of the game (build 12831). Every player needs their own copy.
 
@@ -25,7 +26,8 @@ Steam must be running for everyone, and you must be Steam friends.
 - **Host:** start the game, press **F10** → Host a game → pick a chapter or Escalation map → Start hosting.
 - **Friend:** start the game, press **F10** → Join a game → **Join a friend through Steam**.
 
-No IP addresses, no port forwarding: traffic goes through Steam. On one network you can also join from the lobby list
+No IP addresses, no port forwarding: traffic goes through Steam. While the mod is installed, Steam shows the game as
+"Spacewar" (the free Steam app the co-op connection uses); `spacewar=0` in `Binariesoc_coop.ini` turns that off. On one network you can also join from the lobby list
 or by IP.
 
 ## What works

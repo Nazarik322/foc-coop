@@ -188,16 +188,19 @@ static class Installer
 
 class Wizard : Form
 {
-    // pages: 0 welcome, 1 before you install, 2 game folder, 3 mods, 4 done
+    // pages: 0 welcome, 1 before you install, 2 game folder, 3 mods, 4 waiting for downloads, 5 done
     int page;
     readonly Label title = new Label(), body = new Label();
-    readonly Button back = new Button(), next = new Button(), cancel = new Button(), browse = new Button(), modBrowse = new Button();
+    readonly Button back = new Button(), next = new Button(), cancel = new Button(), browse = new Button(), modBrowse = new Button(), openPages = new Button();
     readonly ComboBox pathBox = new ComboBox();
     readonly CheckBox uninstall = new CheckBox();
-    readonly Label pathInfo = new Label(), modInfo = new Label();
+    readonly Label pathInfo = new Label(), modInfo = new Label(), waitInfo = new Label();
     readonly CheckedListBox modList = new CheckedListBox();
+    readonly Timer waitTimer = new Timer();
+    readonly HashSet<string> opened = new HashSet<string>();   // Nexus pages already opened in the browser
+    readonly HashSet<string> chosen = new HashSet<string>();   // mod ids ticked on the mods page
     string modDir;
-    bool busy;
+    bool busy, filling;
 
     public Wizard(string mode, string path)
     {
@@ -207,7 +210,7 @@ class Wizard : Form
         var banner = new Panel { BackColor = Color.FromArgb(28, 33, 46), Dock = DockStyle.Top, Height = 70 };
         title.ForeColor = Color.White; title.Font = new Font("Segoe UI", 14f, FontStyle.Bold); title.AutoSize = false; title.SetBounds(20, 18, 580, 36);
         banner.Controls.Add(title); Controls.Add(banner);
-        body.SetBounds(24, 88, 572, 104); body.AutoSize = false; Controls.Add(body);
+        body.SetBounds(24, 82, 572, 66); body.AutoSize = false; Controls.Add(body);
         pathBox.SetBounds(24, 200, 470, 26); pathBox.DropDownStyle = ComboBoxStyle.DropDown; Controls.Add(pathBox);
         browse.Text = T.S("Browse...", "Обзор..."); browse.SetBounds(502, 199, 94, 28); Controls.Add(browse);
         pathInfo.SetBounds(24, 234, 572, 60); pathInfo.AutoSize = false; Controls.Add(pathInfo);
@@ -215,15 +218,27 @@ class Wizard : Form
         modList.SetBounds(24, 150, 572, 112); modList.CheckOnClick = true; modList.IntegralHeight = false; Controls.Add(modList);
         modInfo.SetBounds(24, 268, 470, 76); modInfo.AutoSize = false; Controls.Add(modInfo);
         modBrowse.Text = T.S("Folder...", "Папка..."); modBrowse.SetBounds(502, 268, 94, 28); Controls.Add(modBrowse);
-        pathBox.BringToFront(); browse.BringToFront(); pathInfo.BringToFront(); uninstall.BringToFront(); modList.BringToFront(); modInfo.BringToFront(); modBrowse.BringToFront();
+        openPages.Text = T.S("Open pages", "Открыть страницы"); openPages.SetBounds(24, 312, 160, 30); Controls.Add(openPages);
+        waitInfo.SetBounds(24, 150, 572, 160); waitInfo.AutoSize = false; Controls.Add(waitInfo);
+        pathBox.BringToFront(); browse.BringToFront(); pathInfo.BringToFront(); uninstall.BringToFront(); modList.BringToFront(); modInfo.BringToFront(); modBrowse.BringToFront(); waitInfo.BringToFront(); openPages.BringToFront();
         back.Text = T.S("< Back", "< Назад"); back.SetBounds(300, 352, 94, 30); Controls.Add(back);
         next.SetBounds(400, 352, 94, 30); Controls.Add(next);
         cancel.Text = T.S("Cancel", "Отмена"); cancel.SetBounds(502, 352, 94, 30); Controls.Add(cancel);
-        back.Click += (s, e) => { if (page > 0 && !busy) Show(page - 1); };
+        back.Click += (s, e) => { if (page > 0 && !busy) Show(page == 4 ? 3 : page - 1); };
         next.Click += (s, e) => Next();
         cancel.Click += (s, e) => { if (!busy) Close(); };
         browse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { d.Description = T.S("Fall of Cybertron folder", "Папка Fall of Cybertron"); if (d.ShowDialog(this) == DialogResult.OK) { pathBox.Text = d.SelectedPath; CheckPath(); } } };
         modBrowse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { d.Description = T.S("Folder with the downloaded mod archives", "Папка со скачанными архивами модов"); if (d.ShowDialog(this) == DialogResult.OK) { modDir = d.SelectedPath; FillMods(); } } };
+        openPages.Click += (s, e) => { foreach (var m in Missing()) Mods.OpenPage(m); };
+        // ticking a mod whose archive is not downloaded yet opens its Nexus page in the default browser (once)
+        modList.ItemCheck += (s, e) => {
+            if (filling || e.Index >= Mods.All.Length) return;
+            var m = Mods.All[e.Index];
+            if (e.NewValue == CheckState.Checked) chosen.Add(m.Id); else chosen.Remove(m.Id);
+            if (e.NewValue == CheckState.Checked && m.Archive == null && !opened.Contains(m.Id)) { opened.Add(m.Id); Mods.OpenPage(m); }
+            BeginInvoke(new Action(() => { if (page == 3) next.Text = NextText(); }));
+        };
+        waitTimer.Interval = 2000; waitTimer.Tick += (s, e) => UpdateWait();
         pathBox.TextChanged += (s, e) => CheckPath();
         uninstall.CheckedChanged += (s, e) => { if (page == 2) next.Text = NextText(); };
         foreach (var g in Installer.FindGame()) pathBox.Items.Add(g);
@@ -235,8 +250,9 @@ class Wizard : Form
     string NextText()
     {
         if (page == 2) return uninstall.Checked ? T.S("Remove", "Удалить") : T.S("Next >", "Далее >");
-        if (page == 3) return T.S("Install", "Установить");
-        if (page == 4) return T.S("Finish", "Готово");
+        if (page == 3) return Missing().Count > 0 ? T.S("Next >", "Далее >") : T.S("Install", "Установить");
+        if (page == 4) return T.S("Install", "Установить");
+        if (page == 5) return T.S("Finish", "Готово");
         return T.S("Next >", "Далее >");
     }
 
@@ -245,25 +261,29 @@ class Wizard : Form
         page = p;
         pathBox.Visible = browse.Visible = pathInfo.Visible = uninstall.Visible = p == 2;
         modList.Visible = modInfo.Visible = modBrowse.Visible = p == 3;
-        back.Enabled = p > 0 && p < 4;
+        waitInfo.Visible = openPages.Visible = p == 4;
+        back.Enabled = p > 0 && p < 5;
         next.Enabled = true;
-        next.Text = NextText();
-        cancel.Visible = p < 4;
+        cancel.Visible = p < 5;
+        waitTimer.Enabled = p == 4;
         if (p == 0)
         {
             title.Text = T.S("Fall of Cybertron Co-op", "Кооператив для Fall of Cybertron");
+            body.Height = 104;
             body.Text = T.S("This installs the unofficial co-op mod for Transformers: Fall of Cybertron (Steam version).\n\nPlay the story and Escalation with up to 5 friends. In the game press F10 for the co-op menu.",
                             "Будет установлен неофициальный кооп-мод для Transformers: Fall of Cybertron (версия из Steam).\n\nСюжет и Escalation вместе с друзьями (до 5 человек). В игре нажмите F10 — откроется меню кооператива.");
         }
         else if (p == 1)
         {
             title.Text = T.S("Before you install", "Перед установкой");
+            body.Height = 104;
             body.Text = T.S("• Every player needs their own copy of the game and this mod.\n• Steam must be running: friends join you through Steam, no IP addresses or port forwarding.\n• Host: F10 → Host a game. Friend: F10 → Join a game → Join a friend through Steam.\n• The mod adds dinput8.dll and the foc_relay folder to the game's Binaries folder. Optional mods (next pages) back up every file they replace.",
                             "• Каждому игроку нужна своя копия игры и этот мод.\n• Steam должен быть запущен: друзья подключаются через Steam, без IP-адресов и проброса портов.\n• Хост: F10 → Host a game. Друг: F10 → Join a game → Join a friend through Steam.\n• Мод добавляет dinput8.dll и папку foc_relay в папку Binaries игры. Дополнительные моды (дальше) сохраняют копии всех файлов, которые заменяют.");
         }
         else if (p == 2)
         {
             title.Text = T.S("Game folder", "Папка с игрой");
+            body.Height = 104;
             body.Text = pathBox.Items.Count > 0 ? T.S("The game was found automatically. Check the folder and press Next.", "Игра найдена автоматически. Проверьте папку и нажмите «Далее».")
                                                 : T.S("The game was not found automatically. Choose the Fall of Cybertron folder.", "Игру не удалось найти автоматически. Укажите папку Fall of Cybertron.");
             CheckPath();
@@ -271,10 +291,20 @@ class Wizard : Form
         else if (p == 3)
         {
             title.Text = T.S("Extra mods (optional)", "Дополнительные моды (по желанию)");
-            body.Text = T.S("Mods from Nexus Mods that work with co-op. Download them from Nexus yourself; the installer finds the archives in Downloads. All players should pick the same mods.",
-                            "Моды с Nexus Mods, проверенные с кооперативом. Скачайте их с Nexus сами — установщик найдёт архивы в «Загрузках». Всем игрокам лучше выбрать одинаковые моды.");
+            body.Height = 66;
+            body.Text = T.S("Mods from Nexus Mods that work with co-op. Tick a mod you have not downloaded yet and its Nexus page opens in your browser: download it there (Files → Manual / Slow download). All players should pick the same mods.",
+                            "Моды с Nexus Mods, проверенные с кооперативом. Отметьте мод, которого ещё нет, — его страница на Nexus откроется в браузере: скачайте его там (Files → Manual / Slow download). Всем игрокам лучше выбрать одинаковые моды.");
             FillMods();
         }
+        else if (p == 4)
+        {
+            title.Text = T.S("Waiting for the downloads", "Ожидание загрузок");
+            body.Height = 66;
+            body.Text = T.S("Download the ticked mods on the Nexus pages that opened. The installer checks the Downloads folder every 2 seconds and continues by itself when everything is there. Install now = only what is already downloaded.",
+                            "Скачайте отмеченные моды на открывшихся страницах Nexus. Установщик проверяет папку «Загрузки» каждые 2 секунды и продолжит сам, когда всё скачается. «Установить» сейчас — только то, что уже скачано.");
+            UpdateWait();
+        }
+        next.Text = NextText();
     }
 
     void FillMods()
@@ -282,25 +312,52 @@ class Wizard : Form
         Mods.Find(modDir);
         string game = Installer.GameOf(pathBox.Text);
         var have = game != null ? Mods.Installed(game) : new List<string>();
+        filling = true;
         modList.Items.Clear();
-        int found = 0;
         foreach (var m in Mods.All)
         {
             string name = T.S(m.Name, m.NameRu);
-            string state = m.Archive != null ? Path.GetFileName(m.Archive) : T.S("archive not found", "архив не найден");
+            string state = m.Archive != null ? Path.GetFileName(m.Archive) : T.S("not downloaded — tick to open its page", "не скачан — отметьте, откроется страница");
             if (have.Contains(m.Id)) state = T.S("installed; ", "уже установлен; ") + state;
             int i = modList.Items.Add(name + "  —  " + state);
-            if (m.Archive != null) { found++; modList.SetItemChecked(i, m.Default || have.Contains(m.Id)); }
+            bool tick = chosen.Contains(m.Id) || (m.Archive != null && (m.Default || have.Contains(m.Id)));
+            modList.SetItemChecked(i, tick);
+            if (tick) chosen.Add(m.Id);
         }
-        modInfo.Text = T.S("Searched: ", "Поиск в: ") + string.Join("; ", Mods.SearchDirs(modDir).ToArray()) +
-                       (found == 0 ? T.S("\nNo mod archives found: you can skip this page.", "\nАрхивы модов не найдены — эту страницу можно пропустить.") : "");
+        filling = false;
+        modInfo.Text = T.S("Searched: ", "Поиск в: ") + string.Join("; ", Mods.SearchDirs(modDir).ToArray());
+        if (page == 3) next.Text = NextText();
     }
 
-    List<string> CheckedMods()
+    List<ModDef> Missing()
+    {
+        var r = new List<ModDef>();
+        foreach (var m in Mods.All) if (chosen.Contains(m.Id) && m.Archive == null) r.Add(m);
+        return r;
+    }
+
+    List<string> ReadyMods()
     {
         var ids = new List<string>();
-        for (int i = 0; i < Mods.All.Length && i < modList.Items.Count; i++) if (modList.GetItemChecked(i) && Mods.All[i].Archive != null) ids.Add(Mods.All[i].Id);
+        foreach (var m in Mods.All) if (chosen.Contains(m.Id) && m.Archive != null && Mods.Stable(m.Archive)) ids.Add(m.Id);
         return ids;
+    }
+
+    void UpdateWait()
+    {
+        if (page != 4) return;
+        Mods.Find(modDir);
+        var lines = new List<string>(); int waiting = 0;
+        foreach (var m in Mods.All)
+        {
+            if (!chosen.Contains(m.Id)) continue;
+            bool ready = m.Archive != null && Mods.Stable(m.Archive);
+            if (!ready) waiting++;
+            lines.Add((ready ? "✔ " : "… ") + T.S(m.Name, m.NameRu) + "  —  " +
+                      (m.Archive == null ? T.S("waiting for the download", "ждём загрузку") : ready ? Path.GetFileName(m.Archive) : T.S("downloading...", "скачивается...")));
+        }
+        waitInfo.Text = string.Join("\n", lines.ToArray());
+        if (waiting == 0 && lines.Count > 0) { waitTimer.Enabled = false; StartWork(false); }
     }
 
     void CheckPath()
@@ -321,13 +378,21 @@ class Wizard : Form
     {
         if (busy) return;
         if (page < 2) { Show(page + 1); return; }
-        if (page == 4) { Close(); return; }
+        if (page == 5) { Close(); return; }
         if (page == 2 && !uninstall.Checked) { Show(3); return; }
-        bool removing = page == 2;
-        var ids = removing ? new List<string>() : CheckedMods();
+        if (page == 3 && Missing().Count > 0) { foreach (var m in Missing()) if (!opened.Contains(m.Id)) { opened.Add(m.Id); Mods.OpenPage(m); } Show(4); return; }
+        StartWork(page == 2);
+    }
+
+    void StartWork(bool removing)
+    {
+        if (busy) return;
+        Mods.Find(modDir);
+        var ids = new List<string>();
+        if (!removing) foreach (var m in Mods.All) if (chosen.Contains(m.Id) && m.Archive != null) ids.Add(m.Id);
         string folder = pathBox.Text;
-        busy = true; next.Enabled = back.Enabled = false; cancel.Visible = false;
-        modList.Visible = modInfo.Visible = modBrowse.Visible = false;
+        busy = true; waitTimer.Enabled = false; next.Enabled = back.Enabled = false; cancel.Visible = false;
+        modList.Visible = modInfo.Visible = modBrowse.Visible = waitInfo.Visible = openPages.Visible = false;
         pathBox.Visible = browse.Visible = pathInfo.Visible = uninstall.Visible = false;
         title.Text = removing ? T.S("Removing...", "Удаление...") : T.S("Installing...", "Установка...");
         body.Text = "";
@@ -362,14 +427,15 @@ class Wizard : Form
                 body.Text = T.S("Waiting for administrator rights...", "Ожидание прав администратора...");
                 var p = Process.Start(psi); p.WaitForExit();
                 ok = p.ExitCode == 0;
-                msg = ok ? (removing ? T.S("The mod was removed.", "Мод удалён.") : T.S("Installed into ", "Установлено в ") + Installer.BinariesOf(folder))
+                msg = ok ? (removing ? T.S("The mod was removed.", "Мод удалён.") : T.S("Installed into ", "Установлено в ") + Installer.BinariesOf(folder) + (ids.Count > 0 ? T.S("\nMods: ", "\nМоды: ") + string.Join(", ", ids.ToArray()) : ""))
                          : T.S("Installing with administrator rights failed.", "Установка с правами администратора не удалась.");
             }
             catch { msg = T.S("Administrator rights are needed for this folder.", "Для этой папки нужны права администратора."); }
         }
         if (!ok) { MessageBox.Show(this, msg, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); Show(removing ? 2 : 3); return; }
-        Show(4);
+        Show(5);
         title.Text = T.S("Done", "Готово");
+        body.Height = 200;
         body.Text = msg + (removing ? "" : T.S("\n\nStart the game from Steam and press F10.", "\n\nЗапустите игру из Steam и нажмите F10."));
     }
 

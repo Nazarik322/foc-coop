@@ -1924,6 +1924,24 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
         GetModuleFileNameW(nullptr, exe, MAX_PATH);
         wchar_t* slash = wcsrchr(exe, L'\\');
         if (slash) *slash = 0;
+        // Steam shows the game as Spacewar (480), the app the Steam relay uses, instead of Fall of Cybertron (213120):
+        // a process started from the Steam library (SteamAppId=213120) starts itself again with SteamAppId=480 and ends
+        // before the game initialises anything (verified: TFOC runs as 480, Steam RunningAppID 480). ini spacewar=0 off.
+        {
+            wchar_t ini[MAX_PATH]; _snwprintf_s(ini, _TRUNCATE, L"%s\\foc_coop.ini", exe);
+            wchar_t app[16] = L""; GetEnvironmentVariableW(L"SteamAppId", app, 16);
+            if (GetPrivateProfileIntW(L"foc_coop", L"spacewar", 1, ini) != 0 && wcscmp(app, L"480") != 0) {
+                SetEnvironmentVariableW(L"SteamAppId", L"480"); SetEnvironmentVariableW(L"SteamGameId", L"480");
+                wchar_t path[MAX_PATH]; GetModuleFileNameW(nullptr, path, MAX_PATH);
+                wchar_t* cl = _wcsdup(GetCommandLineW());
+                STARTUPINFOW si = {sizeof(si)}; PROCESS_INFORMATION pi = {};
+                if (CreateProcessW(path, cl, nullptr, nullptr, FALSE, 0, nullptr, exe, &si, &pi)) {
+                    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                    TerminateProcess(GetCurrentProcess(), 0);
+                }
+                free(cl);   // could not start: carry on as Fall of Cybertron
+            }
+        }
         // Chain load: another dinput8 proxy mod (TFOC Advanced Configurator, renamed by the installer) is loaded in
         // place of the system dll; its DirectInput8Create forwards to the system one.
         wchar_t chain[MAX_PATH]; _snwprintf_s(chain, _TRUNCATE, L"%s\\TFOCAdvancedConfigurator.dll", exe);

@@ -3,6 +3,14 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (late night): Steam shows Spacewar, installer opens mod pages
+- Owner: Steam showed "Transformers" instead of Spacewar. dinput8.dll now restarts a game started with SteamAppId != 480
+  as SteamAppId=480 (verified: Steam RunningAppID 480, game runs; a Steam-like start with 213120 switches to 480).
+  ini `spacewar` (default 1). tools/dev.ps1 starts test copies with SteamAppId=480 (otherwise the tracked pid is gone).
+  Chapter 6 LAN + Steam mock PASS after the change.
+- Installer: ticking a mod without its archive opens its Nexus page (default browser); a "Waiting for the downloads"
+  page polls Downloads every 2 s (ignores .crdownload/.part, waits for a stable size) and installs by itself.
+
 ## 2026-10-19 (night): story co-op identity, deaths, mods
 - Play bot over all chapters (`tools/botall.ps1`): 2a, 2b no problems; 1: guest fell into the pit and was rescued;
   3a: guest fell through the level and died (B11 open item); 3b onwards SKIP (remote desktop minimized).

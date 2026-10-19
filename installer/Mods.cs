@@ -11,7 +11,7 @@ using System.Text.RegularExpressions;
 
 class ModDef
 {
-    public string Id, Name, NameRu, Pattern, Note, NoteRu;
+    public string Id, Name, NameRu, Pattern, Note, NoteRu, Url;   // Url: the mod's Nexus page (opened when the archive is missing)
     public bool Default;
     public Func<string, string> Target;   // file inside the archive (relative) -> path under the game folder, or null = skip
     public string Archive;                // found archive, or null
@@ -24,16 +24,20 @@ static class Mods
     // install order matters: the intro skip replaces some of the remastered movies (logos), so it comes after them
     public static readonly ModDef[] All = new ModDef[] {
         new ModDef { Id = "audiologs", Name = "High Quality Audio Logs", NameRu = "Аудиологи в высоком качестве", Default = true,
+            Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/17?tab=files",
             Pattern = @"High.?Quality.?Audio.?Logs.*\.(rar|zip|7z)$",
             Target = f => Path.GetFileName(f).Equals("TransGame.xxx", StringComparison.OrdinalIgnoreCase) ? @"TransGame\CookedPC\TransGame.xxx" : null },
         new ModDef { Id = "fmv", Name = "FMV Remaster (cutscene videos)", NameRu = "Ремастер видеороликов", Default = true,
+            Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/9?tab=files",
             Pattern = @"FMV.?Remaster.*\.(7z|rar|zip)$",
             Target = f => f.EndsWith(".bik", StringComparison.OrdinalIgnoreCase) ? @"TransGame\Movies\" + Path.GetFileName(f) : null },
         new ModDef { Id = "nointro", Name = "Skip the intro videos", NameRu = "Пропуск вступительных роликов", Default = true,
+            Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/12?tab=files",
             Pattern = @"No.?Intro.*\.(zip|rar|7z)$",
             Target = f => f.EndsWith(".bik", StringComparison.OrdinalIgnoreCase) ? @"TransGame\Movies\" + Path.GetFileName(f) : null },
         new ModDef { Id = "configurator", Name = "Advanced Configurator (F1 menu: FPS, FOV, graphics)", NameRu = "Advanced Configurator (меню F1: FPS, FOV, графика)", Default = false,
             Pattern = @"Advanced.?Configurator.*\.(zip|rar|7z)$",
+            Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/120?tab=files",
             Note = "loaded by the co-op mod", NoteRu = "загружается кооп-модом",
             Target = f => {
                 string n = Path.GetFileName(f);
@@ -48,6 +52,27 @@ static class Mods
                     return @"Binaries\reshade-shaders\" + (n == "README.txt" ? "FoCCoop_ReShade_README.txt" : n);
                 return @"Binaries\" + f; } },
     };
+
+    // a download is complete when the file exists and its size did not change since the previous call (browsers write
+    // to .crdownload/.part names first, which the patterns do not match, but some write in place)
+    static readonly Dictionary<string, long> lastSize = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+    public static bool Stable(string f)
+    {
+        if (f == null) return false;
+        if (f.StartsWith("(")) return true;   // bundled
+        long n; try { n = new FileInfo(f).Length; } catch { return false; }
+        long prev; bool had = lastSize.TryGetValue(f, out prev);
+        lastSize[f] = n;
+        if (n <= 0) return false;
+        try { using (File.Open(f, FileMode.Open, FileAccess.Read, FileShare.Read)) { } } catch { return false; }   // still being written
+        return had && prev == n;
+    }
+
+    public static void OpenPage(ModDef m)
+    {
+        if (string.IsNullOrEmpty(m.Url)) return;
+        try { Process.Start(new ProcessStartInfo(m.Url) { UseShellExecute = true }); } catch { }
+    }
 
     public static List<string> SearchDirs(string extra)
     {
