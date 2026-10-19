@@ -88,6 +88,14 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   `crashtest` in `foc_cmd.txt` writes `foc_crash_<pid>_test0.dmp` without crashing.
 - Log line `stat:` every 3 s (LOCAL/REMOTE, pawn, xyz, spawn state); player pawns every 15 s.
 
+## Steam relay
+- `Binaries\foc_relay\FoCRelay.exe` + `steam_api.dll` (real for players, mock in test copies via `Deploy-Relay`);
+  `relay.status` (role, state, lobby, peers, tx, rx) and `relay.cmd` (`quit`, `invite`) next to it.
+- The host's first bind in 7777..7800 is an early LAN socket (7777); the listen socket (7778) comes with the map. The
+  host relay waits until the tick sees the game and a controller.
+- Mock: `%TEMP%\foc_mock_steam` (users/, lobbies/), SteamID from the exe folder, messages on 127.0.0.1:41000+.
+- Real Steam on this PC: relay and TFOC.exe (213120) run side by side on one account.
+
 ## Testing
 - Copies: `E:\FoC-coop\A` (host) and `B` (guest, `instance=B`). Never touch the Steam install in Program Files.
   `Stop-Foc` (dev.ps1) stops only processes started from `E:\FoC-coop\*`.

@@ -97,6 +97,7 @@ static void RunCommandNow(const std::string& cmd) {
 }
 
 static void InjectCommand(const char* args);
+static void JoinViaSteam();
 static volatile LONG g_shotReq = 0;      // set by `shot`, served by the next final EndScene (SaveBackBuffer)
 static wchar_t g_shotPath[MAX_PATH];
 static bool HandleLocalCommand(const std::string& c) {   // test commands that do not need the game thread
@@ -109,6 +110,7 @@ static bool HandleLocalCommand(const std::string& c) {   // test commands that d
         return true;
     }
     if (c.rfind("input ", 0) == 0) { InjectCommand(c.c_str() + 6); return true; }
+    if (c == "steamjoin") { JoinViaSteam(); return true; }   // same as the Join page's "Join a friend through Steam"
     return false;
 }
 
@@ -275,7 +277,7 @@ static std::string MyLanIps() {
 // A session opened from the running front end is thrown back to the menu by the game's dead online layer, while a map
 // given on the command line works. So Host/Join restart the game with the map URL (same arguments, new URL).
 static bool g_fastTravel = false;   // experimental: run `open` inside the running game instead of restarting
-static void RelaunchWithUrl(const char* url) {
+static void RelaunchWithUrl(const char* url, const char* extra = "") {
     int argc = 0; wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
     std::wstring cmd = L"\"" + std::wstring(exe) + L"\"";
@@ -286,8 +288,10 @@ static void RelaunchWithUrl(const char* url) {
         const wchar_t* a = argv[i];
         bool isOpt = a[0] == L'-' || !_wcsnicmp(a, L"ResX=", 5) || !_wcsnicmp(a, L"ResY=", 5);
         if (!isOpt && !skippedUrl) { skippedUrl = true; continue; }   // the old map URL
+        if (!_wcsicmp(a, L"-steamrelay")) continue;                       // set again below when wanted
         cmd += L" " + std::wstring(a);
     }
+    if (extra && extra[0]) { wchar_t we[128]; MultiByteToWideChar(CP_ACP, 0, extra, -1, we, 128); cmd += L" " + std::wstring(we); }
     if (argv) LocalFree(argv);
     wchar_t dir[MAX_PATH]; wcscpy_s(dir, exe); wchar_t* sl = wcsrchr(dir, L'\\'); if (sl) *sl = 0;
     // start the new copy a few seconds later, after this process (and its single-instance mutex) is gone
@@ -307,6 +311,75 @@ static void RunSessionCommand(const char* url, const char* openCmd) {
     else RelaunchWithUrl(url);
 }
 
+// ---------------------------------------------------------------- Steam relay (FoCRelay.exe in Binaries\foc_relay)
+// Friends join through Steam (AppID 480 "Spacewar") without IPs: the host runs `FoCRelay host <gamePort>`, the guest runs
+// `FoCRelay join <lobby|auto> 7790` and its game connects to 127.0.0.1:7790. The relay's own steam_api.dll lives in
+// foc_relay so it never replaces the game's Steam_api.dll.
+static const int kRelayLocalPort = 7790;
+static bool g_useSteam = true;            // Host page checkbox
+static char g_joinLobby[32] = "";         // Join page: lobby id, empty = first friend who hosts
+static char g_relayState[160] = "";
+static unsigned long long g_relayLobby = 0; static int g_relayPeers = 0; static char g_relayRole[16] = "";
+static void RelayDir(wchar_t* out) { GetModuleFileNameW(nullptr, out, MAX_PATH); wchar_t* sl = wcsrchr(out, L'\\'); if (sl) wcscpy_s(sl, 32, L"\\foc_relay"); }
+static bool StartRelay(const char* args) {
+    wchar_t dir[MAX_PATH]; RelayDir(dir);
+    wchar_t st[MAX_PATH]; _snwprintf_s(st, _TRUNCATE, L"%s\\relay.status", dir); DeleteFileW(st);
+    wchar_t wa[128]; MultiByteToWideChar(CP_ACP, 0, args, -1, wa, 128);
+    wchar_t cmd[MAX_PATH + 160]; _snwprintf_s(cmd, _TRUNCATE, L"\"%s\\FoCRelay.exe\" %s", dir, wa);
+    STARTUPINFOW si = {sizeof(si)}; PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, dir, &si, &pi)) {
+        Log("relay: cannot start %ls (%lu)", cmd, GetLastError()); strcpy_s(g_relayState, "FoCRelay.exe not found in Binaries\\foc_relay"); return false;
+    }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    Log("relay: started %ls", cmd); return true;
+}
+static void ReadRelayStatus() {   // relay.status: key=value lines
+    wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\relay.status", dir);
+    FILE* f = nullptr; _wfopen_s(&f, p, L"r"); if (!f) return;
+    char line[200];
+    while (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line); while (l && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0;
+        if (!strncmp(line, "state=", 6)) strncpy_s(g_relayState, line + 6, _TRUNCATE);
+        else if (!strncmp(line, "lobby=", 6)) g_relayLobby = _strtoui64(line + 6, nullptr, 10);
+        else if (!strncmp(line, "peers=", 6)) g_relayPeers = atoi(line + 6);
+        else if (!strncmp(line, "role=", 5)) strncpy_s(g_relayRole, line + 5, _TRUNCATE);
+    }
+    fclose(f);
+}
+static void RelayCommand(const char* c) {
+    wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\relay.cmd", dir);
+    FILE* f = nullptr; _wfopen_s(&f, p, L"w"); if (f) { fputs(c, f); fclose(f); }
+}
+// host started with -steamrelay: once the game's real listen port is known, start the host relay
+static DWORD WINAPI HostRelayThread(LPVOID) {
+    // the first bind in 7777..7800 is an early LAN socket, the listen socket comes when the map loads: wait for the map
+    for (int i = 0; i < 600 && !(g_hostBoundPort && g_to.ngame > 0 && g_to.npc > 0); i++) Sleep(500);
+    Sleep(2000);
+    if (!g_hostBoundPort) { Log("relay: no listen port, host relay not started"); return 0; }
+    char a[64]; _snprintf_s(a, _TRUNCATE, "host %ld", g_hostBoundPort);
+    StartRelay(a);
+    return 0;
+}
+// guest: start the join relay, wait until it is in the lobby, then restart the game into 127.0.0.1:7790
+static DWORD WINAPI JoinSteamThread(LPVOID) {
+    char a[96]; _snprintf_s(a, _TRUNCATE, "join %s %d", g_joinLobby[0] ? g_joinLobby : "auto", kRelayLocalPort);
+    g_relayState[0] = 0;
+    if (!StartRelay(a)) return 0;
+    for (int i = 0; i < 120; i++) {
+        Sleep(500); ReadRelayStatus();
+        if (!strncmp(g_relayState, "joined", 6) || !strncmp(g_relayState, "connected", 9)) {
+            char url[64]; _snprintf_s(url, _TRUNCATE, "127.0.0.1:%d", kRelayLocalPort);
+            RelaunchWithUrl(url);
+            return 0;
+        }
+        if (strstr(g_relayState, "failed") || strstr(g_relayState, "not a ") || strstr(g_relayState, "missing")) return 0;
+    }
+    strcpy_s(g_relayState, "no friend hosting found within 60 s");
+    RelayCommand("quit");
+    return 0;
+}
+static void JoinViaSteam() { CreateThread(nullptr, 0, JoinSteamThread, nullptr, 0, nullptr); }
+
 static void StartHosting() {
     const MapEntry& m = g_hostMode == 0 ? kChapters[g_hostMapStory] : kEscalation[g_hostMapEsc];
     char url[400], cmd[420];
@@ -316,6 +389,7 @@ static void StartHosting() {
     strncpy_s(g_hostTitle, m.title, _TRUNCATE); strcpy_s(g_hostModeName, g_hostMode == 0 ? "Story" : "Escalation");
     g_hostMax = g_hostPlayers; g_hostBoundPort = 0; g_captureBind = 1; g_hosting = 1;
     g_menuOpen = 0;
+    if (g_useSteam && !g_fastTravel) { RelaunchWithUrl(url, "-steamrelay"); return; }
     RunSessionCommand(url, cmd);
 }
 static void JoinServer(const char* ip, int port) {
@@ -386,6 +460,8 @@ static void DrawHostPage() {
     }
     ImGui::EndChild();
     ImGui::SliderInt("Max players", &g_hostPlayers, 2, 5);
+    ImGui::Checkbox("Through Steam: friends join from the Join page, no IP or port forwarding", &g_useSteam);
+    Tooltip("Uses Steam's relay network through the free Spacewar app (AppID 480). Steam must be running.");
     ImGui::InputInt("Game port", &g_gamePort, 0, 0);
     ImGui::Spacing();
     ImGui::TextDisabled("%s", g_hostMode == 0 ? "Story co-op is experimental: only chapter 1 has been tested." : "Escalation: wave survival, up to 5 players.");
@@ -426,6 +502,11 @@ static void DrawJoinPage() {
     }
     ImGui::EndChild();
     ImGui::Spacing();
+    ImGui::TextUnformatted("Through Steam (a friend hosts with \"Through Steam\"):");
+    ImGui::SetNextItemWidth(260); ImGui::InputText("Lobby id (empty = any friend who hosts)", g_joinLobby, sizeof(g_joinLobby));
+    if (ImGui::Button("Join a friend through Steam", ImVec2(ImGui::GetFontSize() * 15.f, 0))) JoinViaSteam();
+    if (g_relayState[0] && !strcmp(g_relayRole, "join")) { ImGui::SameLine(); ImGui::TextDisabled("%s", g_relayState); }
+    ImGui::Spacing();
     ImGui::TextUnformatted("Or connect by address:");
     ImGui::SetNextItemWidth(260); ImGui::InputText("IP / host", g_joinIp, sizeof(g_joinIp));
     ImGui::SetNextItemWidth(120); ImGui::InputInt("Port", &g_gamePort, 0, 0);
@@ -447,6 +528,11 @@ static void DrawMainPage() {
     if (g_hosting) {
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "Hosting: %s - %s (max %d)", g_hostModeName, g_hostTitle, g_hostMax);
+    }
+    if (g_relayState[0]) {
+        ImGui::Text("Steam: %s", g_relayState);
+        if (g_relayLobby) { ImGui::SameLine(); ImGui::TextDisabled("(lobby %llu, friends %d)", g_relayLobby, g_relayPeers); }
+        if (!strcmp(g_relayRole, "host") && ImGui::Button("Invite friends (Steam overlay)")) RelayCommand("invite");
     }
     if (ImGui::Button(g_fastTravel ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; if (g_fastTravel) QueueCommand("disconnect"); else RelaunchWithUrl(""); }
     if (ImGui::Button("About / status", bs)) g_page = 3;
@@ -507,6 +593,7 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
         Log("menu: overlay initialised on device %p window %p", dev, g_gameWnd);
     }
     ImGuiIO& io = ImGui::GetIO();
+    { static DWORD lastRelay = 0; if (GetTickCount() - lastRelay > 1000) { lastRelay = GetTickCount(); ReadRelayStatus(); } }
     // toggle on F10 (edge)
     static bool f10prev = false; bool f10 = KeyDown(VK_F10);
     if (f10 && !f10prev) { g_menuOpen = !g_menuOpen; if (g_menuOpen) { g_page = 0; ClipCursor(nullptr); } }
@@ -783,6 +870,7 @@ static void InitHostStateFromCmdline() {
     strncpy_s(g_hostTitle, title, _TRUNCATE); strcpy_s(g_hostModeName, mode == 1 ? "Escalation" : "Story");
     g_hostMax = maxp; g_hostBoundPort = 0; g_captureBind = 1; g_hosting = 1;
     Log("menu: started as host of '%s' (%s), max %d", title, g_hostModeName, maxp);
+    if (strstr(cl, "-steamrelay")) { Log("menu: hosting through Steam (relay)"); CreateThread(nullptr, 0, HostRelayThread, nullptr, 0, nullptr); }
 }
 
 static void OverlayStart() {

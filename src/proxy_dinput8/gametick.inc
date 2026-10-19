@@ -791,9 +791,11 @@ static void GameTick() {
     g_playerCount = t.npc;
     TickForceChar(t);
     TickMaxPlayers(t);
-    TickCtrlShare(t);
-    TickHostFirst(t);
-    TickRescue(t);
+    if (t.ngame > 0) {   // host only: on a client the old front-end controller lingers during travel, and sharing its
+        TickCtrlShare(t); // objects into the new controller / reordering the list dropped the guest (2a, 2026-10-19)
+        TickHostFirst(t);
+        TickRescue(t);
+    }
     TickSpawnHelper(t);
     TickViewFix(t);
     TickPossessFix(t);

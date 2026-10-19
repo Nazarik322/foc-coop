@@ -54,9 +54,9 @@ public class W {
 }
 "@ -ReferencedAssemblies System.Drawing
 
-function Start-Foc([string]$Copy, [string]$MapUrl = "", [int]$W = 960, [int]$H = 540) {
+function Start-Foc([string]$Copy, [string]$MapUrl = "", [int]$W = 960, [int]$H = 540, [string[]]$Extra = @()) {
   $bin = "E:\FoC-coop\$Copy\Binaries"
-  $a = @(); if ($MapUrl) { $a += "`"$MapUrl`"" }; $a += @("-windowed", "ResX=$W", "ResY=$H", "-nohomedir")
+  $a = @(); if ($MapUrl) { $a += "`"$MapUrl`"" }; $a += @("-windowed", "ResX=$W", "ResY=$H", "-nohomedir") + @($Extra | Where-Object { $_ })
   $p = Start-Process -FilePath "$bin\TFOC.exe" -ArgumentList $a -WorkingDirectory $bin -PassThru
   return $p.Id
 }
@@ -84,11 +84,30 @@ function Wait-FocState([string]$Copy, [scriptblock]$Cond, [int]$Timeout = 90) {
 }
 
 function Build-Deploy {
-  Stop-Foc; Start-Sleep 2
+  Stop-Foc; Stop-Relay; Start-Sleep 2
   $o = & cmd.exe /c "C:\GitRepo\foc-coop\build.bat" 2>&1
   $err = $o | Select-String "error"; if ($err) { $err; return $false }
   foreach ($c in "A","B") { Copy-Item C:\GitRepo\foc-coop\build\dinput8.dll "E:\FoC-coop\$c\Binaries\dinput8.dll" -Force }
+  Deploy-Relay
   return $true
+}
+
+# Steam relay into Binaries\foc_relay of the test copies. Test copies get the mock steam_api.dll (two players on one
+# PC cannot both log into Steam); -Real puts the real 32-bit steam_api.dll (Steamworks.NET 2025.164.1) instead.
+function Deploy-Relay([switch]$Real, [string[]]$Copies = @("A", "B")) {
+  $o = & cmd.exe /c "C:\GitRepo\foc-coop\relay\build_relay.bat" 2>&1
+  if ($o | Select-String " error") { $o | Select-String " error"; return }
+  $api = if ($Real) { "C:\GitRepo\coop-anything\local\tools\steamworksnet\x\Windows-x86\steam_api.dll" } else { "C:\GitRepo\foc-coop\relay\build\mock\steam_api.dll" }
+  foreach ($c in $Copies) {
+    $d = "E:\FoC-coop\$c\Binaries\foc_relay"; New-Item -ItemType Directory -Force $d | Out-Null
+    Copy-Item C:\GitRepo\foc-coop\relay\build\FoCRelay.exe $d -Force; Copy-Item $api "$d\steam_api.dll" -Force
+  }
+}
+function Stop-Relay { Get-Process FoCRelay -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "E:\FoC-coop\*" } | Stop-Process -Force }
+function Read-RelayStatus([string]$Copy) {
+  $f = "E:\FoC-coop\$Copy\Binaries\foc_relay\relay.status"; $h = @{}
+  if (Test-Path $f) { Get-Content $f | ForEach-Object { $k, $v = $_ -split '=', 2; if (-not $h.ContainsKey($k)) { $h[$k] = $v } } }
+  return $h
 }
 
 function Find-CopyProc([string]$Copy) {

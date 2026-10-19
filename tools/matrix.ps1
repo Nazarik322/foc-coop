@@ -10,7 +10,8 @@ param(
   [int]$AliveSec = 60,      # then both games must stay alive and keep their pawns this long
   [switch]$Move,            # also hold W in each window (real input, needs focus) and require the pawns to move
   [switch]$Look,            # in-game screenshots of host and guest before/after both walk forward (injected input, no focus)
-  [switch]$Keep             # leave both games running after the last map
+  [switch]$Keep,            # leave both games running after the last map
+  [switch]$Steam            # through FoCRelay (Steam Spacewar; test copies use the mock steam_api.dll)
 )
 . "$PSScriptRoot\dev.ps1"
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -23,6 +24,7 @@ function Save-Artifacts($map) {
     $bin = "E:\FoC-coop\$c\Binaries"
     Copy-Item "$bin\foc_coop.log" "$Out\$map`_$c.log" -ErrorAction SilentlyContinue
     Copy-Item "$bin\foc_state.json" "$Out\$map`_$c.state.json" -ErrorAction SilentlyContinue
+    Copy-Item "$bin\foc_relay\relay.status" "$Out\$map`_$c.relay.status" -ErrorAction SilentlyContinue
     Get-ChildItem "$bin\foc_crash_*.dmp" -ErrorAction SilentlyContinue | ForEach-Object { Move-Item $_.FullName "$Out\$map`_$c`_$($_.Name)" -Force }
   }
 }
@@ -75,23 +77,39 @@ foreach ($map in $Maps) {
     $line = "RESULT: SKIP $map no display (remote desktop window minimized or session locked)"
     Add-Content $report "$(Get-Date -Format s) $line"; $line; continue
   }
-  Stop-Foc; Start-Sleep 3
+  Stop-Foc; Stop-Relay; Start-Sleep 3
   Clear-FocState A; Clear-FocState B
+  if ($Steam) { Remove-Item -Recurse -Force "$env:TEMP\foc_mock_steam", "E:\FoC-coop\A\Binaries\foc_relay\relay.status", "E:\FoC-coop\B\Binaries\foc_relay\relay.status" -ErrorAction SilentlyContinue }
   Get-ChildItem "E:\FoC-coop\A\Binaries\foc_crash_*.dmp", "E:\FoC-coop\B\Binaries\foc_crash_*.dmp" -ErrorAction SilentlyContinue | Remove-Item
   $isStory = $map -like "L*"
   $game = if ($isStory) { "TnCampaignGame" } else { "TnSurvivalGame" }
   $reason = $null; $detail = ""; $pidB = $null
-  $pidA = Start-Foc "A" "$map`?Game=TransContent.$game`?listen`?MaxPlayers=$Players" 960 540
+  $extraA = @(); if ($Steam) { $extraA = @("-steamrelay") }
+  $pidA = Start-Foc "A" "$map`?Game=TransContent.$game`?listen`?MaxPlayers=$Players" 960 540 -Extra $extraA
   # 1. the host is in the map, with the expected game class (checks the mode before anything else)
   $sA = Wait-FocState A { param($s) $s.map -eq $map -and $s.role -eq "host" -and $s.port -gt 0 } 180
   if (-not $sA) { $s = Read-FocState A; $reason = "host not in map (alive=$(Alive $pidA) map=$($s.map) role=$($s.role) port=$($s.port))" }
   elseif ($sA.game -ne $game) { $reason = "host game class is $($sA.game), expected $game" }
+  if (-not $reason -and $Steam) {
+    # Steam mode: the host's DLL starts FoCRelay host; its lobby must open
+    for ($i = 0; $i -lt 60 -and (Read-RelayStatus A)["state"] -notlike "hosting*"; $i++) { Start-Sleep 1 }
+    $rs = Read-RelayStatus A
+    if ($rs["state"] -notlike "hosting*") { $reason = "host relay not hosting (state: $($rs['state']))" } else { $detail += " lobby=$($rs['lobby'])" }
+  }
   if (-not $reason) {
     $hA = Wait-FocWindow $pidA 30
-    # 2. the guest joins the same map
-    $pidB = Start-Foc "B" "127.0.0.1:$($sA.port)" 960 540
-    $sB = Wait-FocState B { param($s) $s.map -eq $map -and $s.role -eq "client" } 150
-    if (-not $sB) { $s = Read-FocState B; $reason = "guest not in map (alive=$(Alive $pidB) map=$($s.map) role=$($s.role))" }
+    # 2. the guest joins the same map (Steam mode: from the main menu with the Join page's Steam button = `steamjoin`)
+    if ($Steam) {
+      $pidB = Start-Foc "B" "" 960 540
+      $s0 = Wait-FocState B { param($s) $s.map -like "UI_FrontEnd*" } 120
+      Start-Sleep 5; Send-Cmd B "steamjoin"
+      $sB = Wait-FocState B { param($s) $s.map -eq $map -and $s.role -eq "client" } 180
+      $p = Find-CopyProc B; if ($p) { $pidB = $p.Id }
+    } else {
+      $pidB = Start-Foc "B" "127.0.0.1:$($sA.port)" 960 540
+      $sB = Wait-FocState B { param($s) $s.map -eq $map -and $s.role -eq "client" } 150
+    }
+    if (-not $sB) { $s = Read-FocState B; $reason = "guest not in map (alive=$(Alive $pidB) map=$($s.map) role=$($s.role) relay=$((Read-RelayStatus B)['state']))" }
   }
   if (-not $reason) {
     $sA = Wait-FocState A { param($s) $s.players.Count -ge 2 } 60
@@ -144,6 +162,11 @@ foreach ($map in $Maps) {
     }
   }
   if ($Look -and -not $reason -and (Alive $pidA) -and $pidB -and (Alive $pidB)) { $script:detail = $detail; $r = Look-Both $map $pidA $pidB; $detail = $script:detail; if ($r) { $reason = $r + " |" + $detail } }
+  if ($Steam -and -not $reason) {   # the game traffic really went through the relays
+    $ra = Read-RelayStatus A; $rb = Read-RelayStatus B
+    $detail += " relay host peers=$($ra['peers']) tx=$($ra['tx']) rx=$($ra['rx']) | guest state='$($rb['state'])' tx=$($rb['tx'])"
+    if ([int64]$ra['rx'] -le 0 -or [int64]$rb['tx'] -le 0) { $reason = "no game traffic through the Steam relay |$detail" }
+  }
   Save-Artifacts $map
   $line = if ($reason) { $fail++; "RESULT: FAIL $map $reason" } else { $pass++; "RESULT: PASS $map$detail" }
   Add-Content $report "$(Get-Date -Format s) $line"

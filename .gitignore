@@ -3,3 +3,4 @@ build/
 *.exp
 *.lib
 *.log
+relay/build/

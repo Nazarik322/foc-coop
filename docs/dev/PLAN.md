@@ -4,6 +4,8 @@
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
 ## Next step (where to resume)
+0. Real Steam test with a friend (owner): both need the mod with `Binariesoc_relay` (real steam_api.dll); host F10 -> Host
+   (Through Steam), friend F10 -> Join -> "Join a friend through Steam".
 **Before every DLL commit run the "must pass" set in [TESTS.md](TESTS.md).**
 1. All 13 chapters together (stage 7, R1) with `-Look`; rerun the must-pass set
    with the desktop shown (last run had SKIPs).

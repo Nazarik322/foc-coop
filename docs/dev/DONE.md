@@ -3,6 +3,24 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-19 (evening): Steam (Spacewar 480) relay
+
+- **`relay/focrelay.c` -> `FoCRelay.exe`** (32-bit, flat Steam API loaded at run time, playbook HXCoop pattern):
+  `host <gamePort>` opens a friends-only lobby and gives each friend a local UDP socket to the game;
+  `join <lobby|auto> 7790` finds a friend who hosts and carries the guest game's packets. Lives in
+  `Binaries\foc_relay` with its own `steam_api.dll` (Steamworks.NET 2025.164.1 x86, SHA-256 fdafb7c6...eb65da).
+- **In-game menu**: Host has "Through Steam" (on by default; the host restarts with `-steamrelay` and the DLL starts the
+  relay once the map listens), Join has "Join a friend through Steam" (+ optional lobby id), main page shows the
+  relay state, lobby, friends and an "Invite friends (Steam overlay)" button. Test command `steamjoin`.
+- **Mock `steam_api.dll`** (`relay/mock`) for two players on one PC. Found on the way: delivering messages out of order
+  (swap-remove) stalls the UE3 handshake; fixed (FIFO).
+- Verified: relay round trip without the game 3/3; **chapter 2b through the relay (mock): PASS** (guest joined from the
+  menu, pawn, both moved, 60 s alive, host relay tx 182 KB / rx 86 KB). **Real Steam, host side**: InitFlat OK while
+  TFOC.exe runs on the same account, real friends-only lobby created, relay aimed at game port 7778.
+  Not tested: a real second Steam account (needs a friend). Also PASS through the relay: Escalation Ark, chapter 3b.
+- **Guest sometimes dropped right after loading (2a)**: the host-only fixes (ctrlshare, hostfirst, rescue) also ran on
+  the client and copied objects of the old front-end controller into the new one. Now host only; 2a 3/3 PASS.
+
 ## 2026-10-19 (afternoon, stage 1 of the new plan)
 
 - **B1 fixed in chapters 1, 2a, 3b, 4c, 5, 9** (`spawnshift`): cause found with a hardware breakpoint on the object
