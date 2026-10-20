@@ -48,6 +48,7 @@ static bool g_hostFirst = false;
 static volatile LONG g_playerCount = 0;   // player controllers seen by the host (shown in the lobby list)
 static bool g_holdSpawn = false;
 static bool g_rescue = false;
+static bool g_tpSync = false;   // ini tpsync, tp.inc
 static int g_spawnAfter = 0;
 static volatile LONG g_releaseSpawn = 0;
 static bool g_ctrlDiag = false;
@@ -1894,6 +1895,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_hostFirst = GetPrivateProfileIntW(L"foc_coop", L"hostfirst", 0, ini2) != 0;
         g_holdSpawn = GetPrivateProfileIntW(L"foc_coop", L"holdspawn", 0, ini2) != 0;
         g_rescue = GetPrivateProfileIntW(L"foc_coop", L"rescue", 0, ini2) != 0;
+        g_tpSync = GetPrivateProfileIntW(L"foc_coop", L"tpsync", 0, ini2) != 0;
         g_spawnAfter = GetPrivateProfileIntW(L"foc_coop", L"spawnafter", 0, ini2);
         g_ctrlDiag = GetPrivateProfileIntW(L"foc_coop", L"ctrldiag", 0, ini2) != 0;
         { wchar_t w[160] = {0}; GetPrivateProfileStringW(L"foc_coop", L"ctrlallow", L"OnlineSubsystem,OnlinePlayerData,ProfileSettings,UIController", w, 160, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_ctrlAllow, sizeof(g_ctrlAllow), nullptr, nullptr); }
@@ -1924,7 +1926,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);
         if (g_tickMs < 20) g_tickMs = 20;
         if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
-            g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = true;
+            g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = g_tpSync = true;
             g_maxPlayers = 5;
         }
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"instclass", L"", w, 64, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_instClass, sizeof(g_instClass), nullptr, nullptr); }
@@ -1933,6 +1935,7 @@ static void LoadConfig(const wchar_t* dir) {
 
 #include "gametick.inc"
 #include "sync.inc"
+#include "tp.inc"
 #include "overlay.inc"
 
 // ---------------------------------------------------------------- proxy export

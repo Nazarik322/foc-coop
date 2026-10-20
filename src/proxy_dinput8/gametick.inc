@@ -208,6 +208,7 @@ static void TickHostFirst(const TickObjs& t) {
 // ---------------------------------------------------------------- rescue
 // When a player pawn has fallen far below another player's pawn (its streamed-out area no longer exists on the host),
 // teleport it next to the other pawn. Actor.Location is at +0xe4, with a copy at +0x134.
+static bool TpGuestNear(BYTE* host, BYTE* guest, const float* off, const char* why);   // tp.inc
 static void TickRescue(const TickObjs& t) {
     if (!g_rescue || t.npc < 2) return;
     BYTE* pawns[16]; int np = 0;
@@ -228,6 +229,7 @@ static void TickRescue(const TickObjs& t) {
         if (!(fticks[k] >= 4 && ref[2] - loc[2] > 4000.0f && ref[2] > -20000.0f)) continue;
         fticks[k] = 0;
         static volatile LONG nl = 0; if (InterlockedIncrement(&nl) <= 20) Log("rescue: pawn %p fell to z=%.0f, moving next to %p (%.0f,%.0f,%.0f)", pawns[a], loc[2], pawns[hi], ref[0], ref[1], ref[2]);
+        if (g_tpSync && TpGuestNear(pawns[hi], pawns[a], nullptr, "rescue")) continue;   // tp.inc: native SetLocation
         float nx = ref[0] + 250.0f * (a + 1), ny = ref[1] + 60.0f, nz = ref[2] + 120.0f;
         loc[0] = nx; loc[1] = ny; loc[2] = nz;
         float* loc2 = (float*)(pawns[a] + 0x134); loc2[0] = nx; loc2[1] = ny; loc2[2] = nz;

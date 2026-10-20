@@ -340,6 +340,7 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("chapter ", 0) == 0) { ShowChapterLocal(g_to, (float)atof(cmd.c_str() + 8)); return; }
     if (cmd.rfind("dump ", 0) == 0) { DumpClass(cmd.c_str() + 5); return; }
     if (cmd.rfind("fall ", 0) == 0) { MovePawnCommand(cmd.c_str() + 5, true); return; }
+    if (cmd.rfind("tpg", 0) == 0) { TpGuestCommand(cmd.size() > 4 ? cmd.c_str() + 4 : ""); return; }
     if (cmd.rfind("tp ", 0) == 0) { MovePawnCommand(cmd.c_str() + 3, false); return; }
     if (!g_exec && !FindExec()) { Log("menu: cannot run '%s': %s", cmd.c_str(), g_execStatus); return; }
     wchar_t w[512]; MultiByteToWideChar(CP_ACP, 0, cmd.c_str(), -1, w, 512);
