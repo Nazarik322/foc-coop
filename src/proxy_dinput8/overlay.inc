@@ -354,6 +354,8 @@ static void RunCommandNow(const std::string& cmd) {
 }
 
 static void InjectCommand(const char* args);
+static void InputCommand(const char* args);   // input.inc
+static void InputStart();                     // input.inc
 static void JoinViaSteam();
 static volatile LONG g_shotReq = 0;      // set by `shot`, served by the next final EndScene (SaveBackBuffer)
 static volatile LONG g_shotUiReq = 0;    // `shotui`: the same, but taken after the co-op menu was drawn
@@ -371,7 +373,7 @@ static bool HandleLocalCommand(const std::string& c) {   // test commands that d
         return true;
     }
     if (c.rfind("menu ", 0) == 0) { g_menuReq = c.substr(5) == "off" ? 99 : atoi(c.c_str() + 5); return true; }
-    if (c.rfind("input ", 0) == 0) { InjectCommand(c.c_str() + 6); return true; }
+    if (c.rfind("input ", 0) == 0) { InputCommand(c.c_str() + 6); return true; }
     if (c == "steamjoin") { JoinViaSteam(); return true; }   // same as the Join page's "Join a friend through Steam"
     return false;
 }
@@ -1250,6 +1252,7 @@ static void OverlayStart() {
     o_Create9 = (PFN_Create9)Resolve("d3d9.dll", "Direct3DCreate9");
     int n = o_Create9 ? PatchIat((void*)o_Create9, (void*)h_Direct3DCreate9) : 0;
     Log("menu: Direct3DCreate9 import patched (%d)", n);
+    InputStart();
     CreateThread(nullptr, 0, CmdThread, nullptr, 0, nullptr);
     CreateThread(nullptr, 0, TickThread, nullptr, 0, nullptr);
     CreateThread(nullptr, 0, BeaconThread, nullptr, 0, nullptr);
