@@ -202,6 +202,13 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   destination overlapping another pawn (radius ~280 uu). Actor.Velocity +0xfc (props Velocity).
 
 ## Test commands (foc_cmd.txt in Binaries, one line)
+- `input hold <key> <ms>` / `input tap <key>` / `input mouse <dx> <dy> [ms]` / `input mode <bits>` (input.inc, stage 6):
+  key input without window focus. Keys: W A S D E Q F ... SPACE ENTER ESC TAB LSHIFT LCTRL LALT 1-5 arrows F1-F4 or
+  0xNN (DIK scancode). ini `inputinject` (default 1, 0 = off), `inputmode` (default 6: 1 DirectInput, 2 key window
+  messages, 4 GetAsyncKeyState/GetKeyState hook, 8 focus spoof). The game reads movement keys from WM_KEYDOWN plus
+  GetAsyncKeyState/GetKeyState together (either alone does not move the pawn); it creates no DirectInput keyboard
+  (only a mouse device). Menu keys and `input mouse` are untested. Send-Cmd holds one command per file: wait ~300 ms
+  between commands.
 - `tpg [dx dy dz]` (host, needs tpsync=1): move every guest pawn next to the host pawn (or by the offset).
 `shot <file>`, `shotui <file>`, `menu <page>|off`, `dump <Class> <file> [bytes]`, `props <names>`, `fall local|remote`,
 `tp local|remote x y z` (only moves falling pawns; standing pawns are put back by physics), `hp local|remote <value>`,

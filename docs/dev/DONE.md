@@ -3,6 +3,11 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-20: stage 6 unfocused input (lane input, merged 289671b)
+- input.inc: `input hold/tap/mouse/mode`; key messages + GetAsyncKeyState/GetKeyState hooks move the pawn of either
+  window without focus. inputtest PASS, twin FAIL. The old DirectInput-only `input key` never moved the pawn (the game
+  reads no DirectInput keyboard). Next: use it for the ESC_Ark character pick and move/look tests (infra files).
+
 ## 2026-10-20: B15 native teleport (lane tp, merged b9c29c7 + 27d8c61)
 - tp.inc: host calls AActor::SetLocation (0x93c9d0) on the guest pawn; `tpg` test command; `rescue` uses it
   (`tpsync`, default on). tptest PASS, twin FAIL; must-pass all PASS. Real streaming unload still to try.

@@ -33,6 +33,7 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | B21 guest frozen after interacting | `ctrlskip` default Camera,Interact,ContextualCommand,Form | playbot story with "interact" actions over Steam: guest desync < 400 | `ctrlskip=Camera`: TnInteractStore copied (log) | 2026-10-19: log check only |
 | B13 intro starts before the guest loaded | `waitguest` (Pauser until guest ready, movies over) | matrix L06: host log "waitguest: guest ready, no movie playing -> unpaused" after the guest's "movie: closed" | `waitguest=0` | 2026-10-19: PASS (twin not run yet) |
 | B15 teleport instead of falling | `tpsync` (tp.inc) + rescue | `tools/tptest.ps1 -Auto` (L06): tpg away/back, guest within 800 uu of the host in both views, 5000 uu drop rescued | `-Twin` (tpsync=0): FAIL (tpg does nothing; the -Auto drop also needs tpg, so its rescue phase says nothing) | 2026-10-20 lead rerun on 27d8c61: PASS 13:37:29 (rescued after 4 s), twin FAIL 13:39:12 |
+| Stage 6 unfocused input | `inputinject` (input.inc) | `tools/inputtest.ps1` (L06 -Keep, focus on another window, `input hold W 2000` on guest then host: own pawn >= 150 uu, other <= 40 uu) | `-Twin` (inputinject=0): FAIL (0 uu) | 2026-10-20 input lane: PASS [B=2904/A=0 A=2855/B=0], twin FAIL |
 | Slot lease (team mode) | `Enter-FocSlot` etc. in dev.ps1 | `tools/slottest.ps1` (no game): 5/5 PASS | - | 2026-10-20: 5/5 PASS (lead rerun) |
 
 ## Known flaky
