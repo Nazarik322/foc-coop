@@ -131,6 +131,10 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   Targets[0] = TnPlayerPawn), `chap`/`chapseq` reach the guest, the guest's ProcessEvent of "Activated" returns ok but
   NO title appears (screenshots; host shows "CHAPTER 10 THE FINAL COUNTDOWN"). Likely the global "Activated" Function
   is SequenceOp's empty one, not SetChapter's script override: next try the object's FindFunction.
+  Result: FindFunction on the instance returns null and only ONE Function "Activated" exists (owner word +0x28 = 0),
+  so the script route is closed (lane/title 35f0e10, detection + sync kept). Next: guest calls
+  GFxMoviePlayer.Invoke("_global.NotifyChapterChanged", [AS_Number N]) on its myHUD.HudMovie (what
+  TnHUD.NotifyChapterChanged does), if Invoke has a Function object; else a native route from re.
 - Owner 2026-10-19: "Chapter ..." at the start shows in the UI of only one player (which one: check).
 
 ### B17. Intro animation: one player has no character animation — open (owner report 2026-10-19)
