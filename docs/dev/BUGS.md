@@ -135,6 +135,9 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   so the script route is closed (lane/title 35f0e10, detection + sync kept). Next: guest calls
   GFxMoviePlayer.Invoke("_global.NotifyChapterChanged", [AS_Number N]) on its myHUD.HudMovie (what
   TnHUD.NotifyChapterChanged does), if Invoke has a Function object; else a native route from re.
+  Result: no Function objects for Invoke / ActionScript* / SetVariable* / NotifyChapter* (`fnlist`). TnHUD.HudMovie
+  +0x458 (props), guest myHUD valid. Blocked on a native GFx Invoke (re lane asked); lane/title 35f0e10 + 6f2cfda
+  (`fnlist`, `hudscan` probes; titletest judges the screen: white pixels of the title, FAILs on the guest for now).
 - Owner 2026-10-19: "Chapter ..." at the start shows in the UI of only one player (which one: check).
 
 ### B17. Intro animation: one player has no character animation — open (owner report 2026-10-19)
