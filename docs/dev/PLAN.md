@@ -9,13 +9,13 @@ lease, worktree builds), title (B16). Wave 2: cine, tp, input. Wave 3: merge, mu
 
 **Resume point (2026-10-20 midday, wave 2 running):**
 - infra MERGED (490c313); must-pass on it: all PASS (ESC_Ark needed a rerun, see TESTS Known flaky); Steam mock PASS.
-- re DONE: report `coop-anything\local\lanese\REPORT.md` (lead spot-checked 0x7dfef0, 0x85bf30, 0x93c9d0 call
+- re DONE: report `coop-anything\local\lanes\re\REPORT.md` (lead spot-checked 0x7dfef0, 0x85bf30, 0x93c9d0 call
   site); natives are in NOTES.md "Native functions found by the re lane"; recipes in BUGS B14-B17.
-- title (B16) running in `foc-wt	itle`: guest runs its own TnSeqAct_SetChapter; host detection via ProcessEvent detour
+- title (B16) running in `foc-wt\title`: guest runs its own TnSeqAct_SetChapter; host detection via ProcessEvent detour
   or ActivateCount. Open: Targets at +0x7c (NOTES) or +0x80 (lane code).
 - cine (B14 hide pawns `cinehide`, B17 probe `matineeanim`) `lane/cine` 32aee6b/12c2723: built, reviewed (matineeanim
   default 0 requested), waiting for the lease to run tools/cinehidetest.ps1 + twin.
-- tp (B15 teleport via 0x93c9d0, `tpsync`) running in `foc-wt	p`.
+- tp (B15 teleport via 0x93c9d0, `tpsync`) running in `foc-wt\tp`.
 - Next: merge title/cine/tp one or two at a time with must-pass; then input (Stage 6) and the R1 sweep.
 
 ## Next step (where to resume)
