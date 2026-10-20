@@ -198,6 +198,17 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   PC.ClientUpdateLevelStreamingState(name) at login.
 - TnPawn._MatineeAnimationEnabled is not replicated; BeginAnimControl exits if it is false.
 
+- re lane round 2 (2026-10-20, out/m1..m37; lead checked the bytes of 0xd558c0 in m10): script functions compiled to
+  native code. 0x713bd0 = TnSeqAct_SetChapter.Activated (native this: Targets +0x70, ChapterNumber +0x7c, myHUD via
+  [target+0x3a4]). 0xd558c0 = TnHUD::NotifyChapterChanged(float): ecx = HUD+0x10, 1 float, ret 4, gate 0xb560b0.
+  0x452ed0 = GFxMoviePlayer invoke: ecx = movie UObject (raw), push (ASValue* result, FString* method, TArray* args),
+  ret 0xc; needs [0x1a0f728] != 0 and [movie+0x30] != 0. ASValue 0x18: Type u8 +0 (2 number, 3 string, 4 bool),
+  bool bit0 +4, float +8, FString +0xc. TnHUD: HudMovie +0x458, NotifyChapterChangedCallback +0x5a8 (reflection).
+- 0xa218b0 = TnPlayerPawn::ApplyCharacter (ecx = pawn+0x10, CD*, ret 4; base 0x7e6ff0); runs the texture loader only
+  for a locally controlled pawn (IsLocallyControlled 0xb7c260). _CharacterTextureLoader +0x978, _Blueprint +0x598
+  (reflection, unverified). UpdateTransformer 0xc96670 (ecx = loader+0x10, push 1, push bp+0x10, ret 8; `this`
+  unused): marks every Texture2D of the blueprint forms (+0x7c bit 3 set, +0x88 = 0; global). ResetAll 0x9bcf60
+  clears that on all transformer textures. TnPawn.ReplicatedEvent 0x6529c0 applies a replicated character.
 - 0x93c9d0 SetLocation is callable through CallThis3 (tp.inc, verified 2026-10-20); FarMoveActor refuses a
   destination overlapping another pawn (radius ~280 uu). Actor.Velocity +0xfc (props Velocity).
 
