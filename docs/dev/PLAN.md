@@ -3,6 +3,10 @@
 **Start of every session: read this file, then [BUGS.md](BUGS.md).** Update it when the plan changes.
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
+## Team plan (2026-10-20)
+Work runs in team mode, see [TEAM.md](TEAM.md): lead + 3 agents. Wave 1: re (B15/B14/B16/B17 recipes), infra (slot
+lease, worktree builds), title (B16). Wave 2: cine, tp, input. Wave 3: merge, must-pass, R1 sweep, release on OK.
+
 ## Next step (where to resume)
 **2026-10-20 (stopped by the owner here): story bugs.** Done: B14 part (guest HUD/movement follow the host's
 cutscenes, `cinesync`, commit 4eaa654, local, not pushed). Resume with:
