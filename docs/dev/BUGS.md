@@ -198,6 +198,14 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - The owner's game runs the Advanced Configurator (texture pool 1024 MB, TextureFix4K, AF 16x); the friend's did not
   (game defaults from 2012). The installer now ticks the configurator by default (it was checked with co-op in ch6 and
   Escalation). If the friend still sees broken textures with it, compare both ReShade/configurator settings.
+- REOPENED 2026-10-20 (owner: "textures still a problem", suspects server -> client data / animations).
+  Lead lead: TnPlayerPawn.ApplyCharacter (simulated) runs `_CharacterTextureLoader.ResetAll()` +
+  `UpdateTransformer(_Blueprint, true)` (and HealthMaterialRamper.AddDefragMesh) ONLY `if (IsLocallyControlled())`.
+  So (a) the other player's robot never gets the character texture loader on either side (single player never needed
+  it), and (b) on the guest its own pawn may miss it too if ApplyCharacter ran before the Controller replicated.
+  First look (tp shots L06): the host's own Megatron is sharp with red trim, the host's Megatron seen by the guest
+  looks flatter/lower-res. Next: close-up shots of own and remote pawn on both sides, then run UpdateTransformer for
+  every TnPlayerPawn on each side (Function object or native from re).
 
 ### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 
