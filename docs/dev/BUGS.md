@@ -199,7 +199,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   (game defaults from 2012). The installer now ticks the configurator by default (it was checked with co-op in ch6 and
   Escalation). If the friend still sees broken textures with it, compare both ReShade/configurator settings.
 - REOPENED 2026-10-20 (owner: "textures still a problem", suspects server -> client data / animations).
-  Lead lead: TnPlayerPawn.ApplyCharacter (simulated) runs `_CharacterTextureLoader.ResetAll()` +
+  Lead finding: TnPlayerPawn.ApplyCharacter (simulated) runs `_CharacterTextureLoader.ResetAll()` +
   `UpdateTransformer(_Blueprint, true)` (and HealthMaterialRamper.AddDefragMesh) ONLY `if (IsLocallyControlled())`.
   So (a) the other player's robot never gets the character texture loader on either side (single player never needed
   it), and (b) on the guest its own pawn may miss it too if ApplyCharacter ran before the Controller replicated.
