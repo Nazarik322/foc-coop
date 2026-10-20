@@ -24,7 +24,7 @@ static bool TpNativeSetLocation(BYTE* pawn, float* dest) {
 }
 static float TpDist(const float* a, const float* b) { float dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2]; return sqrtf(dx * dx + dy * dy + dz * dz); }
 // Move `guest` next to `host`. off = explicit offset from the host pawn (nullptr = try a list). Returns true when the
-// guest ended up within 400 uu of the host.
+// call returned nonzero and the guest stands within 700 uu of the destination (destinations are >= 400 uu from the host).
 static bool TpGuestNear(BYTE* host, BYTE* guest, const float* off, const char* why) {
     if (!IsObjFast(host) || !IsObjFast(guest) || host == guest) return false;
     if (TpAnyCinematic()) { Log("tp: %s skipped, a cutscene is running", why); return false; }
