@@ -210,6 +210,15 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   First look (tp shots L06): the host's own Megatron is sharp with red trim, the host's Megatron seen by the guest
   looks flatter/lower-res. Next: close-up shots of own and remote pawn on both sides, then run UpdateTransformer for
   every TnPlayerPawn on each side (Function object or native from re).
+- 2026-10-20 owner: "on the client some shaders / reflections seem missing, textures dark". FOUND (test setup):
+  copy B's `Binaries\reshade-shaders` had no `Shaders` folder, so ReShade on the guest window loaded no effects
+  (A's ReShade.log compiles Curves/DPX/Vibrance/AdaptiveSharpen/Levels, B's compiles nothing): the guest picture had
+  no sharpening, colour curves or vibrance. Fixed by copying A's Shaders to B. The Steam install and build\reshade.zip
+  (installer) have the shaders. The "first look" above was taken with this difference, so it proves nothing.
+  Checked equal on A/B: TransGame\Config\PC, TFOCAdvancedConfigurator.ini, FoCCoop_ReShade_Preset.ini.
+  Still to check separately: (1) profile settings on the guest (exec TnPlayerController.UpdateLocalCacheOfProfileSettings
+  applies PCSettingManager texture quality; does it run on a network client?), (2) the character texture loader for
+  remote pawns (above), (3) host vs guest shots with ReShade off on both (pure engine difference).
 
 ### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 
