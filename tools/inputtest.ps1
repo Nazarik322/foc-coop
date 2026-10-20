@@ -46,7 +46,7 @@ try {
   # a small form of our own takes the focus (no desktop screenshot involved)
   Add-Type -AssemblyName System.Windows.Forms
   $np = New-Object Windows.Forms.Form; $np.Text = "focus holder"; $np.Width = 240; $np.Height = 120; $np.TopMost = $true
-  $np.Show(); $np.Activate(); [void][IFg]::SetForegroundWindow($np.Handle); [Windows.Forms.Application]::DoEvents(); Start-Sleep 1; [Windows.Forms.Application]::DoEvents()
+  $np.Show(); $np.Activate(); [void][W]::Focus($np.Handle); [Windows.Forms.Application]::DoEvents(); Start-Sleep 1; [Windows.Forms.Application]::DoEvents()
   $fg = [IFg]::FgPid()
   Say "foreground pid $fg (host $pa guest $pb)"
   if ($fg -eq $pa -or $fg -eq $pb -or $fg -eq 0) { Say "RESULT: SKIP could not move the focus away from the game windows"; return }
