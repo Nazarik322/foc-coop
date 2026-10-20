@@ -198,7 +198,11 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   PC.ClientUpdateLevelStreamingState(name) at login.
 - TnPawn._MatineeAnimationEnabled is not replicated; BeginAnimControl exits if it is false.
 
+- 0x93c9d0 SetLocation is callable through CallThis3 (tp.inc, verified 2026-10-20); FarMoveActor refuses a
+  destination overlapping another pawn (radius ~280 uu). Actor.Velocity +0xfc (props Velocity).
+
 ## Test commands (foc_cmd.txt in Binaries, one line)
+- `tpg [dx dy dz]` (host, needs tpsync=1): move every guest pawn next to the host pawn (or by the offset).
 `shot <file>`, `shotui <file>`, `menu <page>|off`, `dump <Class> <file> [bytes]`, `props <names>`, `fall local|remote`,
 `tp local|remote x y z` (only moves falling pawns; standing pawns are put back by physics), `hp local|remote <value>`,
 `tpmarker [dist]` (same limit), `lpexec <cmd> @<offset>` (experiment, use oexec), `oexec <target> <exec cmd>`,

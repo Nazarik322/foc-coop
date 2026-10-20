@@ -3,6 +3,10 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-20: B15 native teleport (lane tp, merged b9c29c7 + 27d8c61)
+- tp.inc: host calls AActor::SetLocation (0x93c9d0) on the guest pawn; `tpg` test command; `rescue` uses it
+  (`tpsync`, default on). tptest PASS, twin FAIL; must-pass all PASS. Real streaming unload still to try.
+
 ## 2026-10-20: team tooling (lane infra, merged 490c313)
 - Slot lease for the shared test slot, `Build-Deploy -Repo` for lane worktrees, `foc_build.txt`, copy parameters.
   `tools/slottest.ps1` 5/5 PASS (rerun by the lead); must-pass set on the merged main: see TESTS.md.

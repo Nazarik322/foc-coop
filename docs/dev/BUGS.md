@@ -107,6 +107,11 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   pawn (ClientSetLocation on either side, ServerSetLocationAndRotation; ClientTeleport has no Function object).
 - re lane 2026-10-20 (untested): host-side 0x93c9d0 AActor::SetLocation (ecx = guest pawn, FVector*), destination
   80-100 uu above the host pawn, then zero Velocity.
+- 2026-10-20 tp lane (merged b9c29c7): the host's native AActor::SetLocation (0x93c9d0, ecx = the guest pawn UObject)
+  moves the guest's pawn and it replicates (the guest's own state shows the new position, host/guest shots side by
+  side). It returns 0 within ~280 uu of the host pawn (its cylinder), so tp.inc tries 400 uu around the host at +90,
+  then 600, then above. `rescue` uses it when `tpsync=1` (default on), the old Location write stays as fallback.
+  Not yet tried on a real streaming unload (only a simulated 5000 uu drop).
 - Owner wants: teleport the other player next to him, or keep the area loaded and hold the first player (input lock or
   invisible wall) until the other one reaches the marker.
 - Note: writing Actor.Location (+0xe4/+0x134) does not move a standing pawn (physics puts it back); a real teleport

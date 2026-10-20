@@ -32,7 +32,7 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | B18 Escalation scoring | URL options + `killrules` | matrix `-Steam` ESC_Ark `-Keep`, both shoot 2 min, TAB screenshot: score, kills, money > 0 on both | URL without GameRules: all 0 (owner's session) | 2026-10-19 PASS (kills 2/1, money 707/640) |
 | B21 guest frozen after interacting | `ctrlskip` default Camera,Interact,ContextualCommand,Form | playbot story with "interact" actions over Steam: guest desync < 400 | `ctrlskip=Camera`: TnInteractStore copied (log) | 2026-10-19: log check only |
 | B13 intro starts before the guest loaded | `waitguest` (Pauser until guest ready, movies over) | matrix L06: host log "waitguest: guest ready, no movie playing -> unpaused" after the guest's "movie: closed" | `waitguest=0` | 2026-10-19: PASS (twin not run yet) |
-
+| B15 teleport instead of falling | `tpsync` (tp.inc) + rescue | `tools/tptest.ps1 -Auto` (L06): tpg away/back, guest within 800 uu of the host in both views, 5000 uu drop rescued | `-Twin` (tpsync=0): FAIL (tpg does nothing; the -Auto drop also needs tpg, so its rescue phase says nothing) | 2026-10-20 lead rerun on 27d8c61: PASS 13:37:29 (rescued after 4 s), twin FAIL 13:39:12 |
 | Slot lease (team mode) | `Enter-FocSlot` etc. in dev.ps1 | `tools/slottest.ps1` (no game): 5/5 PASS | - | 2026-10-20: 5/5 PASS (lead rerun) |
 
 ## Known flaky
@@ -40,6 +40,7 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 - Any run while the remote desktop is not shown: SKIP (B7).
 - ESC_Ark, second mode (2026-10-20, build 490c313): the guest connected and got the package list but stayed on
   TnPlayerControllerFrontEnd without a pawn (host spawn=3, 1 player). The rerun right after passed. Watch for repeats.
+- Must-pass 2026-10-20 on 27d8c61 (tp merged, lead): all 5 PASS, Steam mock L03b PASS.
 - Must-pass 2026-10-20 on 490c313 (lead): L02a, L02b, L04c, L06 PASS; ESC_Ark FAIL (above) then PASS; Steam mock
   L03b PASS (relay connected).
 
