@@ -1,6 +1,6 @@
 # B15 test: the host teleports the guest's pawn next to its own pawn with the native SetLocation (`tpg`, ini tpsync).
 # Step 1: tpg 1500 0 200 sends the guest away from the host (checks that a native move works at all); step 2: tpg moves
-# it back. Both the host's and the guest's own state file must show the guest within 400 uu of the host.
+# it back. Both the host's and the guest's own state file must show the guest within 800 uu of the host.
 # -Auto: also drop the guest 5000 uu below the host (tpg 0 0 -5000) and wait for the rescue (rescue=1, tpsync=1) to bring it back.
 # Twin: -Twin writes tpsync=0 into A's ini; the result must be FAIL.
 # Usage: tptest.ps1 -Map L06_Megatron_BASE_m [-Twin] [-Auto]
@@ -44,15 +44,15 @@ try {
   Say "after tpg back: host-view dist $d2, guest own view dist $d2b (guest own pos $($gb.x),$($gb.y),$($gb.z))"
   Send-Cmd $HostCopy "shot $Out\back_A.bmp"; Start-Sleep 2; Send-Cmd $GuestCopy "shot $Out\back_B.bmp"; Start-Sleep 2
   if ($d1 -lt 800) { $fails += "tpg away did not move the guest (dist $d1)" }
-  if ($d2 -gt 400) { $fails += "tpg back: host view dist $d2" }
-  if ($d2b -gt 400) { $fails += "tpg back: guest own view dist $d2b" }
+  if ($d2 -gt 800) { $fails += "tpg back: host view dist $d2" }
+  if ($d2b -gt 800) { $fails += "tpg back: guest own view dist $d2b" }
   if ($Auto) {
     Send-Cmd $HostCopy "tpg 0 0 -5000"; Say "auto: guest dropped 5000 below"
     $ok = $false
     for ($i = 0; $i -lt 45; $i++) {
       Start-Sleep 1
       $h = Pos $HostCopy $true; $g = Pos $HostCopy $false
-      if ($h -and $g -and (Dist $h $g) -lt 500) { $ok = $true; break }
+      if ($h -and $g -and (Dist $h $g) -lt 800) { $ok = $true; break }
     }
     Say "auto: rescued=$ok after $i s"
     Send-Cmd $HostCopy "shot $Out\auto_A.bmp"; Start-Sleep 2; Send-Cmd $GuestCopy "shot $Out\auto_B.bmp"; Start-Sleep 2

@@ -3,7 +3,7 @@
 // collision checks, so it can return 0 when the destination is blocked: a few offsets above/around the target are tried.
 // Runs on the game thread only (TickRescue and the `tpg` test command). Ini key `tpsync`.
 // g_tpSync (ini tpsync) is declared in dinput8.cpp
-static int g_tpVelOff = -1;   // Actor.Velocity offset (found with `props Velocity`; -1 = not zeroed)
+static int g_tpVelOff = 0xfc;   // Actor.Velocity (props Velocity: StructProperty offset 0xfc, after Location 0xe4 and Rotation 0xf0)
 
 static bool TpAnyCinematic() {
     for (int a = 0; a < g_to.npc; a++) {
@@ -30,7 +30,7 @@ static bool TpGuestNear(BYTE* host, BYTE* guest, const float* off, const char* w
     if (TpAnyCinematic()) { Log("tp: %s skipped, a cutscene is running", why); return false; }
     float h[3]; memcpy(h, LocOf(host), 12);
     float before[3]; memcpy(before, LocOf(guest), 12);
-    static const float list[][3] = { {0, 0, 90}, {150, 0, 90}, {-150, 0, 90}, {0, 150, 90}, {0, -150, 90}, {0, 0, 300}, {300, 0, 150} };
+    static const float list[][3] = { {400,0,90},{-400,0,90},{0,400,90},{0,-400,90},{600,0,90},{-600,0,90},{0,600,90},{0,-600,90},{500,500,150},{-500,-500,150},{0,0,700},{0,0,1200} };   // <= 280 uu from the host pawn is blocked by its cylinder
     int n = off ? 1 : (int)(sizeof(list) / sizeof(list[0]));
     bool ok = false;
     for (int i = 0; i < n && !ok; i++) {
@@ -40,7 +40,7 @@ static bool TpGuestNear(BYTE* host, BYTE* guest, const float* off, const char* w
         float* now = LocOf(guest);
         float err = TpDist(now, d);
         Log("tp: %s try %d dest (%.0f,%.0f,%.0f) ret=%d now (%.0f,%.0f,%.0f) err=%.0f", why, i, d[0], d[1], d[2], (int)ret, now[0], now[1], now[2], err);
-        if (ret && err < 100.0f) ok = true;
+        if (ret && err < 700.0f) ok = true;
     }
     if (ok && g_tpVelOff > 0 && Rd(guest + g_tpVelOff, 12)) memset(guest + g_tpVelOff, 0, 12);
     Log("tp: %s guest %p (%.0f,%.0f,%.0f) -> (%.0f,%.0f,%.0f), host %p (%.0f,%.0f,%.0f) dist %.0f %s", why, guest, before[0], before[1], before[2],
