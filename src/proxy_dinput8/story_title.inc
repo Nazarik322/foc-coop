@@ -136,6 +136,7 @@ static void VtDiffCommand(const char* args) {
 // Host: poll SequenceOp.ActivateCount (+0x70) of the level's TnSeqAct_SetChapter actions; a rise means the Kismet ran it
 // (the host's HUD shows the title). The number and a counter go into the snapshot (chap=, chapseq=); the guest runs
 // ShowChapter2 once per new chapseq.
+static bool ShowChapterHud(const TickObjs& t, float number, int mode);
 static int g_chapSeq = 0; static int g_chapNum = 0;
 static int ChapterSnap(const TickObjs& t, char* out, size_t n) {
     if (!g_chapterSync) return 0;
@@ -159,7 +160,7 @@ static void ChapterApply(const TickObjs& t, const char* body) {
     int seq = SyncGetInt(body, "chapseq", 0); if (seq == applied || !seq) return;
     if (GetTickCount() < retryAt) return;
     int num = SyncGetInt(body, "chap", -1);
-    if (ShowChapter2(t, (float)num)) { applied = seq; Log("title: guest shows chapter %d (seq %d)", num, seq); }
+    if (ShowChapterHud(t, (float)num, 0)) { applied = seq; Log("title: guest shows chapter %d (seq %d)", num, seq); }
     else retryAt = GetTickCount() + 2000;   // no local controller / action yet
 }
 
@@ -207,4 +208,43 @@ static void HudScanCommand() {
         if (!strstr(cn, "Movie") && !strstr(cn, "GFx")) continue;
         char nm[96]; ObjLabel(c, nm, sizeof(nm)); Log("hudscan: +0x%x -> %p %s (class %s)", off, c, nm, cn);
     }
+}
+
+// ---------------------------------------------------------------- chapter title through the HUD's native code (B16)
+// Script-level calls are impossible (no Function objects for Activated/NotifyChapterChanged/GFx Invoke).
+// Recipe A: TnHUD::NotifyChapterChanged(float) = 0xd558c0, thiscall, ecx = hud + 0x10 (the HUD's script-visible inner
+// object), one float argument, ret 4. 0xb560b0 makes it return early for a sim-proxy HUD (Role +0x5e <= 1 with net on).
+// Recipe B: GFxMoviePlayer invoke 0x452ed0, thiscall, ecx = HudMovie (hud +0x458), pushes (ASValue* result, FString*
+// method, TArray<ASValue>* args), ret 0xc. ASValue is 0x18 bytes: type u8 +0 (2 = number), float +8, FString +0xc.
+static bool ShowChapterHud(const TickObjs& t, float number, int mode /*0 auto, 1 A, 2 B*/) {
+    BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsLocalPC(t.pc[a])) pc = t.pc[a];
+    if (!pc) { Log("chapter: no local controller"); return false; }
+    BYTE* hud = *(BYTE**)(pc + 0x3b4);
+    if (!IsObjFast(hud)) { Log("chapter: myHUD not ready"); return false; }
+    char cn[80] = "?"; ClassNameOf(hud, cn, sizeof(cn));
+    BYTE* movie = *(BYTE**)(hud + 0x458);
+    int role = *(hud + 0x5e);
+    if (strcmp(cn, "TnHUD") || !IsObjFast(movie)) { Log("chapter: HUD %s movie %p not ready (role %d)", cn, movie, role); return false; }
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    bool useB = mode == 2;
+    if (mode == 0 && role <= 1) useB = true;   // sim proxy: recipe A's gate would return early
+    bool ok = true;
+    if (!useB) {
+        union { float f; DWORD d; } u; u.f = number;
+        __try { CallThis3(base + (0xd558c0 - 0x400000), hud + 0x10, u.d, 0, 0); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { Log("chapter: NotifyChapterChanged raised %08lx", GetExceptionCode()); ok = false; }
+        Log("chapter: path A NotifyChapterChanged(%.1f) on %p role %d %s", number, hud, role, ok ? "ok" : "failed");
+    } else {
+        if (!*(DWORD*)(movie + 0x30) || !*(DWORD*)(base + (0x1a0f728 - 0x400000))) { Log("chapter: path B preconditions not met"); return false; }
+        static wchar_t method[] = L"_global.NotifyChapterChanged";
+        static BYTE asv[0x18]; static DWORD result[8], fstr[3], arr[3];
+        memset(asv, 0, sizeof(asv)); memset(result, 0, sizeof(result));
+        asv[0] = 2; *(float*)(asv + 8) = number;
+        fstr[0] = (DWORD)(UINT_PTR)method; fstr[1] = fstr[2] = (DWORD)(sizeof(method) / sizeof(wchar_t));
+        arr[0] = (DWORD)(UINT_PTR)asv; arr[1] = arr[2] = 1;
+        __try { CallThis3(base + (0x452ed0 - 0x400000), movie, (DWORD)(UINT_PTR)result, (DWORD)(UINT_PTR)fstr, (DWORD)(UINT_PTR)arr); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { Log("chapter: GFx invoke raised %08lx", GetExceptionCode()); ok = false; }
+        Log("chapter: path B GFx invoke(_global.NotifyChapterChanged, %.1f) on movie %p role %d %s", number, movie, role, ok ? "ok" : "failed");
+    }
+    return ok;
 }
