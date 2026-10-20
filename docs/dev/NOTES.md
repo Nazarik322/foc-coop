@@ -165,6 +165,13 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   player), TestDowned/TestRevive, exec functions.
 - PlayerController: +0x360 bit 0x20000 bCinematicMode, +0x3b4 myHUD. PRI +0x1e0 PlayerName. TnSeqAct_SetChapter +0x8c
   ChapterNumber. GameInfo +0x280 GameRulesModifiers, GameRules +0x1d0 NextGameRules.
+- 2026-10-20: only events and RPCs seem to keep Function objects (script mostly compiled to native). Callable:
+  ClientSetCinematicMode (PC, 5 bools: on, movement, turning, HUD, buttons), SequenceOp `Activated` (event).
+  Not callable: SetCinematicMode, Actor/TnPawn.SetHidden, TnHUD.NotifyChapterChanged; `funcs` finds only a handful.
+- Actor: +0x84 bit 4 bHidden (writing it changes nothing on screen), +0x8c bit 0x80000 bForceNetUpdate.
+  UStruct SuperStruct offset is calibrated at runtime (sync.inc SuperOffset, Pawn -> Actor).
+- SequenceAction.Targets: TArray at +0x7c. Chapter 6 (L06) has TnSeqAct_SetChapter objects with numbers 0, 10, 10
+  (on the guest too, the level's Kismet objects exist on the client).
 
 ## Test commands (foc_cmd.txt in Binaries, one line)
 `shot <file>`, `shotui <file>`, `menu <page>|off`, `dump <Class> <file> [bytes]`, `props <names>`, `fall local|remote`,

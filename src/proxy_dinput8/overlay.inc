@@ -219,6 +219,7 @@ static BYTE* OexecTarget(const char* t) {
     if (!strcmp(t, "game")) return g_to.ngame ? g_to.game[0] : nullptr;
     if (!strcmp(t, "pri")) return lpc ? *(BYTE**)(lpc + 0x1d4) : nullptr;
     if (!strcmp(t, "rpri")) return rpc ? *(BYTE**)(rpc + 0x1d4) : nullptr;
+    if (!strcmp(t, "hud")) return lpc && IsObjFast(*(BYTE**)(lpc + 0x3b4)) ? *(BYTE**)(lpc + 0x3b4) : nullptr;   // PlayerController.myHUD
     if (!strncmp(t, "obj:", 4)) return FindObjByLabel(t + 4);
     return nullptr;
 }
@@ -336,6 +337,7 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("tpmarker", 0) == 0) { TpMarkerCommand(cmd.size() > 9 ? cmd.c_str() + 9 : ""); return; }
     if (cmd.rfind("props ", 0) == 0) { PropsCommand(cmd.c_str() + 6); return; }
     if (cmd == "crashtest") { CrashTest(); return; }
+    if (cmd.rfind("chapter ", 0) == 0) { ShowChapterLocal(g_to, (float)atof(cmd.c_str() + 8)); return; }
     if (cmd.rfind("dump ", 0) == 0) { DumpClass(cmd.c_str() + 5); return; }
     if (cmd.rfind("fall ", 0) == 0) { MovePawnCommand(cmd.c_str() + 5, true); return; }
     if (cmd.rfind("tp ", 0) == 0) { MovePawnCommand(cmd.c_str() + 3, false); return; }

@@ -447,6 +447,41 @@ static void TickCinematic(const TickObjs& t) {
     }
 }
 
+// ---------------------------------------------------------------- chapter title (B16)
+// The level's Kismet runs TnSeqAct_SetChapter on the server with Targets[0] = the host's player, so only the host's
+// HUD shows "Chapter N". Script functions such as TnHUD.NotifyChapterChanged have no Function objects in this build,
+// but the action's Activated event does: the guest runs its own copy of the action (the level's Kismet objects exist
+// on the client too) with Targets (SequenceAction TArray +0x7c) pointing at its local controller for the call.
+// ChapterNumber: float +0x8c. Returns false when the level has no such action.
+static bool ShowChapterLocal(const TickObjs& t, float number) {
+    BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsLocalPC(t.pc[a])) pc = t.pc[a];
+    if (!pc) return false;
+    unsigned cid = ClassIdByName("TnSeqAct_SetChapter"); if (!cid) return false;
+    TArr* go = GObj(); BYTE* act = nullptr;
+    for (int i = 0; i < go->Num && !act; i++) {
+        BYTE* o = (BYTE*)go->Data[i];
+        if (o && (*(unsigned*)(o + 0x14) & 0x1fff) == cid && *(float*)(o + 0x8c) == number) act = o;
+    }
+    if (!act) {
+        char have[200] = ""; size_t k = 0;
+        for (int i = 0; i < go->Num; i++) {
+            BYTE* o = (BYTE*)go->Data[i];
+            if (o && (*(unsigned*)(o + 0x14) & 0x1fff) == cid) k += _snprintf_s(have + k, sizeof(have) - k, _TRUNCATE, " %.1f", *(float*)(o + 0x8c));
+        }
+        Log("chapter: no TnSeqAct_SetChapter with number %.1f (level has:%s)", number, have);
+        return false;
+    }
+    static void* target[1]; target[0] = pc;
+    TArr* tg = (TArr*)(act + 0x7c); TArr saved = *tg;
+    tg->Data = target; tg->Num = 1; tg->Max = 1;
+    DWORD parms[4] = {0};
+    bool ok = CallScript(act, "Activated", parms, sizeof(parms));
+    *tg = saved;
+    char an[96]; ObjLabel(act, an, sizeof(an));
+    Log("chapter: %s (%.1f).Activated for the local player %s", an, number, ok ? "ok" : "failed");
+    return ok;
+}
+
 // ---------------------------------------------------------------- player names
 // Each game takes the player name from its own profile ("Default" when Demonware is offline), so both players could
 // show the same name. Once the local pawn exists, the local controller runs `SetName <name>` (PlayerController exec ->

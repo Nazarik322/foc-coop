@@ -109,6 +109,11 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   needs a native move (FarMoveActor / SetLocation) or a console command through the local player.
 
 ### B16. Chapter title shown to only one player — open (see B12)
+- 2026-10-20 in progress: `chapter <n>` test command (sync.inc ShowChapterLocal) runs the guest's own
+  TnSeqAct_SetChapter with that ChapterNumber via its Activated event, Targets (+0x7c) temporarily = the guest's PC.
+  Built, NOT yet tried with a real number (L06 has 0, 10, 10; try `chapter 10` on B and shot B). If it shows the title:
+  host detects the activation (no ActivateCount property found; idea: watch for the host's own HUD title or hook
+  ProcessEvent for this Function) and sends `chapter=N` over the sync channel; the guest calls ShowChapterLocal.
 - Note 2026-10-20: HUD.NotifyChapterChanged has no Function object in this build (cannot be called). Next idea: run the
   level's TnSeqAct_SetChapter (ChapterNumber at +0x8c) on the guest with the guest's controller as target.
 - Owner 2026-10-19: "Chapter ..." at the start shows in the UI of only one player (which one: check).

@@ -4,6 +4,15 @@
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
 ## Next step (where to resume)
+**2026-10-20 (stopped by the owner here): story bugs.** Done: B14 part (guest HUD/movement follow the host's
+cutscenes, `cinesync`, commit 4eaa654, local, not pushed). Resume with:
+1. B16: on L06 `-Keep`, `chapter 10` on the guest (B) + `shot`; if the title shows, wire host -> guest over sync.
+2. B14 rest: hide the guest's pawn in cutscenes (needs native AActor::SetHidden from ghidra); chapter 1 opening
+   "look around": guest view stuck on TnLookAroundCameraActor's cutscene shot (with B17).
+3. B17 intro animation, revive test both ways, B15 teleport of the guest, then release (owner approved "в прод"
+   for releases in this phase; ask if unsure).
+Also in the last commit: `hud` target for call/oexec, `chapter <n>` command (builds, matrix L06 PASS, not tried).
+
 **2026-10-19 owner: Escalation first, released v0.4.0.** Open for Escalation: B19 weapon slots (buy at an armory),
 match end after the last team life, Armory Recreators / T.E.C.H. (not checked). Open for the story (later, owner said
 so): B11 automatic checkpoint restart and guest respawn after a real death, B14 cutscene camera, B15 streaming
