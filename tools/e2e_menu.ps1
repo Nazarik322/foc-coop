@@ -1,6 +1,9 @@
 # End-to-end: host Escalation Ark from the in-game menu on copy A, join it from copy B through the lobby list.
-param([string]$Shots = "$env:TEMP\foc_shots")
+param([string]$Shots = "$env:TEMP\foc_shots", [string]$SlotOwner = "", [switch]$NoSlot)
 . "$PSScriptRoot\dev.ps1"
+$slotOwnerName = Get-FocSlotOwner $SlotOwner
+if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
+try {
 New-Item -ItemType Directory -Force $Shots | Out-Null
 if (-not (Build-Deploy)) { return }
 $pidA = Start-Foc "A" "" 960 540; $hA = Wait-FocWindow $pidA 90
@@ -29,3 +32,4 @@ Start-Sleep 50
 Shot $hB "$Shots\client_after_join.png" | Out-Null
 FocusWin $hA; Shot $hA "$Shots\host_after_join.png" | Out-Null
 "done"
+} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }

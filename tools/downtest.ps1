@@ -2,8 +2,11 @@
 # needs the desktop shown) until the chapter 6 enemies down it. Expected: the host stays downed (does not bleed out, no game over) for 45 s. Then the guest is downed
 # too: with everybody down the game must end in MISSION FAILED with "Restart From Last Checkpoint" (screenshots).
 # Twin: -Twin writes coopdeath=0 into A's ini; the downed host then bleeds out (FAIL).
-param([string]$Map = "L06_Megatron_BASE_m", [string]$Out = "", [switch]$Twin, [int]$WaitDown = 90)
+param([string]$Map = "L06_Megatron_BASE_m", [string]$Out = "", [switch]$Twin, [int]$WaitDown = 90, [string]$SlotOwner = "", [switch]$NoSlot)
 . "$PSScriptRoot\dev.ps1"
+$slotOwnerName = Get-FocSlotOwner $SlotOwner
+if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
+try {
 Add-Type -AssemblyName System.Drawing
 if (-not $Out) { $Out = "E:\FoC-coop\sessions\down_$(Get-Date -Format yyyyMMdd_HHmm)_$Map" }
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -17,7 +20,7 @@ function Shot($tag) {
 $ini = "E:\FoC-coop\A\Binaries\foc_coop.ini"; $iniOrig = Get-Content $ini -Raw
 if ($Twin) { Set-Content $ini ($iniOrig.TrimEnd() + "`r`ncoopdeath=0`r`n") -Encoding ascii }
 try {
-  $m = & "$PSScriptRoot\matrix.ps1" -Maps $Map -Out $Out -AliveSec 5 -Keep | Select-String "RESULT" | ForEach-Object { $_.Line }
+  $m = & "$PSScriptRoot\matrix.ps1" -NoSlot -Maps $Map -Out $Out -AliveSec 5 -Keep | Select-String "RESULT" | ForEach-Object { $_.Line }
   Say "start: $m"
   if ($m -notlike "RESULT: PASS*") { Say "RESULT: SKIP $Map cannot start"; return }
   $pa = (Find-CopyProc A).Id; $pb = (Find-CopyProc B).Id
@@ -60,3 +63,4 @@ try {
   Set-Content $ini $iniOrig -NoNewline -Encoding ascii
   Stop-Foc; Stop-Relay
 }
+} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }

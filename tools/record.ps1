@@ -1,14 +1,18 @@
 # Records a play session for later bug hunting: every $Every seconds an in-game screenshot of each running copy
 # (the DLL's `shot` command, game image only) and a copy of its foc_state.json. Stops when no test copy runs.
 # Output: $Out\<time>_<copy>.png / .state.json; logs are copied at the end.
-param([string]$Out = "E:\FoC-coop\sessions\$(Get-Date -Format yyyyMMdd_HHmm)", [int]$Every = 20, [int]$MaxMinutes = 180)
+param([string]$Out = "E:\FoC-coop\sessions\$(Get-Date -Format yyyyMMdd_HHmm)", [int]$Every = 20, [int]$MaxMinutes = 180, [string]$SlotOwner = "", [switch]$NoSlot)
 . "$PSScriptRoot\dev.ps1"
+$slotOwnerName = Get-FocSlotOwner $SlotOwner
+if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
+try {
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
 $end = (Get-Date).AddMinutes($MaxMinutes)
 while ((Get-Date) -lt $end) {
   $running = @("A", "B") | Where-Object { Find-CopyProc $_ }
   if (-not $running) { break }
+  Update-FocSlot
   $t = Get-Date -Format HHmmss
   foreach ($c in $running) {
     $bmp = Join-Path $Out "$t`_$c.bmp"
@@ -27,3 +31,4 @@ foreach ($c in "A", "B") {
   Get-ChildItem "E:\FoC-coop\$c\Binaries\foc_crash_*.dmp" -ErrorAction SilentlyContinue | Copy-Item -Destination $Out
 }
 "session saved to $Out"
+} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }

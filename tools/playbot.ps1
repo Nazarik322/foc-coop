@@ -2,8 +2,11 @@
 # checks what a player would notice: both pawns exist, the guest sees the host where the host really is (and the
 # other way round), no sudden teleports, no crashes, the game keeps running. Screenshots of both screens every step.
 # Usage: playbot.ps1 -Map L02b_DestroyAllMortars_BASE_m -Minutes 4      (starts host A + guest B itself)
-param([string]$Map = "L02b_DestroyAllMortars_BASE_m", [int]$Minutes = 4, [string]$Out = "", [switch]$Steam)
+param([string]$Map = "L02b_DestroyAllMortars_BASE_m", [int]$Minutes = 4, [string]$Out = "", [switch]$Steam, [string]$SlotOwner = "", [switch]$NoSlot)
 . "$PSScriptRoot\dev.ps1"
+$slotOwnerName = Get-FocSlotOwner $SlotOwner
+if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
+try {
 if (-not $Out) { $Out = "E:\FoC-coop\sessions\bot_$(Get-Date -Format yyyyMMdd_HHmm)_$Map" }
 New-Item -ItemType Directory -Force $Out | Out-Null
 Add-Type -AssemblyName System.Drawing
@@ -18,7 +21,7 @@ function ShotBoth($tag) {
 function Turn($h, [int]$dx) { FocusWin $h; for ($i = 0; $i -lt 10; $i++) { [W]::mouse_event(1, [int]($dx / 10), 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 30 } }
 
 # start: matrix with -Keep gives a verified host + guest with pawns
-$m = & "$PSScriptRoot\matrix.ps1" -Maps $Map -Out $Out -AliveSec 5 -Keep -Steam:$Steam | Select-String "RESULT" | ForEach-Object { $_.Line }
+$m = & "$PSScriptRoot\matrix.ps1" -NoSlot -Maps $Map -Out $Out -AliveSec 5 -Keep -Steam:$Steam | Select-String "RESULT" | ForEach-Object { $_.Line }
 Say "start: $m"
 if ($m -notlike "RESULT: PASS*") { Say "BOT: cannot start, see above"; return }
 $pa = (Find-CopyProc A).Id; $pb = (Find-CopyProc B).Id
@@ -26,7 +29,7 @@ $hA = [W]::Find([uint32]$pa); $hB = [W]::Find([uint32]$pb)
 $problems = @(); $step = 0; $end = (Get-Date).AddMinutes($Minutes)
 $prevH = $null; $prevG = $null; $jumpH = -1; $jumpG = -1
 while ((Get-Date) -lt $end) {
-  $step++
+  $step++; Update-FocSlot
   if (-not (Get-Process -Id $pa -ErrorAction SilentlyContinue)) { $problems += "host died at step $step"; break }
   if (-not (Get-Process -Id $pb -ErrorAction SilentlyContinue)) { $problems += "guest died at step $step"; break }
   # one action per step for each player (like a player would): walk/look, sprint, shoot, aim+shoot, transform and drive,
@@ -75,3 +78,4 @@ while ((Get-Date) -lt $end) {
 foreach ($c in "A", "B") { Copy-Item "E:\FoC-coop\$c\Binaries\foc_coop.log" (Join-Path $Out "$c.log") -ErrorAction SilentlyContinue }
 if ($problems) { Say "BOT RESULT: $($problems.Count) problem(s)"; $problems | ForEach-Object { Say "  - $_" } } else { Say "BOT RESULT: no problems in $step steps" }
 Stop-Foc; Stop-Relay
+} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }

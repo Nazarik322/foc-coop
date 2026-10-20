@@ -8,8 +8,11 @@
 #   weapons     : NextWeapon
 #   downed      : TestDowned -> downed=1 on the host, TestRevive -> up again (host and guest)
 #   lives       : downed + DownedSuicide on both -> team lives spent, match end screen after the last life
-param([string]$Map = "ESC_Ark_BASE_m", [string]$Out = "")
+param([string]$Map = "ESC_Ark_BASE_m", [string]$Out = "", [string]$SlotOwner = "", [switch]$NoSlot)
 . "$PSScriptRoot\dev.ps1"
+$slotOwnerName = Get-FocSlotOwner $SlotOwner
+if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
+try {
 Add-Type -AssemblyName System.Drawing
 if (-not $Out) { $Out = "E:\FoC-coop\sessions\esctest_$(Get-Date -Format yyyyMMdd_HHmm)" }
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -29,7 +32,7 @@ function Shot($tag, [switch]$Tab) {
 function States { $s = Read-FocState A; ($s.players | ForEach-Object { "$(if ($_.local) {'host'} else {'guest'}):$($_.state):d$($_.downed):hp$($_.hp)" }) -join ' ' }
 $results = [ordered]@{}
 
-$m = & "$PSScriptRoot\matrix.ps1" -Steam -Maps $Map -Out $Out -AliveSec 10 -Keep | Select-String "RESULT" | ForEach-Object { $_.Line }
+$m = & "$PSScriptRoot\matrix.ps1" -NoSlot -Steam -Maps $Map -Out $Out -AliveSec 10 -Keep | Select-String "RESULT" | ForEach-Object { $_.Line }
 Say "start: $m"
 if ($m -notlike "RESULT: PASS*") { Say "RESULT: SKIP cannot start"; return }
 Say "rules: $(LastLog A 'killrules')"
@@ -82,3 +85,4 @@ foreach ($c in "A", "B") { Copy-Item "E:\FoC-coop\$c\Binaries\foc_coop.log" (Joi
 foreach ($k in $results.Keys) { Say ("RESULT {0}: {1}" -f $k, $results[$k]) }
 Say "screenshots: $Out (1_score, 2_money: TAB board on both; 8_lives_*: lives and match end)"
 Stop-Foc; Stop-Relay
+} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }
