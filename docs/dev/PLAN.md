@@ -7,6 +7,21 @@ Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.c
 Work runs in team mode, see [TEAM.md](TEAM.md): lead + 3 agents. Wave 1: re (B15/B14/B16/B17 recipes), infra (slot
 lease, worktree builds), title (B16). Wave 2: cine, tp, input. Wave 3: merge, must-pass, R1 sweep, release on OK.
 
+**Resume point (2026-10-20, all agents stopped by the weekly usage limit, resets 2026-10-24 06:00 MSK):**
+- infra DONE, verified by the lead: `lane/infra` 096e9be (slot lease, `Build-Deploy -Repo`, `-HostCopy/-GuestCopy`,
+  `foc_build.txt`, B9, `tools/slottest.ps1` 5/5 PASS, rerun by the lead). Still to do: smoke test (command in the
+  infra report: `$env:FOC_LANE='infra'`, `Enter-FocSlot`, `Build-Deploy -Repo C:\GitRepo\foc-wt\infra`, `matrix.ps1
+  -NoSlot -Maps L06_Megatron_BASE_m`), then merge and apply its docs delta (NOTES Testing: lease, -Repo, copy params,
+  run with `-ExecutionPolicy Bypass`; TESTS: slottest row + lease note; BUGS B9 fixed).
+- title STOPPED mid-work: `lane/title` 4dbbeb6 is an unreviewed, untested WIP commit (story_title.inc, chaptersync,
+  titletest.ps1). The result of the `chapter 10` probe was not reported. Copies A and B currently run THIS WIP DLL
+  (4:06): redeploy main or a reviewed build before any test. Next: review the WIP, build, rerun the probe.
+- re STOPPED without a report: raw results in `coop-anything\local\lanes\re\` (out\*.txt Ghidra outputs, script\ with
+  ~150 newly exported classes incl. SeqAct_Teleport, LevelStreaming*, SeqAct_ToggleHidden, SeqAct_ToggleCinematicMode,
+  TnLookAroundCameraActor, TnMatineePawn, TnSetMatineeAnimationEnabledAction, TnSeqAct_ActivateTogethernessVolume
+  (check for B15!), fixed export_classes.ps1, new ghidra scripts NativeTable/StrRefs/RawRefs/VtSlot/InsnPattern).
+  Next: a new re agent reads these files first and writes REPORT.md before doing new Ghidra runs.
+
 ## Next step (where to resume)
 **2026-10-20 (stopped by the owner here): story bugs.** Done: B14 part (guest HUD/movement follow the host's
 cutscenes, `cinesync`, commit 4eaa654, local, not pushed). Resume with:
