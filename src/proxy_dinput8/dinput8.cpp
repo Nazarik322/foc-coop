@@ -209,6 +209,7 @@ static bool g_killRules = true;   // Escalation host adds TnGameRules_TrackKills
 static bool g_setNames = true;    // each player gets its Steam name via SetName (sync.inc TickNames), ini setnames
 static bool g_inputInject = true;   // ini inputinject: test input injection (input.inc); 0 = off (twin)
 static int g_inputMode = 6;         // ini inputmode: 1 DirectInput, 2 key messages, 4 GetAsyncKeyState/GetKeyState, 8 focus spoof
+static bool g_chapterSync = true; // B16: guest shows the chapter title the host shows (story_title.inc), ini chaptersync
 static bool g_cineSync = true;    // B14: the guest follows the host's cinematic mode (sync.inc TickCinematic), ini cinesync
 static void SyncNoteOut(SOCKET s);
 static bool SyncFilterIn(const char* buf, int len, const sockaddr* from);
@@ -1924,6 +1925,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_setNames = GetPrivateProfileIntW(L"foc_coop", L"setnames", 1, ini2) != 0;
         g_inputInject = GetPrivateProfileIntW(L"foc_coop", L"inputinject", 1, ini2) != 0;
         g_inputMode = GetPrivateProfileIntW(L"foc_coop", L"inputmode", 6, ini2);
+        g_chapterSync = GetPrivateProfileIntW(L"foc_coop", L"chaptersync", 1, ini2) != 0;
         g_cineSync = GetPrivateProfileIntW(L"foc_coop", L"cinesync", 1, ini2) != 0;
         g_autoRestart = GetPrivateProfileIntW(L"foc_coop", L"autorestart", 1, ini2) != 0;
         g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
@@ -1940,6 +1942,7 @@ static void LoadConfig(const wchar_t* dir) {
 #include "gametick.inc"
 #include "sync.inc"
 #include "tp.inc"
+#include "story_title.inc"
 #include "overlay.inc"
 #include "input.inc"
 

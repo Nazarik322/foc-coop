@@ -337,7 +337,12 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("tpmarker", 0) == 0) { TpMarkerCommand(cmd.size() > 9 ? cmd.c_str() + 9 : ""); return; }
     if (cmd.rfind("props ", 0) == 0) { PropsCommand(cmd.c_str() + 6); return; }
     if (cmd == "crashtest") { CrashTest(); return; }
-    if (cmd.rfind("chapter ", 0) == 0) { ShowChapterLocal(g_to, (float)atof(cmd.c_str() + 8)); return; }
+    if (cmd.rfind("chapter ", 0) == 0) { { const char* fp = strstr(cmd.c_str(), " fn"); g_chapFnPick = fp ? atoi(fp + 3) : -1; } strstr(cmd.c_str(), " old") ? (void)ShowChapter2(g_to, (float)atof(cmd.c_str() + 8)) : (void)ShowChapterHud(g_to, (float)atof(cmd.c_str() + 8), strstr(cmd.c_str(), " b") ? 2 : strstr(cmd.c_str(), " a") ? 1 : 0); return; }
+    if (cmd.rfind("objscan ", 0) == 0) { ObjScanCommand(cmd.c_str() + 8); return; }
+    if (cmd == "chapters") { ChaptersCommand(); return; }
+    if (cmd.rfind("fnlist ", 0) == 0) { FnListCommand(cmd.c_str() + 7); return; }
+    if (cmd == "hudscan") { HudScanCommand(); return; }
+    if (cmd.rfind("vtdiff ", 0) == 0) { VtDiffCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("dump ", 0) == 0) { DumpClass(cmd.c_str() + 5); return; }
     if (cmd.rfind("fall ", 0) == 0) { MovePawnCommand(cmd.c_str() + 5, true); return; }
     if (cmd.rfind("tpg", 0) == 0) { TpGuestCommand(cmd.size() > 4 ? cmd.c_str() + 4 : ""); return; }

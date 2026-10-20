@@ -346,7 +346,11 @@ static int SuperOffset() {
     unsigned pid = ClassIdByName("Pawn"), aid = ClassIdByName("Actor");
     BYTE* p = pid && pid < 8192 ? g_classObjById[pid] : nullptr; BYTE* a = aid && aid < 8192 ? g_classObjById[aid] : nullptr;
     if (!IsObjFast(p) || !IsObjFast(a)) return -1;
-    for (int k = 0x2c; k < 0x100 && off < 0; k += 4) if (*(BYTE**)(p + k) == a) off = k;
+    // Pawn -> HmActor -> ... -> Actor in this build: walk the chain along each candidate offset (SuperStruct is +0x28)
+    for (int k = 0x28; k < 0x100 && off < 0; k += 4) {
+        BYTE* c = p;
+        for (int i = 0; i < 16 && IsObjFast(c); i++) { if (c == a) { off = k; break; } c = *(BYTE**)(c + k); }
+    }
     Log("call: SuperStruct at +0x%x", off);
     return off;
 }
@@ -447,41 +451,6 @@ static void TickCinematic(const TickObjs& t) {
     }
 }
 
-// ---------------------------------------------------------------- chapter title (B16)
-// The level's Kismet runs TnSeqAct_SetChapter on the server with Targets[0] = the host's player, so only the host's
-// HUD shows "Chapter N". Script functions such as TnHUD.NotifyChapterChanged have no Function objects in this build,
-// but the action's Activated event does: the guest runs its own copy of the action (the level's Kismet objects exist
-// on the client too) with Targets (SequenceAction TArray +0x7c) pointing at its local controller for the call.
-// ChapterNumber: float +0x8c. Returns false when the level has no such action.
-static bool ShowChapterLocal(const TickObjs& t, float number) {
-    BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsLocalPC(t.pc[a])) pc = t.pc[a];
-    if (!pc) return false;
-    unsigned cid = ClassIdByName("TnSeqAct_SetChapter"); if (!cid) return false;
-    TArr* go = GObj(); BYTE* act = nullptr;
-    for (int i = 0; i < go->Num && !act; i++) {
-        BYTE* o = (BYTE*)go->Data[i];
-        if (o && (*(unsigned*)(o + 0x14) & 0x1fff) == cid && *(float*)(o + 0x8c) == number) act = o;
-    }
-    if (!act) {
-        char have[200] = ""; size_t k = 0;
-        for (int i = 0; i < go->Num; i++) {
-            BYTE* o = (BYTE*)go->Data[i];
-            if (o && (*(unsigned*)(o + 0x14) & 0x1fff) == cid) k += _snprintf_s(have + k, sizeof(have) - k, _TRUNCATE, " %.1f", *(float*)(o + 0x8c));
-        }
-        Log("chapter: no TnSeqAct_SetChapter with number %.1f (level has:%s)", number, have);
-        return false;
-    }
-    static void* target[1]; target[0] = pc;
-    TArr* tg = (TArr*)(act + 0x7c); TArr saved = *tg;
-    tg->Data = target; tg->Num = 1; tg->Max = 1;
-    DWORD parms[4] = {0};
-    bool ok = CallScript(act, "Activated", parms, sizeof(parms));
-    *tg = saved;
-    char an[96]; ObjLabel(act, an, sizeof(an));
-    Log("chapter: %s (%.1f).Activated for the local player %s", an, number, ok ? "ok" : "failed");
-    return ok;
-}
-
 // ---------------------------------------------------------------- player names
 // Each game takes the player name from its own profile ("Default" when Demonware is offline), so both players could
 // show the same name. Once the local pawn exists, the local controller runs `SetName <name>` (PlayerController exec ->
@@ -530,6 +499,8 @@ static void SyncGetStr(const char* snap, const char* key, char* out, size_t n) {
 }
 
 static void PostKey(UINT vk);   // overlay.inc
+static int ChapterSnap(const TickObjs& t, char* out, size_t n);   // story_title.inc (host: chap= lines)
+static void ChapterApply(const TickObjs& t, const char* body);     // story_title.inc (guest)
 static void TickSync(const TickObjs& t) {
     TickWaitGuest(t);
     TickEscalationRules(t);
@@ -553,6 +524,7 @@ static void TickSync(const TickObjs& t) {
         static LONG seq = 0;
         n += _snprintf_s(snap + n, sizeof(snap) - n, _TRUNCATE, "%sseq=%ld\nmap=%s\nobj=%d\n", kSyncMagic, ++seq, map, m ? *(int*)(m + 0x3c) : -2);
         if (m) n += HostMarkers(m, snap + n, sizeof(snap) - n);
+        n += ChapterSnap(t, snap + n, sizeof(snap) - n);
         EnterCriticalSection(&g_syncCs);
         for (int i = 0; i < g_syncNPeers; i++) {
             if (now - g_syncPeers[i].seen > 10000) continue;
@@ -574,4 +546,5 @@ static void TickSync(const TickObjs& t) {
     BYTE* m = ObjectiveManager(t);
     if (m && obj >= -1) ApplyObjective(m, obj);
     if (m) ApplyMarkers(m, body);
+    ChapterApply(t, body);
 }
