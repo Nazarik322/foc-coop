@@ -1,9 +1,12 @@
 ﻿# Manual probe: hide the guest's pawn on the host (Actor.bHidden +0x84 bit 4, bForceNetUpdate +0x8c bit 0x80000) and
 # take shots of both before/after.
-param([string]$Out = "E:\FoC-coop\sessions\hide1", [string]$Map = "L06_Megatron_BASE_m", [int]$Settle = 100, [switch]$Fresh)
+param([string]$Out = "E:\FoC-coop\sessions\hide1", [string]$Map = "L06_Megatron_BASE_m", [int]$Settle = 100, [switch]$Fresh, [string]$SlotOwner = "", [switch]$NoSlot)
 . "$PSScriptRoot\dev.ps1"
+$slotOwnerName = Get-FocSlotOwner $SlotOwner
+if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
+try {
 New-Item -ItemType Directory -Force $Out | Out-Null
-if ($Fresh) { & "$PSScriptRoot\matrix.ps1" -Maps $Map -Out $Out -AliveSec 5 -Keep | Select-Object -Last 2 }
+if ($Fresh) { & "$PSScriptRoot\matrix.ps1" -NoSlot -Maps $Map -Out $Out -AliveSec 5 -Keep | Select-Object -Last 2 }
 $t0 = Get-Date
 while (((Get-Date) - $t0).TotalSeconds -lt 240) {
   $a = Read-FocState A
@@ -18,4 +21,4 @@ Send-Cmd A "shot $Out\back_A.bmp"; Start-Sleep 1; Send-Cmd B "shot $Out\back_B.b
 Add-Type -AssemblyName System.Drawing
 Get-ChildItem $Out -Filter *.bmp | ForEach-Object { $i = [System.Drawing.Image]::FromFile($_.FullName); $i.Save(($_.FullName -replace '\.bmp$', '.jpg'), [System.Drawing.Imaging.ImageFormat]::Jpeg); $i.Dispose() }
 Select-String -Path "E:\FoC-coop\A\Binaries\foc_coop.log" -Pattern "poke:" | Select-Object -Last 4 | ForEach-Object { $_.Line }
-
+} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }

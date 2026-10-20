@@ -3,8 +3,11 @@
 # within 40 s, both games keep running. First the guest dies, then the host.
 # Twin: -Twin writes coopdeath=0 into A's ini; then the result must be FAIL.
 # Usage: deathtest.ps1 -Map L06_Megatron_BASE_m [-Twin]
-param([string]$Map = "L06_Megatron_BASE_m", [string]$Out = "", [switch]$Twin, [string[]]$IniExtra = @())
+param([string]$Map = "L06_Megatron_BASE_m", [string]$Out = "", [switch]$Twin, [string[]]$IniExtra = @(), [string]$SlotOwner = "", [switch]$NoSlot)
 . "$PSScriptRoot\dev.ps1"
+$slotOwnerName = Get-FocSlotOwner $SlotOwner
+if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
+try {
 if (-not $Out) { $Out = "E:\FoC-coop\sessions\death_$(Get-Date -Format yyyyMMdd_HHmm)_$Map" }
 New-Item -ItemType Directory -Force $Out | Out-Null
 $log = Join-Path $Out "death.txt"
@@ -14,7 +17,7 @@ $iniOrig = Get-Content $ini -Raw
 $extra = @($IniExtra); if ($Twin) { $extra += "coopdeath=0" }
 if ($extra.Count) { Set-Content $ini ($iniOrig.TrimEnd() + "`r`n" + ($extra -join "`r`n") + "`r`n") -Encoding ascii }
 try {
-  $m = & "$PSScriptRoot\matrix.ps1" -Maps $Map -Out $Out -AliveSec 5 -Keep | Select-String "RESULT" | ForEach-Object { $_.Line }
+  $m = & "$PSScriptRoot\matrix.ps1" -NoSlot -Maps $Map -Out $Out -AliveSec 5 -Keep | Select-String "RESULT" | ForEach-Object { $_.Line }
   Say "start: $m"
   if ($m -notlike "RESULT: PASS*") { Say "RESULT: SKIP $Map cannot start"; return }
   $pa = (Find-CopyProc A).Id; $pb = (Find-CopyProc B).Id
@@ -49,3 +52,4 @@ try {
   Set-Content $ini $iniOrig -NoNewline -Encoding ascii
   Stop-Foc; Stop-Relay
 }
+} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }
