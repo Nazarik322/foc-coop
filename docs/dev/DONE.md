@@ -3,6 +3,13 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-20: B16 chapter title on both screens (lane title, merged 051719d)
+- story_title.inc: host detection (ActivateCount), sync keys chap/chapseq, guest native GFx invoke. titletest
+  (screen based) PASS host/guest 296/303 in the lane, twin FAIL; screenshots E:\FoC-coop\sessions\title\t2.
+- Released as v0.6.0-dev together with B15 teleport and the B14 cutscene part (cinesync).
+- Release check on 051719d: must-pass 5/5 PASS (an earlier run on the same commit had L02a/L02b/L04c FAIL,
+  flaky), Steam L03b PASS, titletest PASS 301/302, twin FAIL. README/README.ru updated for 0.6.
+
 ## 2026-10-20: stage 6 unfocused input (lane input, merged 289671b)
 - input.inc: `input hold/tap/mouse/mode`; key messages + GetAsyncKeyState/GetKeyState hooks move the pawn of either
   window without focus. inputtest PASS, twin FAIL. The old DirectInput-only `input key` never moved the pawn (the game

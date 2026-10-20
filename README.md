@@ -38,15 +38,19 @@ or by IP.
 - Story: the host waits until the friend has loaded the level, then it starts for both; the current objective and the
   objective marker show on both screens (tested in chapter 6).
 - A downed player stays down until the other one revives them; one player dying no longer ends the mission. Only when
-  everybody is down: MISSION FAILED, restart from the checkpoint.
+  everybody is down: MISSION FAILED, restart from the checkpoint. If a player really dies (e.g. falls into a pit),
+  both restart at the last checkpoint after about 15 seconds.
+- The chapter title shows on both screens.
+- In cutscenes the friend's HUD hides and they cannot walk away, as for the host.
+- A player who falls out of the level is teleported next to the other one instead of falling forever.
 
 ## Known problems
 
 - 3–5 players are not tested yet.
-- Cutscenes and scripted events are only partly in sync; the guest can see dark silhouettes in cutscenes.
-- If the friend really dies (e.g. falls into a pit), they do not come back until a checkpoint restart.
-- Reaching some markers loads the next area only around that player: stay together.
-- The chapter title only shows on the host.
+- Scripted events are only partly in sync; in cutscenes the guest can see dark silhouettes, and the other player's
+  robot can stand in the scene.
+- Reaching some markers loads the next area only around that player: stay together (the teleport is not yet tested
+  on every such marker).
 - Hosting or joining restarts the game once (about 20–30 s).
 
 Bugs and progress: [docs/dev](docs/dev/README.md).

@@ -117,7 +117,11 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Note: writing Actor.Location (+0xe4/+0x134) does not move a standing pawn (physics puts it back); a real teleport
   needs a native move (FarMoveActor / SetLocation) or a console command through the local player.
 
-### B16. Chapter title shown to only one player — open (see B12)
+### B16. Chapter title shown to only one player — fixed 2026-10-20 (lane title, merged 051719d)
+- FIX: host polls TnSeqAct_SetChapter ActivateCount +0x70 and sends chap/chapseq in the sync snapshot; the guest
+  calls the HUD movie's native GFx invoke 0x452ed0 ("_global.NotifyChapterChanged", one number) - path B, because
+  the guest HUD has role 0; path A (0xd558c0) is untested. ini `chaptersync` (default 1). Late joiners see the title
+  once. History below.
 - 2026-10-20 in progress: `chapter <n>` test command (sync.inc ShowChapterLocal) runs the guest's own
   TnSeqAct_SetChapter with that ChapterNumber via its Activated event, Targets (+0x80) temporarily = the guest's PC.
   Built, NOT yet tried with a real number (L06 has 0, 10, 10; try `chapter 10` on B and shot B). If it shows the title:

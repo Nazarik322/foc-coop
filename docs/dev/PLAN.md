@@ -7,16 +7,15 @@ Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.c
 Work runs in team mode, see [TEAM.md](TEAM.md): lead + 3 agents. Wave 1: re (B15/B14/B16/B17 recipes), infra (slot
 lease, worktree builds), title (B16). Wave 2: cine, tp, input. Wave 3: merge, must-pass, R1 sweep, release on OK.
 
-**Resume point (2026-10-20 midday, wave 2 running):**
-- infra MERGED (490c313); must-pass on it: all PASS (ESC_Ark needed a rerun, see TESTS Known flaky); Steam mock PASS.
-- re DONE: report `coop-anything\local\lanes\re\REPORT.md` (lead spot-checked 0x7dfef0, 0x85bf30, 0x93c9d0 call
-  site); natives are in NOTES.md "Native functions found by the re lane"; recipes in BUGS B14-B17.
-- title (B16) running in `foc-wt\title`: guest runs its own TnSeqAct_SetChapter; host detection via ProcessEvent detour
-  or ActivateCount. Open: Targets at +0x7c (NOTES) or +0x80 (lane code).
-- cine (B14 hide pawns `cinehide`, B17 probe `matineeanim`) `lane/cine` 32aee6b/12c2723: built, reviewed (matineeanim
-  default 0 requested), waiting for the lease to run tools/cinehidetest.ps1 + twin.
-- tp (B15 teleport via 0x93c9d0, `tpsync`) running in `foc-wt\tp`.
-- Next: merge title/cine/tp one or two at a time with must-pass; then input (Stage 6) and the R1 sweep.
+**Resume point (2026-10-20 evening, owner stopped the team for release v0.6.0-dev):**
+- MERGED and verified: infra (490c313), tp B15 (b9c29c7, 27d8c61), input stage 6 (289671b), title B16 (051719d).
+- re lane reports: `coop-anything\local\lanes\re\REPORT.md` (round 1) and the round 2 natives in NOTES.md
+  (chapter title, GFx invoke, texture loader).
+- STOPPED, unmerged: `lane/cine` 4892f3e (B14 `cinehide`, B17 `matineeanim` probe; role offset 0x6e; the form call
+  faults on role-1 pawns; no PASS yet) and `lane/gfx` 220d6c2 (B25: gfxtest shots/metrics, `guestprofile` and
+  `charloader` default off, no results yet). Resume each from its branch with a new agent (Sonnet, medium).
+- Todo: rerun `inputtest.ps1 -Twin` on main (it hung once and SKIPped); B25 remaining checks (BUGS); B17; switch the
+  ESC_Ark character pick and move/look tests to `input tap/hold` (infra files); then R1 sweep.
 
 ## Next step (where to resume)
 **2026-10-20 (stopped by the owner here): story bugs.** Done: B14 part (guest HUD/movement follow the host's
