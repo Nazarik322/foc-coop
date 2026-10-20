@@ -1,7 +1,7 @@
 // input.inc - test input without window focus (stage 6). Included after overlay.inc.
 // Commands in foc_cmd.txt:  input hold <key> <ms> | input tap <key> | input mouse <dx> <dy> [ms] | input mode <bits>
 //                           input key <scancode hex> <ms> (old form, overlay.inc InjectCommand)
-// A held key is made visible to the game by up to four paths (ini inputmode bits, default 15):
+// A held key is made visible to the game by up to four paths (ini inputmode bits, default 6):
 //   1 DirectInput GetDeviceState/GetDeviceData (hooks in overlay.inc, state g_injKey*)
 //   2 window messages WM_KEYDOWN (repeated) / WM_KEYUP posted to the game window
 //   4 GetAsyncKeyState / GetKeyState imports of TFOC.exe report the key as down

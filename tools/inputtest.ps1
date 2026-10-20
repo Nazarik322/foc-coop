@@ -4,7 +4,7 @@
 # Twin: -Twin writes inputinject=0 into both inis; the result must be FAIL (nothing moves).
 # -Mode <bits>: ini inputmode for experiments (1 DirectInput, 2 key messages, 4 GetAsyncKeyState/GetKeyState, 8 focus spoof).
 # -Build: build + deploy this worktree first. Usage: powershell -ExecutionPolicy Bypass -Command "& tools\inputtest.ps1 -Build"
-param([string]$Map = "L06_Megatron_BASE_m", [string]$Out = "", [switch]$Twin, [switch]$Build, [int]$Mode = 15, [int]$HoldMs = 2000, [string]$Key = "W",
+param([string]$Map = "L06_Megatron_BASE_m", [string]$Out = "", [switch]$Twin, [switch]$Build, [int]$Mode = 6, [int]$HoldMs = 2000, [string]$Key = "W",
       [string]$SlotOwner = "", [switch]$NoSlot, [string]$HostCopy = "A", [string]$GuestCopy = "B")
 . "$PSScriptRoot\dev.ps1"
 Add-Type -TypeDefinition @"
