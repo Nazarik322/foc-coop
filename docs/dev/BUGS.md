@@ -91,6 +91,8 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Open: the guest's pawn still stands in the scene. Actor.SetHidden / TnPawn.SetHidden have no Function objects in this
   build, and writing Actor.bHidden (+0x84 bit 4; bForceNetUpdate +0x8c bit 0x80000) replicates but changes nothing on
   screen (components not updated). Needs the native AActor::SetHidden (ghidra) or another way.
+- re lane 2026-10-20 (untested): call 0x54d950 (ecx = pawn+0x10, bool) for pawns with Role >= 2; for the host's
+  pawn on the guest use 0x7dfef0 on the pawn and its _CurrentForm plus 0x652730 on the Mesh (NOTES.md native list).
 - Open: chapter 1 opening "Use Mouse To Look Around": the guest's view is TnLookAroundCameraActor with the cutscene's
   silhouette shot, not the look-around view the host has (see B17).
 - Safety fix found on the way: the GObjects fallback of FindScriptFunction took any Function of that name (chapter 6:
@@ -103,6 +105,8 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - The falling player is rescued next to the other (`rescue`) or, if he dies, the checkpoint restart (B11) brings both
   back. A clean teleport: `call pc ClientSetLocation` moves the host's own pawn; nothing tried so far moves the guest's
   pawn (ClientSetLocation on either side, ServerSetLocationAndRotation; ClientTeleport has no Function object).
+- re lane 2026-10-20 (untested): host-side 0x93c9d0 AActor::SetLocation (ecx = guest pawn, FVector*), destination
+  80-100 uu above the host pawn, then zero Velocity.
 - Owner wants: teleport the other player next to him, or keep the area loaded and hold the first player (input lock or
   invisible wall) until the other one reaches the marker.
 - Note: writing Actor.Location (+0xe4/+0x134) does not move a standing pawn (physics puts it back); a real teleport
@@ -116,11 +120,15 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   ProcessEvent for this Function) and sends `chapter=N` over the sync channel; the guest calls ShowChapterLocal.
 - Note 2026-10-20: HUD.NotifyChapterChanged has no Function object in this build (cannot be called). Next idea: run the
   level's TnSeqAct_SetChapter (ChapterNumber at +0x8c) on the guest with the guest's controller as target.
+- re lane 2026-10-20: host detection by a ProcessEvent 0x728c60 detour filtering TnSeqAct_SetChapter.Activated
+  (float +0x8c), or poll ActivateCount (`props ActivateCount PlayerIndex bActive`).
 - Owner 2026-10-19: "Chapter ..." at the start shows in the UI of only one player (which one: check).
 
 ### B17. Intro animation: one player has no character animation — open (owner report 2026-10-19)
 - The intro now plays on host and guest at the same time, but on one of them (probably the host) the player
   character's animation is missing. Check with screenshots of both at the level start.
+- re lane 2026-10-20: TnPawn._MatineeAnimationEnabled is not replicated and BeginAnimControl exits if it is false;
+  check it (props) on both sides during the intro, write 1 during the cutscene if false.
 
 ### B18. Escalation: TAB scoreboard does not count, no points/money — fixed 2026-10-19 (mock Steam, 2 copies)
 - Owner report after a real Steam session. Cause: the game's own lobby starts Escalation with options from
@@ -153,8 +161,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   lobby; the game itself showed as 213120 until v0.3.2.
 - Fix: host lobby public, tagged foccoop=1 with name/mode/map/max; `FoCRelay list` searches Steam (string filter,
   worldwide) every 3 s and the F10 Join page lists the games (friends first) with a Join button; IP/LAN removed from
-  the menu (code kept). Relay logs to foc_relay
-elay.log; mod logs of the last 10 runs in Binariesoc_logs.
+  the menu (code kept). Relay logs to foc_relay\relay.log; mod logs of the last 10 runs in Binaries\foc_logs.
 
 ### B21. Guest frozen on the host after using an interactive object, then dropped — fixed 2026-10-19 (`ctrlskip`)
 - Owner's Steam session (chapter 6): the guest used something at ~63 s; ctrlshare copied the host's TnInteractStore /
@@ -195,9 +202,6 @@ elay.log; mod logs of the last 10 runs in Binariesoc_logs.
   5 of 5 starts crashed **with the old and the new DLL**; once the session was shown again, 7 of 7 starts worked.
   D3D9 still reports the adapter (`menu: D3D9 adapters=1 'NVIDIA GeForce RTX 3080' mode=1920x1080`).
 - Workaround: keep the remote desktop window open (not minimized) while tests run. Not caused by the DLL.
-
-### B9. `tools/matrix.ps1` screenshots fail when the guest window does not exist (Win32Exception) — open
-- Harmless, but it pollutes the output.
 
 ## Not verified yet
 - 3–5 players (needs a third game copy).

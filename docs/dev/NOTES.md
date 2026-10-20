@@ -102,7 +102,15 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
 ## Testing
 - Copies: `E:\FoC-coop\A` (host) and `B` (guest, `instance=B`). Never touch the Steam install in Program Files.
   `Stop-Foc` (dev.ps1) stops only processes started from `E:\FoC-coop\*`.
-- Build and deploy: `Build-Deploy` in `tools/dev.ps1` (runs `build.bat` through `cmd.exe /c`, copies to A and B).
+- Build and deploy: `Build-Deploy [-Repo <checkout>] [-Copies A,B]` in `tools/dev.ps1` (runs `<Repo>\build.bat` through
+  `cmd.exe /c`, copies to the copies, writes `Binaries\foc_build.txt` = repo, branch, commit, dirty, time). `-Repo`
+  builds a lane worktree (`C:\GitRepo\foc-wt\<lane>`); default `$env:FOC_REPO`, else the main checkout.
+- **Slot lease** (team mode): `E:\FoC-coop\slot.lock` (owner, pid, since, ttl). `Enter-FocSlot` / `Exit-FocSlot` /
+  `Get-FocSlot` / `Update-FocSlot` in dev.ps1; owner = `-Owner`, else `$env:FOC_LANE`, else `manual`. matrix.ps1 and the
+  test scripts take it themselves (`-NoSlot` when the caller holds it); Build-Deploy takes it for its own duration.
+  Expired leases are taken over and logged in `slot.lock.log`. Stop-Foc/Stop-Relay take `-Copies`, scripts take
+  `-HostCopy/-GuestCopy`. Run scripts as `powershell -ExecutionPolicy Bypass -Command "& <script> -Maps a,b"`
+  (`-File` breaks comma lists).
 - `tools/matrix.ps1 -Maps <map,...> [-Move] [-Keep] [-AliveSec N]`: host on A, guest on B at the host's real port; checks
   the state files (map and game class first, then guest joined, every player has a pawn, optional movement, both alive
   and updating, no unguarded exceptions) and prints `RESULT: PASS/FAIL <map> <reason>` and `SUMMARY`. Logs, state
@@ -172,6 +180,23 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   UStruct SuperStruct offset is calibrated at runtime (sync.inc SuperOffset, Pawn -> Actor).
 - SequenceAction.Targets: TArray at +0x7c. Chapter 6 (L06) has TnSeqAct_SetChapter objects with numbers 0, 10, 10
   (on the guest too, the level's Kismet objects exist on the client).
+
+## Native functions found by the re lane (2026-10-20, ghidra, details coop-anything/local/lanes/re/REPORT.md)
+- Native `this` is usually UObject+0x10 (reflection offset = native + 0x10); 0x7dfef0 and 0x93c9d0 take the UObject.
+- 0xb560b0 = IsNetSimProxy (NetMode != 0 and Role +0x5e <= 1); most native setters return early for a sim proxy.
+- 0x7dfef0 = AActor::SetHidden core (ecx = UObject, push bool, ret 4: obj+0x30 |= 8, bHidden +0x84 mask 4, component
+  update 0xa9f930). 0x85bf30 = thunk (ecx-0x10), secondary vtable +0x84. 0x54d950 = TnPawn::SetHidden (gate 0xb560b0,
+  Actor SetHidden, then _CurrentForm vtable +0xbc). 0x652730 = component SetHidden (comp+0x11c bit 4, vtable +0x174),
+  called on [pawn+0x1d0] (probably Mesh). Script TnPawn.SetHidden also hides _CurrentForm: that is why a bHidden
+  write changes nothing.
+- 0x93c9d0 = AActor::SetLocation(FVector*) (ecx = UObject, ret 4) -> 0xc0a8d0 -> 0x8671c0 FarMoveActor(actor, loc,
+  bTest, bNoCheck, bAttached). ClientSetLocation 0x744f20 only sends the RPC when NetMode != 0.
+- ProcessEvent 0x728c60 prologue `55 8B EC 6A FF` (5-byte detour possible). 0xd7cd90 = TnPC.SetCinematicMode ->
+  pawn vtable +0x84; 0x656490 = SeqAct_ToggleCinematicMode.Activated (Role >= 3); 0x76ffd0 / 0xd7d180 =
+  SetCinematicMode RPC / server body.
+- Streaming is state based: WorldInfo.CurrentStreamingState; GameInfo.ReplicateStreamingState ->
+  PC.ClientUpdateLevelStreamingState(name) at login.
+- TnPawn._MatineeAnimationEnabled is not replicated; BeginAnimControl exits if it is false.
 
 ## Test commands (foc_cmd.txt in Binaries, one line)
 `shot <file>`, `shotui <file>`, `menu <page>|off`, `dump <Class> <file> [bytes]`, `props <names>`, `fall local|remote`,

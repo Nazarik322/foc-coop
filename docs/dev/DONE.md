@@ -3,6 +3,11 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-20: team tooling (lane infra, merged 490c313)
+- Slot lease for the shared test slot, `Build-Deploy -Repo` for lane worktrees, `foc_build.txt`, copy parameters.
+  `tools/slottest.ps1` 5/5 PASS (rerun by the lead); must-pass set on the merged main: see TESTS.md.
+- B9 fixed: window screenshot / focus with no window is a note, not an exception (`Test-FocWin`).
+
 ## 2026-10-20: story cutscenes (B14, part)
 - Guest follows the host's cinematic mode: no HUD and no movement during cutscenes, back afterwards (`cinesync`).
   Test `tools/cinetest.ps1` (chapter 1): PASS; twin `-Twin` (cinesync=0): FAIL as it should.
@@ -35,7 +40,7 @@ Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.m
 - B12/B13: sync channel host -> guest inside the game's UDP connection (`sync.inc`): objective + markers mirrored on the
   guest; host waits with a paused level until the guest is in and both intro movies are over.
 - Installer: "Extra mods" page (`installer/Mods.cs`) for the Nexus archives in Downloads (audio logs, FMV remaster,
-  intro skip, Advanced Configurator chain-loaded by our dinput8.dll); backups in `<game>oc_backup`.
+  intro skip, Advanced Configurator chain-loaded by our dinput8.dll); backups in `<game>\foc_backup`.
 - Test commands: `dump`, `props`, `fall`, `tp`, `hp`, `tpmarker`, `lpexec`.
 - ReShade bundled in the installer; all extra mods installed into A and B with the installer (silent mode) and played
   in chapter 6 on LAN and through the Steam relay mock: PASS (see PLAN, mods section).

@@ -8,8 +8,11 @@ verifies, reviews and merges; up to **3 worker agents** run at the same time. Pa
 | Role | Model | Does | May |
 |---|---|---|---|
 | Lead | Opus | plan, assign, verify claims, review, merge into `main`, must-pass runs, docs/dev, talk to the owner | the only one who writes `docs/dev/*.md` and `main`; push/release only after the owner says yes |
-| re (reverse engineering) | Opus | Ghidra, UnrealScript, playbook patterns; recipes for native calls | read only; own Ghidra project copy; never starts the game |
-| Implementers (infra, title, cine, tp, input, ...) | Sonnet (Opus for risky recipes) | code + test + twin in their own worktree | commit only on their branch `lane/<name>`; game only while holding the slot lease |
+| re (reverse engineering) | Sonnet | Ghidra, UnrealScript, playbook patterns; recipes for native calls | read only; own Ghidra project copy; never starts the game |
+| Implementers (infra, title, cine, tp, input, ...) | Sonnet | code + test + twin in their own worktree | commit only on their branch `lane/<name>`; game only while holding the slot lease |
+
+**Owner rule 2026-10-20:** worker agents run with effort `medium` at most and preferably not on Opus (Sonnet, also
+for RE). Only the lead session runs on Opus (effort high).
 
 ## Rules for every agent
 1. Read first: PLAN.md, BUGS.md, NOTES.md, TESTS.md, this file, and the ground rules in
@@ -49,7 +52,7 @@ verifies, reviews and merges; up to **3 worker agents** run at the same time. Pa
 4. Push and GitHub releases only after the owner's yes.
 
 ## How agents are started
-- Used: background subagents from the lead session (Agent tool, `model: opus` / `sonnet`), started in one message so
+- Used: background subagents from the lead session (Agent tool, `model: sonnet`, `effort: medium`), started in one message so
   they run at the same time. Visible in the agent panel below the prompt and in `/tasks`; continued with SendMessage.
 - Alternative: agent teams (`"env": {"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"}` in settings.json, restart; arrows +
   Enter to talk to a teammate, Ctrl+T task list). Experimental; teammates cannot run background commands; no resume.
@@ -60,7 +63,7 @@ verifies, reviews and merges; up to **3 worker agents** run at the same time. Pa
 ## Current lanes
 | Lane | Agent | Worktree / folder | Goal |
 |---|---|---|---|
-| re | Opus | `coop-anything\local\lanes\re\` | B15, B14, B16, B17 recipes; missing script classes; playbook patterns |
+| re | Sonnet | `coop-anything\local\lanes\re\` | B15, B14, B16, B17 recipes; missing script classes; playbook patterns |
 | infra | Sonnet | `C:\GitRepo\foc-wt\infra` | slot lease, `-Repo`, copy parameters, `foc_build.txt`, B9, `slottest.ps1` |
 | title | Sonnet | `C:\GitRepo\foc-wt\title` | B16 chapter title on both screens (`chaptersync`), B17 observation |
 Next wave: cine (B14/B17 fix), tp (B15, B11c revive tests), input (Stage 6, second slot); then sweep (R1).
