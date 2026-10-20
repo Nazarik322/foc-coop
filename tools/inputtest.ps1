@@ -43,10 +43,10 @@ try {
     Say "RESULT: FAIL $Map wrong mode (map/role/players)"; return }
   Start-Sleep 5
   # take the focus away from both game windows
-  $np = $null
-  [void][IFg]::SetForegroundWindow([IFg]::FindWindow("Shell_TrayWnd", $null)); Start-Sleep 1
-  if ([IFg]::FgPid() -eq $pa -or [IFg]::FgPid() -eq $pb -or [IFg]::FgPid() -eq 0) {
-    $np = Start-Process notepad -PassThru; Start-Sleep 2; [void][IFg]::SetForegroundWindow($np.MainWindowHandle); Start-Sleep 1 }
+  # a small form of our own takes the focus (no desktop screenshot involved)
+  Add-Type -AssemblyName System.Windows.Forms
+  $np = New-Object Windows.Forms.Form; $np.Text = "focus holder"; $np.Width = 240; $np.Height = 120; $np.TopMost = $true
+  $np.Show(); $np.Activate(); [void][IFg]::SetForegroundWindow($np.Handle); Start-Sleep 1
   $fg = [IFg]::FgPid()
   Say "foreground pid $fg (host $pa guest $pb)"
   if ($fg -eq $pa -or $fg -eq $pb -or $fg -eq 0) { Say "RESULT: SKIP could not move the focus away from the game windows"; return }
@@ -72,7 +72,7 @@ try {
   if ($fails) { Say "RESULT: FAIL $Map $($fails -join '; ') [$($res -join ' ')]" } else { Say "RESULT: PASS $Map unfocused injected $Key moved guest and host independently [$($res -join ' ')]" }
 } finally {
   foreach ($p in $inis.Keys) { Set-Content $p $inis[$p] -NoNewline -Encoding ascii }
-  if ($np) { Stop-Process -Id $np.Id -Force -ErrorAction SilentlyContinue }
+  if ($np) { $np.Close() }
   Stop-Foc; Stop-Relay
 }
 } finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }
