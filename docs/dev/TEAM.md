@@ -32,6 +32,8 @@ for RE). Only the lead session runs on Opus (effort high).
    "Works" only with a RESULT line from a run; assert the mode (map, role, players) before the result.
 8. Pitfalls: write C/PS1 with the Write/Edit tools (backslashes), then check for `[\x00-\x08\x0b\x0c]`; no Cyrillic in
    .ps1 (PowerShell 5.1 reads them as ANSI); no desktop screenshots; PowerShell 5.1 syntax.
+8b. Waiting for the lease: agents cannot idle-wait (sleep is blocked); start the lease-taking test script with the
+   tool's `run_in_background` (Enter-FocSlot inside polls up to 60 min) and continue when notified. Set `FOC_LANE`.
 9. Report format: what was done, commits, commands and RESULT lines, twin result, screenshots, open questions,
    confidence, Docs delta.
 

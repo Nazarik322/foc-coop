@@ -38,6 +38,10 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 ## Known flaky
 - ESC_Ark: the host's character pick uses real key presses; one run of 3 failed (host spawn=0). Needs in-game input.
 - Any run while the remote desktop is not shown: SKIP (B7).
+- ESC_Ark, second mode (2026-10-20, build 490c313): the guest connected and got the package list but stayed on
+  TnPlayerControllerFrontEnd without a pawn (host spawn=3, 1 player). The rerun right after passed. Watch for repeats.
+- Must-pass 2026-10-20 on 490c313 (lead): L02a, L02b, L04c, L06 PASS; ESC_Ark FAIL (above) then PASS; Steam mock
+  L03b PASS (relay connected).
 
 ## Known open (expected FAIL now)
 - Chapter 8b: guest spawn state 0.
