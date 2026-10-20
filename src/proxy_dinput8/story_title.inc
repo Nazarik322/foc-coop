@@ -162,3 +162,49 @@ static void ChapterApply(const TickObjs& t, const char* body) {
     if (ShowChapter2(t, (float)num)) { applied = seq; Log("title: guest shows chapter %d (seq %d)", num, seq); }
     else retryAt = GetTickCount() + 2000;   // no local controller / action yet
 }
+
+// ---------------------------------------------------------------- GFx probes (B16: Scaleform route)
+static bool IContains(const char* h, const char* nd) { size_t l = strlen(nd); for (; *h; h++) if (_strnicmp(h, nd, l) == 0) return true; return false; }
+static bool IsPropObj(BYTE* p) {
+    if (!IsObjFast(p)) return false; char cn[80] = "?"; ClassNameOf(p, cn, sizeof(cn)); return strstr(cn, "Property") != nullptr;
+}
+// `fnlist <substr> [substr..]` (game thread): every Function object whose name contains one of the substrings
+// (case-insensitive): pointer, ParmsSize (+0x5e), and the parameter properties reachable from it (the first
+// property-class pointer in words +0x20..+0x80, then each property's own next pointer in words +0x20..+0x40) with offset
+// ((word +0x30) >> 20), class and name.
+static void FnListCommand(const char* args) {
+    char want[6][48]; int nw = 0;
+    for (const char* p = args; *p && nw < 6;) { while (*p == ' ') p++; int k = 0; while (*p && *p != ' ' && k < 47) want[nw][k++] = *p++; want[nw][k] = 0; if (k) nw++; }
+    unsigned fid = ClassIdByName("Function"); TArr* go = GObj(); int found = 0;
+    for (int i = 0; i < go->Num && found < 120; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; char n[96];
+        if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != fid || !ObjNameStr(o, n, sizeof(n))) continue;
+        bool hit = false; for (int w = 0; w < nw; w++) if (IContains(n, want[w])) hit = true;
+        if (!hit) continue;
+        char line[900]; size_t k = _snprintf_s(line, _TRUNCATE, "fnlist: %s %p idx %d parmsSize %u flags %08x:", n, o, i, (unsigned)*(unsigned short*)(o + 0x5e), *(unsigned*)(o + 0x58));
+        BYTE* pr = nullptr;
+        for (int off = 0x20; off < 0x80 && !pr; off += 4) { BYTE* c = *(BYTE**)(o + off); if (IsPropObj(c)) pr = c; }
+        for (int s = 0; s < 12 && pr; s++) {
+            char pn[64] = "?", cn[64] = "?"; ObjNameStr(pr, pn, sizeof(pn)); ClassNameOf(pr, cn, sizeof(cn));
+            k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " [%s %s @%x]", cn, pn, *(unsigned*)(pr + 0x30) >> 20);
+            BYTE* nx = nullptr; for (int off = 0x20; off < 0x40 && !nx; off += 4) { BYTE* c = *(BYTE**)(pr + off); if (c != pr && IsPropObj(c)) nx = c; }
+            pr = nx;
+        }
+        Log("%s", line); found++;
+    }
+    Log("fnlist: %d function(s)", found);
+}
+// `hudscan` (game thread): the local controller's myHUD (+0x3b4): class, and every object pointer in its first 0x300
+// bytes whose class name contains "Movie" or "GFx", with the offset
+static void HudScanCommand() {
+    BYTE* pc = nullptr; for (int a = 0; a < g_to.npc; a++) if (IsLocalPC(g_to.pc[a])) pc = g_to.pc[a];
+    if (!pc) { Log("hudscan: no local controller"); return; }
+    BYTE* h = *(BYTE**)(pc + 0x3b4); if (!IsObjFast(h)) { Log("hudscan: myHUD null"); return; }
+    char hn[96]; ObjLabel(h, hn, sizeof(hn)); Log("hudscan: myHUD %p %s", h, hn);
+    for (int off = 0x20; off < 0x400; off += 4) {
+        BYTE* c = *(BYTE**)(h + off); if (!IsObjFast(c)) continue;
+        char cn[80] = "?"; ClassNameOf(c, cn, sizeof(cn));
+        if (!strstr(cn, "Movie") && !strstr(cn, "GFx")) continue;
+        char nm[96]; ObjLabel(c, nm, sizeof(nm)); Log("hudscan: +0x%x -> %p %s (class %s)", off, c, nm, cn);
+    }
+}

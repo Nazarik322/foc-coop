@@ -340,6 +340,8 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("chapter ", 0) == 0) { { const char* fp = strstr(cmd.c_str(), " fn"); g_chapFnPick = fp ? atoi(fp + 3) : -1; } ShowChapter2(g_to, (float)atof(cmd.c_str() + 8), strstr(cmd.c_str(), " pc") != nullptr, strstr(cmd.c_str(), " alt") != nullptr); return; }
     if (cmd.rfind("objscan ", 0) == 0) { ObjScanCommand(cmd.c_str() + 8); return; }
     if (cmd == "chapters") { ChaptersCommand(); return; }
+    if (cmd.rfind("fnlist ", 0) == 0) { FnListCommand(cmd.c_str() + 7); return; }
+    if (cmd == "hudscan") { HudScanCommand(); return; }
     if (cmd.rfind("vtdiff ", 0) == 0) { VtDiffCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("dump ", 0) == 0) { DumpClass(cmd.c_str() + 5); return; }
     if (cmd.rfind("fall ", 0) == 0) { MovePawnCommand(cmd.c_str() + 5, true); return; }
