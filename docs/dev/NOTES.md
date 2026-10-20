@@ -178,7 +178,7 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
   Not callable: SetCinematicMode, Actor/TnPawn.SetHidden, TnHUD.NotifyChapterChanged; `funcs` finds only a handful.
 - Actor: +0x84 bit 4 bHidden (writing it changes nothing on screen), +0x8c bit 0x80000 bForceNetUpdate.
   UStruct SuperStruct offset is calibrated at runtime (sync.inc SuperOffset, Pawn -> Actor).
-- SequenceAction.Targets: TArray at +0x7c. Chapter 6 (L06) has TnSeqAct_SetChapter objects with numbers 0, 10, 10
+- SequenceAction.Targets: TArray at +0x80 (Num +0x84; +0x7c was wrong, title lane 2026-10-20), ActivateCount +0x70. Chapter 6 (L06) has TnSeqAct_SetChapter objects with numbers 0, 10, 10
   (on the guest too, the level's Kismet objects exist on the client).
 
 ## Native functions found by the re lane (2026-10-20, ghidra, details coop-anything/local/lanes/re/REPORT.md)

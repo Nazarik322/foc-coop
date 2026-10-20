@@ -119,7 +119,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 
 ### B16. Chapter title shown to only one player — open (see B12)
 - 2026-10-20 in progress: `chapter <n>` test command (sync.inc ShowChapterLocal) runs the guest's own
-  TnSeqAct_SetChapter with that ChapterNumber via its Activated event, Targets (+0x7c) temporarily = the guest's PC.
+  TnSeqAct_SetChapter with that ChapterNumber via its Activated event, Targets (+0x80) temporarily = the guest's PC.
   Built, NOT yet tried with a real number (L06 has 0, 10, 10; try `chapter 10` on B and shot B). If it shows the title:
   host detects the activation (no ActivateCount property found; idea: watch for the host's own HUD title or hook
   ProcessEvent for this Function) and sends `chapter=N` over the sync channel; the guest calls ShowChapterLocal.

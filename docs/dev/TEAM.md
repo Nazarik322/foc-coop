@@ -34,6 +34,8 @@ for RE). Only the lead session runs on Opus (effort high).
    .ps1 (PowerShell 5.1 reads them as ANSI); no desktop screenshots; PowerShell 5.1 syntax.
 8b. Waiting for the lease: agents cannot idle-wait (sleep is blocked); start the lease-taking test script with the
    tool's `run_in_background` (Enter-FocSlot inside polls up to 60 min) and continue when notified. Set `FOC_LANE`.
+8c. Build-Deploy and the game runs that test it go inside ONE lease: other lanes redeploy their DLL to the copies
+   between leases (title lane lost a run to that). `foc_build.txt` in Binaries shows which build is deployed.
 9. Report format: what was done, commits, commands and RESULT lines, twin result, screenshots, open questions,
    confidence, Docs delta.
 
