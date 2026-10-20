@@ -82,7 +82,20 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Open: movies that play during loading still run separately on each side (they are local), only the level start is
   synchronised.
 
-### B14. Scripted scenes: the guest sees the host's cutscene from its own position — open
+### B14. Scripted scenes: the guest sees the host's cutscene from its own position — partly fixed 2026-10-20
+- Fixed: Kismet put only the host's controller into cinematic mode, so during a cutscene the guest kept its HUD and
+  could move. The host now mirrors its bCinematicMode (PC +0x360 bit 0x20000) to every guest with the client RPC
+  ClientSetCinematicMode(on, 1, 1, 1, 1) (`cinesync`, sync.inc TickCinematic). Verified: chapter 1, guest cine=1
+  during the host's cutscene with no HUD (sessions cine1/B2, cine2), back to 0 and HUD after; twin (cinesync=0) FAILs.
+  First version passed the affects flags as 0 on "off" and left the guest without HUD (chapter 6, hide2) - fixed.
+- Open: the guest's pawn still stands in the scene. Actor.SetHidden / TnPawn.SetHidden have no Function objects in this
+  build, and writing Actor.bHidden (+0x84 bit 4; bForceNetUpdate +0x8c bit 0x80000) replicates but changes nothing on
+  screen (components not updated). Needs the native AActor::SetHidden (ghidra) or another way.
+- Open: chapter 1 opening "Use Mouse To Look Around": the guest's view is TnLookAroundCameraActor with the cutscene's
+  silhouette shot, not the look-around view the host has (see B17).
+- Safety fix found on the way: the GObjects fallback of FindScriptFunction took any Function of that name (chapter 6:
+  a SetHidden of another class was run on the guest's pawn). It now requires the function's class (or its state's
+  class) to be the object's class or a superclass (UStruct SuperStruct calibrated on Pawn -> Actor).
 - Owner wants: guest camera switched to the main character or the cutscene played for both, then both placed next to
   each other without collision pushing them apart.
 

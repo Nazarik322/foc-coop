@@ -374,9 +374,10 @@ static void WriteState(const TickObjs& t) {
         char pname[64] = "";   // PlayerReplicationInfo.PlayerName (FString +0x1e0)
         if (IsObjFast(pri)) { FStrAscii(pri + 0x34c, chr, sizeof(chr)); prif = *(DWORD*)(pri + 0x210); FStrAscii(pri + 0x1e0, pname, sizeof(pname)); }
         float* f = pw ? LocOf(pw) : nullptr;
-        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"state\":\"%s\",\"prif\":%lu,\"char\":\"%s\",\"name\":\"%s\",\"hp\":%.0f,\"downed\":%d}",
-          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, st, prif, chr, pname,
-          pw ? *(float*)(pw + 0x350) : 0.f, pw && (*(unsigned*)(pw + 0x5d0) & 0x80000) ? 1 : 0);   // TnPawn Health, _IsDowned
+        J("%s{\"local\":%d,\"pc\":\"%s\",\"pawn\":\"%s\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"spawn\":%d,\"start\":\"%s\",\"view\":\"%s\",\"state\":\"%s\",\"prif\":%lu,\"char\":\"%s\",\"name\":\"%s\",\"cine\":%d,\"hp\":%.0f,\"downed\":%d,\"hidden\":%d}",
+          a ? "," : "", IsLocalPC(pc) ? 1 : 0, pcn, pwn, f ? f[0] : 0.f, f ? f[1] : 0.f, f ? f[2] : 0.f, g_spawnState[a], start, view, st, prif, chr, pname, (*(unsigned*)(pc + 0x360) & 0x20000) ? 1 : 0,
+          pw ? *(float*)(pw + 0x350) : 0.f, pw && (*(unsigned*)(pw + 0x5d0) & 0x80000) ? 1 : 0,   // TnPawn Health, _IsDowned
+          pw && (*(unsigned*)(pw + 0x84) & 4) ? 1 : 0);   // Actor.bHidden
     }
     J("],\"pawns\":[");
     for (int i = 0; i < t.npawn; i++) {

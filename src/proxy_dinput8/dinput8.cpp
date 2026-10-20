@@ -203,9 +203,10 @@ static void hexdump(const char* p, int n, char* out, size_t outsz) {
 }
 
 static int g_waitGuestSec = 300;   // host pauses a freshly loaded story map until a guest joins (sync.inc), ini waitguest
-static bool g_syncOn = true;
-static bool g_killRules = true;
-static bool g_setNames = true;   // each player gets its Steam name via SetName (sync.inc TickNames), ini setnames   // Escalation host adds TnGameRules_TrackKills (sync.inc), ini killrules   // co-op sync channel host -> guest (sync.inc), ini sync
+static bool g_syncOn = true;      // co-op sync channel host -> guest (sync.inc), ini sync
+static bool g_killRules = true;   // Escalation host adds TnGameRules_TrackKills (sync.inc), ini killrules
+static bool g_setNames = true;    // each player gets its Steam name via SetName (sync.inc TickNames), ini setnames
+static bool g_cineSync = true;    // B14: the guest follows the host's cinematic mode (sync.inc TickCinematic), ini cinesync
 static void SyncNoteOut(SOCKET s);
 static bool SyncFilterIn(const char* buf, int len, const sockaddr* from);
 static int WSAAPI h_sendto(SOCKET s, const char* buf, int len, int flags, const sockaddr* to, int tolen) {
@@ -1917,6 +1918,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_syncOn = GetPrivateProfileIntW(L"foc_coop", L"sync", 1, ini2) != 0;
         g_killRules = GetPrivateProfileIntW(L"foc_coop", L"killrules", 1, ini2) != 0;
         g_setNames = GetPrivateProfileIntW(L"foc_coop", L"setnames", 1, ini2) != 0;
+        g_cineSync = GetPrivateProfileIntW(L"foc_coop", L"cinesync", 1, ini2) != 0;
         g_autoRestart = GetPrivateProfileIntW(L"foc_coop", L"autorestart", 1, ini2) != 0;
         g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
         g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);

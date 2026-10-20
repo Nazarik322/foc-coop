@@ -235,14 +235,18 @@ static void OexecCommand(const char* args) {
     Log("oexec: %s '%s' -> %s", on, rest, r ? "handled" : "not an exec function of this object");
 }
 
-// `poke <target> <hex offset> <int>` (foc_cmd.txt, game thread): write an int into an object (targets as oexec, plus
+// `poke <target> <hex offset> <int | |bits | ~bits>` (foc_cmd.txt, game thread): write an int into an object (targets as oexec, plus
 // pri / rpri); e.g. Escalation money TnPlayerReplicationInfoSurvival._SurvivalMoney (offset from `props`)
 static void PokeCommand(const char* args) {
-    char target[96] = ""; unsigned off = 0; int v = 0;
-    if (sscanf_s(args, "%95s %x %d", target, (unsigned)sizeof(target), &off, &v) < 3) { Log("poke: bad arguments '%s'", args); return; }
+    char target[96] = "", val[32] = ""; unsigned off = 0;
+    if (sscanf_s(args, "%95s %x %31s", target, (unsigned)sizeof(target), &off, val, (unsigned)sizeof(val)) < 3) { Log("poke: bad arguments '%s'", args); return; }
     BYTE* obj = OexecTarget(target);
     if (!IsObjFast(obj) || off > 0x2000 || !Rd(obj + off, 4)) { Log("poke: no target '%s'", target); return; }
-    int old = *(int*)(obj + off); *(int*)(obj + off) = v;
+    int old = *(int*)(obj + off), v;   // value: decimal, |0xbits (set bits), ~0xbits (clear bits)
+    if (val[0] == '|') v = old | (int)strtoul(val + 1, nullptr, 0);
+    else if (val[0] == '~') v = old & ~(int)strtoul(val + 1, nullptr, 0);
+    else v = (int)strtol(val, nullptr, 0);
+    *(int*)(obj + off) = v;
     char on[96]; ObjLabel(obj, on, sizeof(on)); Log("poke: %s +0x%x %d -> %d", on, off, old, v);
 }
 

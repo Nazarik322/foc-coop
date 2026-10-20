@@ -3,6 +3,12 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-20: story cutscenes (B14, part)
+- Guest follows the host's cinematic mode: no HUD and no movement during cutscenes, back afterwards (`cinesync`).
+  Test `tools/cinetest.ps1` (chapter 1): PASS; twin `-Twin` (cinesync=0): FAIL as it should.
+- `poke <target> <off> |bits / ~bits`; foc_state.json players[].hidden (Actor.bHidden).
+- FindScriptFunction fallback limited to the object's class chain.
+
 ## 2026-10-20: Escalation session fixes (v0.4.2)
 - Player names from Steam on both sides (B22); ctrlshare allowlist (B23); names in foc_state.json.
 
@@ -11,7 +17,7 @@ Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.m
 - Steam join: public lobbies with name/mode/map, Join page lists games found on Steam (friends first) with Join
   buttons; IP/LAN removed from the menu (B20). Guest joins with ?Name=<Steam name>.
 - ctrlshare no longer shares interaction objects and vehicle forms (B21, the guest drop in the owner's session).
-- Logs: last 10 runs in Binariesoc_logs; relay logs relay.log / relay_list.log.
+- Logs: last 10 runs in Binaries\foc_logs; relay logs relay.log / relay_list.log.
 
 ## 2026-10-19 (late night): Steam shows Spacewar, installer opens mod pages
 - Owner: Steam showed "Transformers" instead of Spacewar. dinput8.dll now restarts a game started with SteamAppId != 480

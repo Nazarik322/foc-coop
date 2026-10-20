@@ -339,6 +339,26 @@ static DWORD __declspec(noinline) CallThis3(void* fn, void* self, DWORD a1, DWOR
     }
     return r;
 }
+// UStruct::SuperStruct offset, calibrated on the pair Pawn -> Actor
+static int SuperOffset() {
+    static int off = -1;
+    if (off >= 0) return off;
+    unsigned pid = ClassIdByName("Pawn"), aid = ClassIdByName("Actor");
+    BYTE* p = pid && pid < 8192 ? g_classObjById[pid] : nullptr; BYTE* a = aid && aid < 8192 ? g_classObjById[aid] : nullptr;
+    if (!IsObjFast(p) || !IsObjFast(a)) return -1;
+    for (int k = 0x2c; k < 0x100 && off < 0; k += 4) if (*(BYTE**)(p + k) == a) off = k;
+    Log("call: SuperStruct at +0x%x", off);
+    return off;
+}
+static bool ClassIsA(BYTE* cls, BYTE* want) {
+    int off = SuperOffset();
+    for (int i = 0; i < 64 && IsObjFast(cls); i++) {
+        if (cls == want) return true;
+        if (off < 0) return false;
+        cls = *(BYTE**)(cls + off);
+    }
+    return false;
+}
 static BYTE* FindScriptFunction(BYTE* obj, const char* name) {
     if (!IsObjFast(obj)) return nullptr;
     BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
@@ -350,14 +370,18 @@ static BYTE* FindScriptFunction(BYTE* obj, const char* name) {
     (void)ret;
     if (!IsObjFast(f)) {
         // FindFunction finds nothing on the native-only game class (TnCampaignGame): take the Function object with that
-        // name from GObjects (the one whose +0x28 word is not another Function, i.e. not a nested copy)
+        // name from GObjects (the one whose +0x28 word is not another Function, i.e. not a nested copy) whose class (or
+        // state's class) is the object's class or one of its superclasses: another class's function of the same name
+        // (TnWeapon.SetHidden for a pawn) must not run on this object
         unsigned fid = ClassIdByName("Function"); TArr* go = GObj();
+        BYTE* own = g_classObjById[*(unsigned*)(obj + 0x14) & 0x1fff];
         for (int i = 0; i < go->Num && !f; i++) {
             BYTE* o = (BYTE*)go->Data[i];
             if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != fid) continue;
             char nm[96]; if (!ObjNameStr(o, nm, sizeof(nm)) || strcmp(nm, name)) continue;
             BYTE* w28 = *(BYTE**)(o + 0x28);
             if (IsObjFast(w28) && (*(unsigned*)(w28 + 0x14) & 0x1fff) == fid) continue;
+            if (!ClassIsA(own, w28) && !(IsObjFast(w28) && ClassIsA(own, *(BYTE**)(w28 + 0x28)))) continue;
             f = o;
         }
         if (f) Log("call: %s taken from GObjects (FindFunction found nothing)", name);
@@ -394,6 +418,33 @@ static bool CallScript(BYTE* obj, const char* name, void* parms, int parmsCap) {
     __try { CallThis3(base + (0x728c60 - 0x400000), obj, (DWORD)(UINT_PTR)f, (DWORD)(UINT_PTR)parms, 0); }
     __except (EXCEPTION_EXECUTE_HANDLER) { Log("call: %s raised %08lx", name, GetExceptionCode()); return false; }
     return true;
+}
+
+// ---------------------------------------------------------------- cutscenes (B14, host, ini cinesync)
+// Kismet puts only the host's controller into cinematic mode, so during a cutscene the guest kept its HUD and could
+// move. When the host's PlayerController.bCinematicMode (+0x360 bit 0x20000) changes, the host calls the client RPC
+// ClientSetCinematicMode(bInCinematicMode, bAffectsMovement, bAffectsTurning, bAffectsHUD, bAffectsButtons) on every
+// remote controller (PlayerController.SetCinematicMode has no Function object in this build). The affects flags stay 1
+// so that "off" brings the HUD back. Tested (cine3): guest cine=1 during the host's cutscene, HUD gone, back after.
+// Not done: hiding the guest's pawn. Actor.SetHidden / TnPawn.SetHidden have no Function objects either, and writing
+// Actor.bHidden (+0x84 bit 4) does not change what is drawn (the components are not updated).
+static void TickCinematic(const TickObjs& t) {
+    static int last = -1; static int lastRemotes = 0;
+    if (!g_cineSync || t.ngame < 1) { last = -1; return; }
+    BYTE* host = nullptr; int remotes = 0;
+    for (int a = 0; a < t.npc; a++) { if (IsLocalPC(t.pc[a])) host = t.pc[a]; else remotes++; }
+    if (!host || !remotes) { last = -1; return; }
+    int cine = (*(unsigned*)(host + 0x360) & 0x20000) ? 1 : 0;
+    if (cine == last && remotes == lastRemotes) return;
+    if (last < 0 && !cine) { last = 0; lastRemotes = remotes; return; }   // start of the map, nothing to undo
+    last = cine; lastRemotes = remotes;
+    for (int a = 0; a < t.npc; a++) {
+        BYTE* pc = t.pc[a]; if (IsLocalPC(pc) || !IsObjFast(pc)) continue;
+        DWORD parms[16] = {(DWORD)cine, 1, 1, 1, 1, 0};   // affects flags stay 1, else "off" leaves the HUD hidden
+        bool ok = CallScript(pc, "ClientSetCinematicMode", parms, sizeof(parms));
+        char pn[96]; ObjLabel(pc, pn, sizeof(pn));
+        Log("cinesync: host cinematic mode %s -> %s.ClientSetCinematicMode(%d) %s", cine ? "on" : "off", pn, cine, ok ? "ok" : "failed");
+    }
 }
 
 // ---------------------------------------------------------------- player names
@@ -447,6 +498,7 @@ static void PostKey(UINT vk);   // overlay.inc
 static void TickSync(const TickObjs& t) {
     TickWaitGuest(t);
     TickEscalationRules(t);
+    TickCinematic(t);
     // B11: everybody is down and the host shows MISSION FAILED: its first item is "Restart From Last Checkpoint";
     // press Enter for the host after 4 s (window message, no focus needed). Tested: the level restarts, the guest stays.
     // A second Enter 1.5 s later confirms "Load Checkpoint - all unsaved progress will be lost" (Continue is selected).
