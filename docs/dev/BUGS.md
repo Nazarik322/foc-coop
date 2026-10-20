@@ -127,6 +127,10 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   level's TnSeqAct_SetChapter (ChapterNumber at +0x8c) on the guest with the guest's controller as target.
 - re lane 2026-10-20: host detection by a ProcessEvent 0x728c60 detour filtering TnSeqAct_SetChapter.Activated
   (float +0x8c), or poll ActivateCount (`props ActivateCount PlayerIndex bActive`).
+- 2026-10-20 title lane (not merged): host detection by polling ActivateCount +0x70 works (L06: _1591 fires with
+  Targets[0] = TnPlayerPawn), `chap`/`chapseq` reach the guest, the guest's ProcessEvent of "Activated" returns ok but
+  NO title appears (screenshots; host shows "CHAPTER 10 THE FINAL COUNTDOWN"). Likely the global "Activated" Function
+  is SequenceOp's empty one, not SetChapter's script override: next try the object's FindFunction.
 - Owner 2026-10-19: "Chapter ..." at the start shows in the UI of only one player (which one: check).
 
 ### B17. Intro animation: one player has no character animation — open (owner report 2026-10-19)
