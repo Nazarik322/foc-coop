@@ -292,6 +292,17 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   as a session; after that MapName returns the old "UI_FrontEnd_m" (many UWorld objects linger) and the relay never
   gets "port"/"go". Details and next steps: PLAN.md "Resume point 2026-10-20 late night". Test: tools/lobbycontinue.ps1.
 
+### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
+- Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
+  every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all
+  PRIs with that id (4-copy test: "Bumblebee" x3). Fix: `uniqueids` (host gives each PRI UniqueId +0x230 its own
+  Steam-form id), names set as soon as the PRI exists and re-set every 5 s, source ini `playername` > Steam name >
+  ?Name=. Test: tools/esc4.ps1 (A-D, invented names Optimus/Bumblebee/Ironhide/Ratchet): PASS, TAB shows all four.
+
+### B33. Escalation: a player's death banner on another player's screen - fixed 2026-10-21
+- ctrlshare gave guests the host's UIController; in Escalation it is not shared any more (story keeps it).
+  4-copy run: the host died (spectating), the three guests showed the normal wave countdown.
+
 ### B31. Host: Esc (pause menu) with a guest connected called address 0 - fixed 2026-10-21 (`exechook` default 0)
 - The engine console Exec hook (lobby.inc, vtable slot ghidra 0x1522ba4) broke "onrelease showmenu" while a guest was
   connected: EXCEPTION at 00000000, [esp]=0 (looks like a corrupted return), the host process died once. Without a

@@ -53,11 +53,15 @@ static bool LobbyJoin(const char* id, const char* hash, const char* pw) {
     CreateThread(nullptr, 0, LobbyJoinThread, nullptr, 0, nullptr);
     return true;
 }
+// The game's disconnect goes first and the relay quits 3 s later: the close message to the host travels through the
+// relay; with both at once the host only noticed the guest's leave by timeout and kept its controller (B24, 2026-10-21).
+static DWORD WINAPI LobbyRelayQuitLater(LPVOID) { Sleep(3000); RelayCommand("quit"); return 0; }
 static void LobbyLeave() {
     Log("lobby: left (role %d)", g_lobbyRole);
-    g_lobbyRole = 0; g_lobbyStatus[0] = 0; RelayCommand("quit");
+    g_lobbyRole = 0; g_lobbyStatus[0] = 0;
     char map[96]; MapName(g_to, map, sizeof(map));
-    if (map[0] == 'L' && map[1] >= '0' && map[1] <= '9') QueueCommand("disconnect");
+    if ((map[0] == 'L' && map[1] >= '0' && map[1] <= '9') || !_strnicmp(map, "ESC_", 4)) QueueCommand("disconnect");
+    CreateThread(nullptr, 0, LobbyRelayQuitLater, nullptr, 0, nullptr);
 }
 
 // ---------------------------------------------------------------- engine console Exec hook (host: mission start)

@@ -52,6 +52,7 @@ static bool g_tpSync = true;    // ini tpsync (default on: the launcher ini has 
 static bool g_ptrace = true;    // ini ptrace: per-second player trace + Kismet activations in foc_coop.log (trace.inc)
 static bool g_scriptDown = false; // ini scriptdown: the script downs/revives the host -> the guests too (trace.inc)
 static bool g_fakeLogin = true;  // ini fakelogin: no sign-in check, so Host/Join work without a restart (mirror.inc, B4)
+static char g_pendingPlayerName[64] = "";   // ini playername, copied into sync.inc g_iniPlayerName
 static bool g_execHook = false; // ini exechook: hook the engine console Exec; off: Esc (showmenu) with a guest connected
                                  // called address 0 through it (2026-10-21, tools/pausetest.ps1 -Guest); the menu's
                                  // CHAPTER / CONTINUE never used Exec, the lobby reopens solo games instead
@@ -62,6 +63,7 @@ static bool g_texSync = true;   // ini texsync: the guest forces the textures th
 static bool g_kMirror = true;   // ini kmirror: the guest runs the host's cosmetic Kismet ops (kmirror.inc)
 static bool g_reconcile = true; // ini reconcile: the server copy of the guest pawn follows where the guest sees it (tp.inc)
 static bool g_streamGuard = true; // ini streamguard: bring the player behind along when the script streams sublevels (tp.inc)
+static bool g_uniqueIds = true;  // ini uniqueids: every player gets its own UniqueNetId (tp.inc)
 static bool g_leash = true;     // ini leash: a guest stuck far from the host is brought to it (tp.inc)
 static bool g_tpFollow = true;  // ini tpfollow: the host pawn jumped by script (teleport, scene change) -> guests follow (tp.inc)
 static int g_spawnAfter = 0;
@@ -1926,6 +1928,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_tpSync = GetPrivateProfileIntW(L"foc_coop", L"tpsync", 1, ini2) != 0;
         g_tpFollow = GetPrivateProfileIntW(L"foc_coop", L"tpfollow", 1, ini2) != 0;
         g_leash = GetPrivateProfileIntW(L"foc_coop", L"leash", 1, ini2) != 0;
+        g_uniqueIds = GetPrivateProfileIntW(L"foc_coop", L"uniqueids", 1, ini2) != 0;
         g_streamGuard = GetPrivateProfileIntW(L"foc_coop", L"streamguard", 1, ini2) != 0;
         g_reconcile = GetPrivateProfileIntW(L"foc_coop", L"reconcile", 1, ini2) != 0;
         g_kMirror = GetPrivateProfileIntW(L"foc_coop", L"kmirror", 1, ini2) != 0;
@@ -1934,6 +1937,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_mirror = GetPrivateProfileIntW(L"foc_coop", L"mirror", 1, ini2) != 0;
         g_camView = GetPrivateProfileIntW(L"foc_coop", L"camview", 1, ini2) != 0;
         g_execHook = GetPrivateProfileIntW(L"foc_coop", L"exechook", 0, ini2) != 0;
+        { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"playername", L"", w, 64, ini2); WideCharToMultiByte(CP_UTF8, 0, w, -1, g_pendingPlayerName, sizeof(g_pendingPlayerName), nullptr, nullptr); }
         g_fakeLogin = GetPrivateProfileIntW(L"foc_coop", L"fakelogin", 1, ini2) != 0;
         g_ptrace = GetPrivateProfileIntW(L"foc_coop", L"ptrace", 1, ini2) != 0;
         g_scriptDown = GetPrivateProfileIntW(L"foc_coop", L"scriptdown", 0, ini2) != 0;

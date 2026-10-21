@@ -140,6 +140,7 @@ static bool SkipShare(const char* name) {
     for (char* tok = strtok_s(buf, ",", &ctx); tok; tok = strtok_s(nullptr, ",", &ctx)) if (*tok && strstr(name, tok)) return true;
     return false;
 }
+static bool StoryMapNow(const TickObjs& t);
 static void TickCtrlShare(const TickObjs& t) {
     if (!g_ctrlShare || t.npc < 2) return;
     int best = -1;
@@ -155,11 +156,14 @@ static void TickCtrlShare(const TickObjs& t) {
         int si = -1; for (int j = 0; j < 16; j++) if (seenPc[j] == t.pc[a]) si = j;
         if (si < 0) { for (int j = 0; j < 16 && si < 0; j++) if (!seenPc[j] || !InList(seenPc[j], t.pc, t.npc)) { si = j; seenPc[j] = t.pc[a]; seenAt[j] = GetTickCount(); } }
         if (si >= 0 && GetTickCount() - seenAt[si] < (DWORD)g_ctrlShareDelay) continue;
-        int copied = 0;
+        int copied = 0; bool story = StoryMapNow(t);
         for (int off = 0x500; off < 0x740; off += 4) {
             BYTE** dst = (BYTE**)(t.pc[a] + off); BYTE* src = *(BYTE**)(t.pc[best] + off);
             if (*dst != nullptr || !IsObjFast(src)) continue;
             char n2[80]; unsigned nn = 0; ObjNameStr(src, n2, sizeof(n2), &nn);
+            // Escalation: never the host's UIController - a guest's death then showed the death banner on the host's screen
+            // (owner 2026-10-21); the story keeps it (native campaign code dereferences it)
+            if (!story && strstr(n2, "UIController")) { static volatile LONG nu = 0; if (InterlockedIncrement(&nu) <= 3) Log("ctrlshare: Escalation, not sharing +%x %s", off, n2); continue; }
             if (SkipShare(n2)) { static volatile LONG ns = 0; if (InterlockedIncrement(&ns) <= 6) Log("ctrlshare: skipping +%x %s_%u", off, n2, nn - 1); continue; }
             static volatile LONG nc = 0; if (InterlockedIncrement(&nc) <= 40) Log("ctrlshare: +%x <- %s_%u", off, n2, nn - 1);
             *dst = src; copied++;
@@ -218,6 +222,7 @@ static bool TpGuestNear(BYTE* host, BYTE* guest, const float* off, const char* w
 static bool TpAnyCinematic();                                                          // tp.inc
 static void TickTpFollow(const TickObjs& t);
 static void TickLeash(const TickObjs& t);    // tp.inc
+static void TickUniqueIds(const TickObjs& t); // tp.inc
 static void TickReconcile(const TickObjs& t); // tp.inc
 static void TickMirror(const TickObjs& t);    // mirror.inc
 static void TickTraceAll(const TickObjs& t);  // trace.inc
@@ -1163,6 +1168,7 @@ static void GameTick() {
         TimedPart("TickTpFollow", TickTpFollow, t);
         TimedPart("TickReconcile", TickReconcile, t);
         TimedPart("TickLeash", TickLeash, t);
+        TimedPart("TickUniqueIds", TickUniqueIds, t);
     }
     TickSpawnHelper(t);
     TimedPart("TickViewFix", TickViewFix, t);

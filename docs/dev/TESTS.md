@@ -39,6 +39,7 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | Lobby: guest follows the host (no restart) | lobby.inc (`lobby create/join`, Exec hook) + relay port/go | `tools/lobbytest.ps1` (menustart through the hooked Exec) | - | 2026-10-20 PASS |
 | B29 lobby: the game's own CONTINUE / CHAPTER | lobby.inc solo -> session reopen, NoteTravel | `tools/lobbycontinue.ps1` (keys Up+Enter) and `-Keys "ENTER,ENTER,ENTER"` (chapter I); do not touch the windows during the run | - | 2026-10-21 PASS both (chapter: warning confirmed by hand once) |
 | B31 pause menu with a guest | `exechook` default 0 | `tools/pausetest.ps1 -Guest` (host A in L01 as a session, guest B joined, Esc twice: alive, no call to address 0) | `-Ini exechook=1`: FAIL (2 null calls) | 2026-10-21 PASS / twin FAIL |
+| B32/B33 Escalation names, death banner | `uniqueids`, names, UIController not shared in Escalation | `tools/esc4.ps1` (4 copies, IP join, names in the host state + TAB shot; no player actions) | - | 2026-10-21 PASS (4 names in TAB) |
 | Slot lease (team mode) | `Enter-FocSlot` etc. in dev.ps1 | `tools/slottest.ps1` (no game): 5/5 PASS | - | 2026-10-20: 5/5 PASS (lead rerun) |
 
 ## Known flaky

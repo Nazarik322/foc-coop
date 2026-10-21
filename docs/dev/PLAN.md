@@ -52,6 +52,17 @@ Open (the owner's real flow does not work yet):
 - Startup hitches: slow-part log shows TickMirror ~1 s and TickGfxSync ~1.5 s once at startup (property lookups);
   per-map fakelogin pass is now class-filtered.
 
+## NEXT (owner 2026-10-21): everything through the game's own menus
+1. ESCALATION first: the game's ESCALATION menu item (its own lobby / character pick / search) works over Steam
+   Spacewar through our relay, names from Steam, no sign-in / server checks; friends find and join from that menu.
+2. The F10 lobby goes away; F10 stays only as a quick launcher for tests.
+3. Story: lobby flow later also through the game's menu (today: F10 lobby + the game's CONTINUE / CHAPTER).
+4. Current Escalation fixes first: four different names in TAB from the start (ini playername for tests, Steam
+   name for players), no death banner on another player's screen (UIController not shared in Escalation), 4-copy
+   test tools/esc4.ps1 without player actions, windows 800x450 in a 2x2 grid.
+5. MULTIPLAYER (versus) at the very end (see the last section).
+
+
 ## Owner plan 2026-10-20: lobby and drop-in without restarts
 1. F10 finds lobbies created by players: public, friends only, private / with password (Steam lobby data).
 2. The host starts the campaign from the game's normal menu; every player in the lobby goes along (cutscenes for all).
@@ -215,3 +226,7 @@ Waves 1-3 and match end on 4 maps, guest character choice, 4-5 players, B3.
 
 ### Later / not now (owner)
 Whole campaign (M6-M8), coop-anything write-up and PR (only with OK), B5, B6, Steam relay without VPN, installer.
+
+## Later (owner 2026-10-21, do LAST): the game's MULTIPLAYER menu
+The versus multiplayer menu of the game over Steam Spacewar (names from Steam, friends, game browser, lobbies),
+without the dead online service checks.

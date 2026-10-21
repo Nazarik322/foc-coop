@@ -198,3 +198,26 @@ static void TpStreamGuard(const char* opClass) {
         TpGuestNear(pawns[lead], pawns[a], nullptr, "streamguard");
     }
 }
+
+// uniqueids (ini, default 1, host): without the online service every guest logs in with UniqueNetId 0, and the game
+// treats players with the same id as one: with 4 players the three guests all got the name the first of them set
+// ("Bumblebee" x3, owner 2026-10-21; B24 two controllers sharing one PRI). Each PlayerReplicationInfo.UniqueId
+// (StructProperty +0x230, `props UniqueId`) that is 0 or a duplicate gets its own value in Steam ID form.
+static void TickUniqueIds(const TickObjs& t) {
+    if (!g_uniqueIds || t.ngame < 1) return;
+    unsigned long long seen[16]; int ns = 0;
+    for (int a = 0; a < t.npc && a < 16; a++) {
+        BYTE* pc = t.pc[a]; if (!IsObjFast(pc)) continue;
+        BYTE* pri = *(BYTE**)(pc + 0x1d4); if (!IsObjFast(pri) || !Rd(pri + 0x230, 8)) continue;
+        unsigned long long* id = (unsigned long long*)(pri + 0x230);
+        bool dup = false; for (int i = 0; i < ns; i++) if (seen[i] == *id) dup = true;
+        if (*id == 0 || dup) {
+            unsigned long long old = *id;
+            static unsigned next = 1;
+            *id = 0x0110000100000000ull | (0x7f000000u + next++);
+            char pn[96]; ObjLabel(pc, pn, sizeof(pn));
+            Log("uniqueids: %s %s PRI UniqueId %016llx -> %016llx", pn, IsLocalPC(pc) ? "local" : "remote", old, *id);
+        }
+        if (ns < 16) seen[ns++] = *id;
+    }
+}

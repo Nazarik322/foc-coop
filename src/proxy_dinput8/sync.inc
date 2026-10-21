@@ -508,28 +508,33 @@ typedef BOOL(__fastcall* PFN_SCE)(void* self, void* edx, const wchar_t* str, voi
 static void* g_sceOut[2];   // an FOutputDevice whose vtable entries do nothing (set up in TickNames)
 static void __fastcall SceOutStub(void*, void*, const wchar_t*, int) {}
 static void* g_sceVt[32];
+// Name source (owner 2026-10-21: TAB showed "Default" at the start, and with 4 players the three guests looked like one):
+// ini `playername` (test copies get invented names) > the Steam name (relay persona) > ?Name= of the command line.
+// SetName as soon as the controller has its PlayerReplicationInfo (Escalation spawns the pawn only after the character
+// pick), and again whenever the game puts another name back (checked every 5 s, no try limit).
 static void TickNames(const TickObjs& t) {
-    static BYTE* world = nullptr; static int tries = 0; static DWORD last = 0;
-    if (t.nuworld < 1) return;
-    if (world != t.uworld[0]) { world = t.uworld[0]; tries = 0; }
-    if (tries >= 3 || GetTickCount() - last < 5000) return;
+    static DWORD last = 0;
+    if (t.nuworld < 1 || GetTickCount() - last < 5000) return;
     char want[64] = "";
-    const char* url = CmdlineUrl(); const char* n = strstr(url, "?Name=");
-    if (n) { n += 6; size_t i = 0; while (n[i] && n[i] != '?' && i + 1 < sizeof(want)) { want[i] = n[i]; i++; } want[i] = 0; }
-    else strncpy_s(want, g_relayPersona, _TRUNCATE);
-    for (char* c = want; *c; c++) if (*c == ' ' || *c == '"' || (unsigned char)*c < 0x20) *c = '_';
+    if (g_pendingPlayerName[0]) strncpy_s(want, g_pendingPlayerName, _TRUNCATE);   // ini playername
+    else if (g_relayPersona[0]) strncpy_s(want, g_relayPersona, _TRUNCATE);
+    else {
+        const char* url = CmdlineUrl(); const char* n = strstr(url, "?Name=");
+        if (n) { n += 6; size_t i = 0; while (n[i] && n[i] != '?' && i + 1 < sizeof(want)) { want[i] = n[i]; i++; } want[i] = 0; }
+    }
+    for (char* c = want; *c; c++) if (*c == ' ' || *c == '"' || *c == '?' || *c == '=' || *c == ',' || (unsigned char)*c < 0x20) *c = '_';
     if (!want[0]) return;
     BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsLocalPC(t.pc[a])) pc = t.pc[a];
-    if (!pc || !PawnOf(pc)) return;
+    if (!pc) return;
     BYTE* pri = *(BYTE**)(pc + 0x1d4); if (!IsObjFast(pri)) return;
     char have[64] = ""; FStrAscii(pri + 0x1e0, have, sizeof(have));
     if (!strcmp(have, want)) return;
-    last = GetTickCount(); tries++;
+    last = GetTickCount();
     if (!g_sceVt[0]) { for (int i = 0; i < 32; i++) g_sceVt[i] = (void*)SceOutStub; g_sceOut[0] = g_sceVt; }
     wchar_t cmd[96]; _snwprintf_s(cmd, _TRUNCATE, L"SetName %hs", want);
     PFN_SCE fn = (PFN_SCE)((BYTE*)GetModuleHandleW(nullptr) + (0xbf1f70 - 0x400000));
     BOOL r = FALSE;
-    __try { r = fn(pc, nullptr, cmd, g_sceOut, nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("names: SetName raised %08lx", GetExceptionCode()); tries = 3; return; }
+    __try { r = fn(pc, nullptr, cmd, g_sceOut, nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("names: SetName raised %08lx", GetExceptionCode()); last = GetTickCount() + 55000; return; }
     Log("names: '%s' -> SetName %s (%s)", have, want, r ? "ok" : "not handled");
 }
 

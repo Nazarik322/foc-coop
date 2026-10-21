@@ -448,9 +448,24 @@ static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
 
 // Posts kTickMsg every g_tickMs while the game thread keeps up (one message in flight at a time; a message lost
 // for 5 s, for example while a map loads without pumping messages, is re-posted).
+// Fallback (2026-10-21, copies C and D of a 4-player test): the game created its D3D device without passing our
+// CreateDevice hook, so there was no game window, no message hook and no tick (no names, no state file). After 30 s
+// without a window the process' own top-level window is taken.
+static BOOL CALLBACK FindOwnWindow(HWND h, LPARAM lp) {
+    DWORD pid = 0; GetWindowThreadProcessId(h, &pid);
+    if (pid != GetCurrentProcessId() || !IsWindowVisible(h) || GetWindow(h, GW_OWNER)) return TRUE;
+    RECT r; if (!GetClientRect(h, &r) || r.right < 320) return TRUE;
+    *(HWND*)lp = h; return FALSE;
+}
+static void SubclassGameWindow(HWND w);
 static DWORD WINAPI TickThread(LPVOID) {
+    DWORD start = GetTickCount();
     for (;;) {
         Sleep(g_tickMs);
+        if (!g_gameWnd && GetTickCount() - start > 30000) {
+            HWND f = nullptr; EnumWindows(FindOwnWindow, (LPARAM)&f);
+            if (f) { g_gameWnd = f; SubclassGameWindow(f); Log("menu: no D3D device seen, using window %p for the tick", f); }
+        }
         HWND w = g_gameWnd;
         if (!w || !g_msgHook || !IsWindow(w)) continue;
         if (g_tickPosted && GetTickCount() - g_tickPostedAt < 5000) continue;
@@ -885,7 +900,7 @@ static void DrawMainPage() {
         // no window), so it only showed the overlay; friends find the game in their Join list instead
         if (!strcmp(g_relayRole, "host")) ImGui::TextDisabled("Friends see your game in F10 > Join a game.");
     }
-    if (ImGui::Button(InProcessTravel() ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; g_hostUrl[0] = 0; if (InProcessTravel()) { QueueCommand("disconnect"); RelayCommand("quit"); } else RelaunchWithUrl(""); }
+    if (ImGui::Button(InProcessTravel() ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; g_hostUrl[0] = 0; if (InProcessTravel()) { QueueCommand("disconnect"); CreateThread(nullptr, 0, LobbyRelayQuitLater, nullptr, 0, nullptr); g_lobbyRole = 0; } else RelaunchWithUrl(""); }
     if (ImGui::Button("Settings", bs)) g_page = 4;
     Tooltip("Co-op options; most apply at once, also during a game");
     if (ImGui::Button("About / status", bs)) g_page = 3;
