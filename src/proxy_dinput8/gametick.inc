@@ -366,7 +366,13 @@ static void NoteTravel(const char* cmd) {   // "open <map>?..." / "start <map>..
     strncpy_s(g_pendingMap, m, _TRUNCATE); g_pendingOldGame = g_to.ngame ? g_to.game[0] : nullptr; g_pendingAt = GetTickCount();
     Log("tick: travel to %s noted", m);
 }
+static char g_hostMapHint[96] = ""; static DWORD g_hostMapAt = 0;   // client: map= of the host's sync snapshots (sync.inc)
 static bool KnownMapName(const TickObjs& t, char* out, size_t n) {
+    // a client connected to a host: the host's map, while its snapshots arrive and our controller is not a front end one
+    if (t.ngame == 0 && g_hostMapHint[0] && GetTickCount() - g_hostMapAt < 5000) {
+        bool frontEnd = false; for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && IsLocalPC(t.pc[a])) { char cn[64] = ""; ClassNameOf(t.pc[a], cn, sizeof(cn)); if (strstr(cn, "FrontEnd")) frontEnd = true; }
+        if (!frontEnd) { strncpy_s(out, n, g_hostMapHint, _TRUNCATE); return true; }
+    }
     BYTE* game = t.ngame ? t.game[0] : nullptr;
     if (g_pendingMap[0] && game && game != g_pendingOldGame) {
         strncpy_s(g_knownMap, g_pendingMap, _TRUNCATE); g_knownGame = game; g_pendingMap[0] = 0;

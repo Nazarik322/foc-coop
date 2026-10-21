@@ -220,6 +220,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   commands (the pawn has to stand at the armory).
 
 ### B24. Rejoin leaves stale controllers on the host — open
+- 2026-10-21 lobby late join: after the guest left and joined again the host listed 3 players (lobbycontinue -Late).
 - Owner's 41-minute Escalation session: npc=4 for 2 players at the end, two controllers shared one PRI
   (pridiag PC0 and PC2 -> the same PRI). Probably old controllers of a guest who reconnected. Check what the game does
   with them (scoreboard rows, spawn helper, sync peers).
@@ -290,6 +291,13 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - CONTINUE loads TnCampaignGameSolo with ?LoadCheckpoint, not through the console Exec, so the lobby reopens the map
   as a session; after that MapName returns the old "UI_FrontEnd_m" (many UWorld objects linger) and the relay never
   gets "port"/"go". Details and next steps: PLAN.md "Resume point 2026-10-20 late night". Test: tools/lobbycontinue.ps1.
+
+### B31. Host: Esc (pause menu) with a guest connected called address 0 - fixed 2026-10-21 (`exechook` default 0)
+- The engine console Exec hook (lobby.inc, vtable slot ghidra 0x1522ba4) broke "onrelease showmenu" while a guest was
+  connected: EXCEPTION at 00000000, [esp]=0 (looks like a corrupted return), the host process died once. Without a
+  guest, or with exechook=0, the pause menu is fine. The hook is not needed: the menu's CHAPTER / CONTINUE never use
+  Exec (the lobby reopens solo games). Test: tools/pausetest.ps1 -Guest (PASS with exechook=0, FAIL with 1).
+  NULLCALL lines in the log now show [esp] slots with their module for calls to address 0.
 
 ### B30. Host hitches every few seconds with the 2026-10-20 trace/mirror build - mostly fixed
 - Full GObjects passes with a name lookup per object (fakelogin class defaults every 5 s, netspeed every 5 s, texsync

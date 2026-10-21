@@ -79,13 +79,13 @@ static BOOL __fastcall h_EngineExec(void* self, void* edx, const wchar_t* cmd, v
             g_hostBoundPort = 0; g_captureBind = 1; g_hosting = 1;
             Log("lobby: mission start from the game's menu -> %ls", buf);
             { char nb[600]; WideCharToMultiByte(CP_ACP, 0, buf, -1, nb, sizeof(nb), nullptr, nullptr); NoteTravel(nb); }
-            return CallExecSafe((void*)g_execOrig, self, buf, ar);
+            return CallExecSafe((void*)(g_execOrig ? g_execOrig : g_exec), self, buf, ar);
         }
     }
-    return CallExecSafe((void*)g_execOrig, self, cmd, ar);
+    return CallExecSafe((void*)(g_execOrig ? g_execOrig : g_exec), self, cmd, ar);
 }
 static void LobbyHookExec() {   // after FindExec: the FExec vtable slot of GEngine (ghidra 0x1522ba4)
-    static bool done = false; if (done || !g_exec) return;
+    static bool done = false; if (done || !g_exec || !g_execHook) return;
     BYTE* slot = (BYTE*)GetModuleHandleW(nullptr) + (0x1522ba4 - 0x400000);
     if (*(void**)slot != (void*)g_exec) { Log("lobby: Exec slot holds %p, not %p: no hook", *(void**)slot, g_exec); done = true; return; }
     g_execOrig = g_exec;

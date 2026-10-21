@@ -591,6 +591,7 @@ static void TickSync(const TickObjs& t) {
     EnterCriticalSection(&g_syncCs); memcpy(snap, g_syncRx, sizeof(snap)); LeaveCriticalSection(&g_syncCs);
     if (!snap[0]) return;
     char hmap[96]; SyncGetStr(snap + sizeof(kSyncMagic) - 2, "map", hmap, sizeof(hmap));
+    if (hmap[0] && t.ngame == 0) { strncpy_s(g_hostMapHint, hmap, _TRUNCATE); g_hostMapAt = GetTickCount(); }   // client: the host's map is ours (MapName)
     if (_stricmp(hmap, map) != 0) return;   // still loading, or another map
     const char* body = snap + sizeof(kSyncMagic) - 2;   // starts at the '\n' that ends the magic
     int obj = SyncGetInt(body, "obj", -2);

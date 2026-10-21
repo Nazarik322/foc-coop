@@ -17,6 +17,12 @@ lease, worktree builds), title (B16). Wave 2: cine, tp, input. Wave 3: merge, mu
 - Todo: rerun `inputtest.ps1 -Twin` on main (it hung once and SKIPped); B25 remaining checks (BUGS); B17; switch the
   ESC_Ark character pick and move/look tests to `input tap/hold` (infra files); then R1 sweep.
 
+## Resume point 2026-10-21 afternoon - LOBBY works
+Lobby suite 2026-10-21 14:30-14:37 (Steam mock, one PC): pausetest -Guest PASS, lobbytest PASS, lobbycontinue -Late
+PASS (CONTINUE, guest leaves and joins the running game again: in L01 as client, hp 200), chapter select PASS.
+Open: after a rejoin the host counts 3 players (the left guest's controller lingers, B24); real two-account Steam
+test; owner's manual test; release when the owner agrees.
+
 ## Resume point 2026-10-21 - LOBBY
 Branch wip/lobby-b4 (local, not pushed): a98f340 (all of 2026-10-20), aa61485 (B29 fixed: CONTINUE takes the guests
 along, lobbycontinue PASS), d457882 (test keys). Next: run `tools/lobbycontinue.ps1 -Keys "ENTER,ENTER,ENTER"` (chapter
