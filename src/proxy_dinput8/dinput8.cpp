@@ -49,6 +49,21 @@ static volatile LONG g_playerCount = 0;   // player controllers seen by the host
 static bool g_holdSpawn = false;
 static bool g_rescue = false;
 static bool g_tpSync = true;    // ini tpsync (default on: the launcher ini has rescue=1 but no tpsync), tp.inc
+static bool g_ptrace = true;    // ini ptrace: per-second player trace + Kismet activations in foc_coop.log (trace.inc)
+static bool g_scriptDown = false; // ini scriptdown: the script downs/revives the host -> the guests too (trace.inc)
+static bool g_fakeLogin = true;  // ini fakelogin: no sign-in check, so Host/Join work without a restart (mirror.inc, B4)
+static bool g_execHook = false; // ini exechook: hook the engine console Exec; off: Esc (showmenu) with a guest connected
+                                 // called address 0 through it (2026-10-21, tools/pausetest.ps1 -Guest); the menu's
+                                 // CHAPTER / CONTINUE never used Exec, the lobby reopens solo games instead
+static bool g_camView = true;   // ini camview: the guest looks through the host's scene camera (mirror.inc)
+static bool g_mirror = true;    // ini mirror: the guest repeats what the story script does to the host (mirror.inc)
+static bool g_netSpeed = true;  // ini netspeed: raise UE3 net rates (gfxsync.inc)
+static bool g_texSync = true;   // ini texsync: the guest forces the textures the host keeps resident (gfxsync.inc)
+static bool g_kMirror = true;   // ini kmirror: the guest runs the host's cosmetic Kismet ops (kmirror.inc)
+static bool g_reconcile = true; // ini reconcile: the server copy of the guest pawn follows where the guest sees it (tp.inc)
+static bool g_streamGuard = true; // ini streamguard: bring the player behind along when the script streams sublevels (tp.inc)
+static bool g_leash = true;     // ini leash: a guest stuck far from the host is brought to it (tp.inc)
+static bool g_tpFollow = true;  // ini tpfollow: the host pawn jumped by script (teleport, scene change) -> guests follow (tp.inc)
 static int g_spawnAfter = 0;
 static volatile LONG g_releaseSpawn = 0;
 static bool g_ctrlDiag = false;
@@ -1836,6 +1851,16 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
             CONTEXT* c = ep->ContextRecord;
             Log("REGS eax=%08lx ebx=%08lx ecx=%08lx edx=%08lx esi=%08lx edi=%08lx ebp=%08lx esp=%08lx", c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
             DWORD* sp = (DWORD*)c->Esp;
+            // a call through a null pointer: [esp] is the caller's return address, often in another module (2026-10-21)
+            if (!addr) {
+                __try {
+                    for (int i = 0; i < 4; i++) {
+                        BYTE* r = (BYTE*)sp[i]; HMODULE rm = nullptr; char rn[MAX_PATH] = "?";
+                        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)r, &rm) && rm) GetModuleFileNameA(rm, rn, MAX_PATH);
+                        Log("NULLCALL [esp+%d]=%p in %s +0x%lx", i * 4, r, rn, rm ? (DWORD)(r - (BYTE*)rm) : 0);
+                    }
+                } __except (EXCEPTION_EXECUTE_HANDLER) {}
+            }
             char line[3000]; size_t k = _snprintf_s(line, _TRUNCATE, "CRASHSTACK (ghidra VAs of return addresses):");
             int n = 0;
             __try {
@@ -1899,6 +1924,19 @@ static void LoadConfig(const wchar_t* dir) {
         g_holdSpawn = GetPrivateProfileIntW(L"foc_coop", L"holdspawn", 0, ini2) != 0;
         g_rescue = GetPrivateProfileIntW(L"foc_coop", L"rescue", 0, ini2) != 0;
         g_tpSync = GetPrivateProfileIntW(L"foc_coop", L"tpsync", 1, ini2) != 0;
+        g_tpFollow = GetPrivateProfileIntW(L"foc_coop", L"tpfollow", 1, ini2) != 0;
+        g_leash = GetPrivateProfileIntW(L"foc_coop", L"leash", 1, ini2) != 0;
+        g_streamGuard = GetPrivateProfileIntW(L"foc_coop", L"streamguard", 1, ini2) != 0;
+        g_reconcile = GetPrivateProfileIntW(L"foc_coop", L"reconcile", 1, ini2) != 0;
+        g_kMirror = GetPrivateProfileIntW(L"foc_coop", L"kmirror", 1, ini2) != 0;
+        g_netSpeed = GetPrivateProfileIntW(L"foc_coop", L"netspeed", 1, ini2) != 0;
+        g_texSync = GetPrivateProfileIntW(L"foc_coop", L"texsync", 1, ini2) != 0;
+        g_mirror = GetPrivateProfileIntW(L"foc_coop", L"mirror", 1, ini2) != 0;
+        g_camView = GetPrivateProfileIntW(L"foc_coop", L"camview", 1, ini2) != 0;
+        g_execHook = GetPrivateProfileIntW(L"foc_coop", L"exechook", 0, ini2) != 0;
+        g_fakeLogin = GetPrivateProfileIntW(L"foc_coop", L"fakelogin", 1, ini2) != 0;
+        g_ptrace = GetPrivateProfileIntW(L"foc_coop", L"ptrace", 1, ini2) != 0;
+        g_scriptDown = GetPrivateProfileIntW(L"foc_coop", L"scriptdown", 0, ini2) != 0;
         g_spawnAfter = GetPrivateProfileIntW(L"foc_coop", L"spawnafter", 0, ini2);
         g_ctrlDiag = GetPrivateProfileIntW(L"foc_coop", L"ctrldiag", 0, ini2) != 0;
         { wchar_t w[160] = {0}; GetPrivateProfileStringW(L"foc_coop", L"ctrlallow", L"OnlineSubsystem,OnlinePlayerData,ProfileSettings,UIController", w, 160, ini2); WideCharToMultiByte(CP_ACP, 0, w, -1, g_ctrlAllow, sizeof(g_ctrlAllow), nullptr, nullptr); }
@@ -1943,7 +1981,11 @@ static void LoadConfig(const wchar_t* dir) {
 #include "sync.inc"
 #include "tp.inc"
 #include "story_title.inc"
+#include "mirror.inc"
 #include "overlay.inc"
+#include "trace.inc"
+#include "gfxsync.inc"
+#include "kmirror.inc"
 #include "input.inc"
 
 // ---------------------------------------------------------------- proxy export

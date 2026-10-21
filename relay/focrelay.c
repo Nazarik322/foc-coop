@@ -1,7 +1,8 @@
 /* FoCRelay: moves the game's UDP packets over Steam (AppID 480 "Spacewar"), so friends join without IPs or port
  * forwarding. Pattern from coop-anything playbook/networking-steam-spacewar.md (HXCoop).
  *
- *   FoCRelay.exe host <gamePort> [max] [mode] [map]  create a public lobby tagged foccoop=1 (name, mode, map in the
+ *   FoCRelay.exe host <gamePort|0> [max] [mode] [map] [public|friends|private] [pwhash]
+ *                                                create a lobby tagged foccoop=1 (name, mode, map in the
  *                                                lobby data); every player in it gets a local UDP socket connected
  *                                                to 127.0.0.1:<gamePort> (the hosting game)
  *   FoCRelay.exe list                            lobby browser for the Join page: every 3 s writes lobbies.txt
@@ -12,7 +13,11 @@
  *
  * steam_api.dll (32-bit, flat API) and steam_appid.txt (480) live next to this exe, never next to TFOC.exe (the game has
  * its own Steam_api.dll). Status for the in-game menu and tests: relay.status next to the exe, rewritten every second.
- * The relay exits when no TFOC.exe has run from the parent folder for 60 s, on "quit" in relay.cmd, or on Ctrl+C. */
+ * The relay exits when no TFOC.exe has run from the parent folder for 60 s, on "quit" in relay.cmd, or on Ctrl+C.
+ * Lobby without a map (owner 2026-10-20): the host relay may start with game port 0; relay.cmd "port <n>" sets the game
+ * port later (peer sockets are re-pointed), "go <map>" tells the lobby the mission started (lobby data go=<seq>|<map>),
+ * the join relay reports it in relay.status (go=...) and the guest game connects then. A password is kept as a hash
+ * in the lobby data "pw" (checked by the game before it joins). */
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <windows.h>
@@ -126,6 +131,8 @@ static void *g_user, *g_mm, *g_fr, *g_nm, *g_nu;
 static int32_t g_pipe;
 static uint64_t g_me, g_lobby, g_hostId;
 static int g_isHost, g_isList, g_gamePort, g_localPort, g_inLobby, g_maxPlayers = 5;
+static int g_lobbyType = 2;   /* 2 public, 1 friends only, 0 private (invite only) */
+static char g_pwHash[24] = "", g_go[128] = ""; static int g_goSeq;
 static char g_mode[32] = "", g_map[96] = "";
 static int g_listPending; static DWORD g_listAsked;
 static char g_state[128] = "starting";
@@ -142,6 +149,7 @@ static void Status(void) {
     fprintf(f, "role=%s\nstate=%s\nme=%llu\nlobby=%llu\nhost=%llu\npeers=%d\ntx=%llu\nrx=%llu\ngamePort=%d\nlocalPort=%d\npid=%lu\n",
             g_isHost ? "host" : "join", g_state, g_me, g_lobby, g_hostId, g_isHost ? g_npeers : (g_hostId ? 1 : 0), g_tx, g_rx,
             g_gamePort, g_localPort, GetCurrentProcessId());
+    fprintf(f, "go=%s\nlobbytype=%d\n", g_go, g_lobbyType);
     for (int i = 0; i < g_npeers; i++) fprintf(f, "peer=%llu tx=%llu rx=%llu\n", g_peers[i].id, g_peers[i].tx, g_peers[i].rx);
     if (g_fr) { const char* pn = SteamAPI_ISteamFriends_GetPersonaName(g_fr); fprintf(f, "persona=%s\n", pn ? pn : ""); }
     fclose(f);
@@ -200,7 +208,8 @@ static void WriteLobbyList(uint32_t count) {
         char name[64], mode[32], map[96], own[32], max[16];
         CopyData(name, 64, l, "name"); CopyData(mode, 32, l, "mode"); CopyData(map, 96, l, "map"); CopyData(own, 32, l, "owner"); CopyData(max, 16, l, "max");
         uint64_t owner = _strtoui64(own, NULL, 10);
-        fprintf(f, "%llu|%llu|%s|%s|%s|%d|%d|%d\n", l, owner, name, mode, map, SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(g_mm, l), atoi(max), owner && IsFriend(owner));
+        char pw[24], go[128]; CopyData(pw, 24, l, "pw"); CopyData(go, 128, l, "go");
+        fprintf(f, "%llu|%llu|%s|%s|%s|%d|%d|%d|%s|%d\n", l, owner, name, mode, map, SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(g_mm, l), atoi(max), owner && IsFriend(owner), pw[0] ? pw : "-", go[0] != 0);
         seen[ns++] = l;
     }
     /* friends in a foc-coop lobby the search did not return (an older host: friends-only lobby) */
@@ -211,7 +220,7 @@ static void WriteLobbyList(uint32_t count) {
         int dup = 0; for (int k = 0; k < ns; k++) if (seen[k] == gi.lobby) dup = 1;
         if (dup) continue;
         char name[64]; const char* fn = SteamAPI_ISteamFriends_GetFriendPersonaName(g_fr, fid); strncpy(name, fn ? fn : "?", 63); name[63] = 0; Clean(name);
-        fprintf(f, "%llu|%llu|%s|?|?|0|0|1\n", gi.lobby, fid, name);
+        fprintf(f, "%llu|%llu|%s|?|?|0|0|1|0|0\n", gi.lobby, fid, name);
     }
     fclose(f);
     MoveFileExA(t, p, MOVEFILE_REPLACE_EXISTING);
@@ -236,6 +245,8 @@ static void OnLobbyEntered(uint64_t lobby, uint32_t response) {
         SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, lobby, "mode", g_mode);
         SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, lobby, "map", g_map);
         sprintf(v, "%d", g_maxPlayers); SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, lobby, "max", v);
+        SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, lobby, "pw", g_pwHash);
+        SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, lobby, "go", "");
         char c[64]; sprintf(c, "+connect_lobby %llu", lobby);
         SteamAPI_ISteamFriends_SetRichPresence(g_fr, "connect", c);
         SteamAPI_ISteamFriends_SetRichPresence(g_fr, "status", "Hosting Fall of Cybertron co-op");
@@ -375,6 +386,8 @@ int main(int argc, char** argv) {
         if (argc > 3) g_maxPlayers = atoi(argv[3]);
         if (argc > 4) strncpy(g_mode, argv[4], sizeof(g_mode) - 1);
         if (argc > 5) strncpy(g_map, argv[5], sizeof(g_map) - 1);
+        if (argc > 6) g_lobbyType = !strcmp(argv[6], "friends") ? 1 : !strcmp(argv[6], "private") ? 0 : 2;
+        if (argc > 7 && strcmp(argv[7], "-")) strncpy(g_pwHash, argv[7], sizeof(g_pwHash) - 1);
         if (g_maxPlayers < 2 || g_maxPlayers > 8) g_maxPlayers = 5;
     } else if (!g_isList) g_localPort = argc > 3 ? atoi(argv[3]) : 7790;
     SetConsoleCtrlHandler(OnCtrl, TRUE);
@@ -392,7 +405,7 @@ int main(int argc, char** argv) {
     SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess(g_nu);
     printf("Steam OK as %s (%llu)\n", SteamAPI_ISteamFriends_GetPersonaName(g_fr), g_me);
     if (g_isHost) {
-        SteamAPI_ISteamMatchmaking_CreateLobby(g_mm, 2 /* public: found by the Join page's search */, g_maxPlayers);
+        SteamAPI_ISteamMatchmaking_CreateLobby(g_mm, g_lobbyType /* 2 public, 1 friends only, 0 private */, g_maxPlayers);
         SetState("creating lobby");
     } else if (g_isList) {
         RequestList();
@@ -421,6 +434,8 @@ int main(int argc, char** argv) {
                 SetState(g_npeers ? "hosting: friends connected" : "hosting: lobby open, waiting for friends");
             } else if (g_hostId) {
                 SendTo(g_hostId, "K", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
+                const char* go = SteamAPI_ISteamMatchmaking_GetLobbyData(g_mm, g_lobby, "go");   /* host started a mission */
+                if (go && strcmp(go, g_go)) { strncpy(g_go, go, sizeof(g_go) - 1); printf("go: %s\n", g_go); Status(); }
                 if (now - g_hostSeen > 20000) SetState("host silent for 20 s");
             }
         }
@@ -428,7 +443,24 @@ int main(int argc, char** argv) {
             lastStatus = now; Status();
             if (GameRunning()) lastGame = now; else if (now - lastGame > 60000) { printf("no game running for 60 s, exiting\n"); break; }
             char cp[MAX_PATH]; sprintf(cp, "%s\\%s", g_dir, g_isList ? "list.cmd" : "relay.cmd"); FILE* f = fopen(cp, "r");
-            if (f) { char c[64] = ""; fgets(c, sizeof(c), f); fclose(f); DeleteFileA(cp); if (!strncmp(c, "quit", 4)) break; if (!strncmp(c, "invite", 6) && g_lobby) SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog(g_fr, g_lobby); }
+            if (f) {
+                char c[160] = ""; fgets(c, sizeof(c), f); fclose(f); DeleteFileA(cp);
+                c[strcspn(c, "\r\n")] = 0;
+                if (!strncmp(c, "quit", 4)) break;
+                if (!strncmp(c, "invite", 6) && g_lobby) SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog(g_fr, g_lobby);
+                if (!strncmp(c, "port ", 5) && g_isHost) {   /* the hosting game opened its listen socket */
+                    g_gamePort = atoi(c + 5);
+                    char v[16]; sprintf(v, "%d", g_gamePort); if (g_lobby) SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "port", v);
+                    struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = htons((u_short)g_gamePort);
+                    for (int i = 0; i < g_npeers; i++) connect(g_peers[i].s, (struct sockaddr*)&a, sizeof(a));
+                    printf("game port %d\n", g_gamePort); Status();
+                }
+                if (!strncmp(c, "go ", 3) && g_isHost && g_lobby) {   /* the host started a mission: guests follow */
+                    strncpy(g_map, c + 3, sizeof(g_map) - 1); SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "map", g_map);
+                    sprintf(g_go, "%d|%s", ++g_goSeq, g_map); SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "go", g_go);
+                    printf("go: %s\n", g_go); Status();
+                }
+            }
         }
         Sleep(1);
     }

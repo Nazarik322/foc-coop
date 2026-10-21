@@ -227,3 +227,23 @@ Related: [BUGS.md](BUGS.md), [PLAN.md](PLAN.md), [DONE.md](DONE.md).
 `call <target> <Function> [i: f: b: o:]`, `funcs <name parts>`, `gotostate <target> <State>`, `key <vk>`,
 `vtfind <target> <ghidra hex>`, `restartplayer` (crashes the host, do not use), `poke`, `crashtest`, `steamjoin`;
 targets: pc pawn rpc rpawn game pri rpri obj:Name_N. Any other text = engine console command.
+
+## Co-op architecture notes (2026-10-20, owner question "how does UE3 / War for Cybertron do co-op")
+- UE3 rules: Kismet runs on the server only, unless an event is flagged ClientSideOnly; a matinee runs on the server and
+  is replicated through its MatineeActor unless bClientSideOnly (then it runs on each client and is not replicated).
+  Gameplay Kismet must stay on the server; cosmetic Kismet (lights, materials, hiding, effects) is meant to run
+  client side. Sources: Torn Banner "Client-side Kismet" / "Replication" (Chivalry SDK wiki), UDK ReplicationGlossary.
+- What the trace showed in L01: the server's Kismet already targets all players (92/92 Player variables have
+  bAllPlayers), the intro matinee drives only the host pawn on the server; the guest's client ran the replicated
+  matinee with its own local player (AnimControl on the guest only) -> server and guest disagreed by up to 40000 uu.
+  Cosmetic setup the level does on the server is missing on the guest: gfxdiag shows half the ShaderCache objects,
+  fewer lights / light environments / decals, and no texture loaders / material managers for 8 NPC and scripted
+  characters (those are created by server-only code, the replicated pawns on the client do not get them).
+- War for Cybertron (same studio, UE3) had a 3-player drop-in campaign: every mission is played by three robots and
+  AI fills the empty seats. So WfC's players took the seats of the squad; FoC removed co-op but keeps the squad as AI
+  (TnSeqAct_ToggleSquadActions, TnSeqAct_AiUseInteract in L01) and leftovers (TnPlayerSpawnHelperCoop,
+  TnSeqAct_SetCoopSpawnPointSet). Options under discussion with the owner:
+  A. the guest takes over a squadmate's seat (WfC model): scripts, matinees and cutscenes already move the squadmate.
+  B. the guest runs its own single-player copy and only combat NPCs (health, death, position) are synced (owner idea):
+     everything loads and plays locally, but Kismet progress, triggers and AI diverge and must be synced by hand.
+  C. keep UE3 replication and add client-side runs of the cosmetic Kismet ops + the missing per-character setup.

@@ -35,6 +35,10 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | B15 teleport instead of falling | `tpsync` (tp.inc) + rescue | `tools/tptest.ps1 -Auto` (L06): tpg away/back, guest within 800 uu of the host in both views, 5000 uu drop rescued | `-Twin` (tpsync=0): FAIL (tpg does nothing; the -Auto drop also needs tpg, so its rescue phase says nothing) | 2026-10-20 lead rerun on 27d8c61: PASS 13:37:29 (rescued after 4 s), twin FAIL 13:39:12 |
 | Stage 6 unfocused input | `inputinject` (input.inc) | `tools/inputtest.ps1` (L06 -Keep, focus on another window, `input hold W 2000` on guest then host: own pawn >= 150 uu, other <= 40 uu) | `-Twin` (inputinject=0): FAIL (0 uu) | 2026-10-20 input lane: PASS [B=2904/A=0 A=2855/B=0], twin FAIL |
 | B16 chapter title on the guest | `chaptersync` (story_title.inc) | `tools/titletest.ps1` (L06): white pixels of the title text x 785-880, y 470-498 (1920 wide) >= 100 on host AND guest | `-Twin` (chaptersync=0): FAIL | 2026-10-20 lane: PASS 296/303, twin FAIL |
+| B4 host/join without a restart | `fakelogin` (HasCheckedForLogin set) | `tools/b4test.ps1` (L01): host and guest reach the map from a focused main menu and stay 40 s | `-Twin` (fakelogin=0): FAIL | 2026-10-20 PASS, twin FAIL |
+| Lobby: guest follows the host (no restart) | lobby.inc (`lobby create/join`, Exec hook) + relay port/go | `tools/lobbytest.ps1` (menustart through the hooked Exec) | - | 2026-10-20 PASS |
+| B29 lobby: the game's own CONTINUE / CHAPTER | lobby.inc solo -> session reopen, NoteTravel | `tools/lobbycontinue.ps1` (keys Up+Enter) and `-Keys "ENTER,ENTER,ENTER"` (chapter I); do not touch the windows during the run | - | 2026-10-21 PASS both (chapter: warning confirmed by hand once) |
+| B31 pause menu with a guest | `exechook` default 0 | `tools/pausetest.ps1 -Guest` (host A in L01 as a session, guest B joined, Esc twice: alive, no call to address 0) | `-Ini exechook=1`: FAIL (2 null calls) | 2026-10-21 PASS / twin FAIL |
 | Slot lease (team mode) | `Enter-FocSlot` etc. in dev.ps1 | `tools/slottest.ps1` (no game): 5/5 PASS | - | 2026-10-20: 5/5 PASS (lead rerun) |
 
 ## Known flaky
@@ -46,5 +50,16 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 - Must-pass 2026-10-20 on 490c313 (lead): L02a, L02b, L04c, L06 PASS; ESC_Ark FAIL (above) then PASS; Steam mock
   L03b PASS (relay connected).
 
+- Sweep 2026-10-20 (SWEEP-0.6.md): the matrix `-Look` B10 check ("host picture changed although only the guest
+  moved") fails on maps that start with a cutscene (L01, L04a, sometimes L03a): both screens play the cutscene. Not
+  B10; the check should skip while the host is in cinematic mode (state `cine`).
+- deathtest: the "local player: no respawn without game over" expectation predates v0.5 (a real death now goes
+  through the checkpoint restart). Update the test before using it as a gate.
+- inputtest hung ~8 min and FAILED with guest position -1 (2026-10-20 sweep), like the earlier twin run.
+- Guest barely moves on W at the start of L03a, L05, L08b, L09 (tutorial prompts / start corridor), so the
+  "guest did not move" FAIL there is not a regression by itself; L08b and L09 passed in reruns.
+
 ## Known open (expected FAIL now)
-- Chapter 8b: guest spawn state 0.
+- Chapter 8b: no longer "guest spawn state 0": both get a pawn in every 2026-10-20 run. Over Steam a player can
+  fall through the world after the first cutscene (B27) and the host crashed once (B28).
+- Chapter 9 over Steam: host crash 1 of 3 runs (B28).

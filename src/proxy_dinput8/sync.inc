@@ -16,6 +16,11 @@ static SyncPeer g_syncPeers[8]; static int g_syncNPeers = 0;
 static char g_syncRx[1200]; static volatile LONG g_syncRxSeq = 0;   // last snapshot received (guest)
 static volatile LONG g_syncTx = 0, g_syncRxCount = 0;
 static volatile DWORD g_guestReadyAt = 0;   // host: last "ready" datagram from a guest
+static void TexSyncQueue(const char* buf, int len);   // gfxsync.inc
+static void KMirrorQueue(const char* buf, int len);   // kmirror.inc
+// host: where the guest sees its own pawn (FOCP1 datagram, 4 per second): owner 2026-10-20, the guest's pawn on the
+// server and on the guest drifted 40000 uu apart after a scene the guest played only locally.
+static volatile DWORD g_gposAt = 0; static float g_gpos[3]; static char g_gposState[48] = ""; static int g_gposCine = 0;
 
 static void SyncInit() { InitializeCriticalSection(&g_syncCs); }
 
@@ -27,6 +32,14 @@ static void SyncNoteOut(SOCKET s) { if (g_syncOn) g_syncSock = s; }
 static bool SyncFilterIn(const char* buf, int len, const sockaddr* from) {
     if (!g_syncOn) return false;
     if (len >= 6 && !memcmp(buf, "FOCR1\n", 6)) { g_guestReadyAt = GetTickCount(); return true; }   // guest -> host "ready"
+    if (len >= 6 && !memcmp(buf, "FOCT1\n", 6)) { TexSyncQueue(buf, len); return true; }   // host -> guest: forced texture names (gfxsync.inc)
+    if (len >= 6 && !memcmp(buf, "FOCK1\n", 6)) { KMirrorQueue(buf, len); return true; }   // host -> guest: Kismet op to run (kmirror.inc)
+    if (len >= 6 && len < 200 && !memcmp(buf, "FOCP1\n", 6)) {   // guest -> host: its own pawn position
+        char tmp[200]; memcpy(tmp, buf, len); tmp[len] = 0; float x, y, z; char st[48] = ""; int c = 0;
+        if (sscanf_s(tmp + 6, "%f %f %f %47s %d", &x, &y, &z, st, (unsigned)sizeof(st), &c) >= 4) {
+            g_gpos[0] = x; g_gpos[1] = y; g_gpos[2] = z; strncpy_s(g_gposState, st, _TRUNCATE); g_gposCine = c; g_gposAt = GetTickCount(); }
+        return true;
+    }
     if (len >= (int)sizeof(kSyncMagic) - 1 && !memcmp(buf, kSyncMagic, sizeof(kSyncMagic) - 1)) {
         int n = len < (int)sizeof(g_syncRx) - 1 ? len : (int)sizeof(g_syncRx) - 1;
         EnterCriticalSection(&g_syncCs); memcpy(g_syncRx, buf, n); g_syncRx[n] = 0; LeaveCriticalSection(&g_syncCs);
@@ -154,12 +167,27 @@ static void ApplyMarkers(BYTE* m, const char* body) {
         const char* e = strchr(p + 1, '\n'); size_t L = e ? (size_t)(e - p) : strlen(p);
         if (w + L + 1 < sizeof(want)) { memcpy(want + w, p, L); w += L; want[w] = 0; }
     }
-    if (!strcmp(want, applied)) return;
-    strcpy_s(applied, want);
     TArr* a = (TArr*)(m + 0x28);
     if (a->Num < 0 || a->Num > 64) return;
-    static BYTE tmp[64 * 0x1c]; int n = 0;
-    for (int i = 0; i < a->Num; i++) { BYTE* e = (BYTE*)a->Data + i * 0x1c; if (*(int*)(e + 0x10) < 1000) memcpy(tmp + 0x1c * n++, e, 0x1c); }   // the guest's own
+    // owner 2026-10-20 (battery marker stayed on the guest after the host took it): the guest keeps only its own
+    // teammate markers; every other marker is the host's list. The guest's level adds markers of its own (pickups),
+    // so they are removed whenever they show up, not only when the host's list changes.
+    auto ownKeep = [](BYTE* e) { BYTE* type = *(BYTE**)(e + 0x18); char tc[80] = ""; if (IsObjFast(type)) ClassNameOf(type, tc, sizeof(tc)); return !strcmp(tc, "TnObjectiveMarkerTypeTransformerCampaign") || !strcmp(tc, "TnObjectiveMarkerTypeDownedAlly"); };
+    bool stray = false;
+    for (int i = 0; i < a->Num; i++) { BYTE* e = (BYTE*)a->Data + i * 0x1c; if (*(int*)(e + 0x10) < 1000 && !ownKeep(e)) stray = true; }
+    if (!strcmp(want, applied)) {
+        // same host list: only drop the stray own markers in place (no object lookups: the guest's level re-adds them
+        // every tick, and resolving the host markers each time froze the guest at ~1 s per tick, 2026-10-20)
+        if (!stray) return;
+        int k = 0;
+        for (int i = 0; i < a->Num; i++) { BYTE* e = (BYTE*)a->Data + i * 0x1c; if (*(int*)(e + 0x10) < 1000 && !ownKeep(e)) continue; if (k != i) memcpy((BYTE*)a->Data + k * 0x1c, e, 0x1c); k++; }
+        static DWORD lastLog = 0; if (GetTickCount() - lastLog > 10000) { lastLog = GetTickCount(); Log("sync: markers -> dropped %d own non-teammate marker(s) again", a->Num - k); }
+        a->Num = k;
+        return;
+    }
+    strcpy_s(applied, want);
+    static BYTE tmp[64 * 0x1c]; int n = 0, dropped = 0;
+    for (int i = 0; i < a->Num; i++) { BYTE* e = (BYTE*)a->Data + i * 0x1c; if (*(int*)(e + 0x10) < 1000) { if (ownKeep(e)) memcpy(tmp + 0x1c * n++, e, 0x1c); else dropped++; } }   // the guest's own teammate markers
     int mirrored = 0;
     for (const char* p = strstr(want, "\nmk="); p && n < 64; p = strstr(p + 1, "\nmk=")) {
         char base[96] = "", cls[80] = ""; int id = 0;
@@ -173,7 +201,7 @@ static void ApplyMarkers(BYTE* m, const char* body) {
     if (n > a->Max) { void* d = GameRealloc(a->Data, n * 0x1c); if (!d) return; a->Data = (void**)d; a->Max = n; }
     if (n) memcpy(a->Data, tmp, n * 0x1c);
     a->Num = n;
-    Log("sync: markers -> %d mirrored from the host, %d in total", mirrored, n);
+    Log("sync: markers -> %d mirrored from the host, %d in total, %d own non-teammate dropped", mirrored, n, dropped);
 }
 
 // `tpmarker [dist]` (foc_cmd.txt, either side, game thread): put the local pawn `dist` uu (default 300) short of the
@@ -239,6 +267,19 @@ static bool GuestReadyNow(const TickObjs& t) {
     char map[96]; MapName(t, map, sizeof(map));
     bool story = map[0] == 'L' && map[1] >= '0' && map[1] <= '9';
     return pc && story && !MoviePlaying() && GetTickCount() - g_movieEnd > 2000;
+}
+// guest -> host: "FOCP1\nx y z controllerState cine" four times a second while the guest has a pawn (host: reconcile)
+static void SendPos(const TickObjs& t) {
+    static DWORD last = 0; if (t.ngame > 0 || GetTickCount() - last < 250 || g_syncSock == INVALID_SOCKET) return;
+    BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && IsLocalPC(t.pc[a])) pc = t.pc[a];
+    BYTE* pw = pc ? PawnOf(pc) : nullptr; if (!pw) return;
+    last = GetTickCount();
+    char st[48] = "-"; StateName(pc, st, sizeof(st)); if (!st[0]) strcpy_s(st, "-");
+    float* l = LocOf(pw); char msg[160];
+    int n = _snprintf_s(msg, _TRUNCATE, "FOCP1\n%.0f %.0f %.0f %s %d\n", l[0], l[1], l[2], st, (*(unsigned*)(pc + 0x360) & 0x20000) ? 1 : 0);
+    EnterCriticalSection(&g_syncCs);
+    for (int i = 0; i < g_syncNPeers; i++) if (GetTickCount() - g_syncPeers[i].seen < 10000) o_sendto(g_syncSock, msg, n, 0, (const sockaddr*)&g_syncPeers[i].addr, sizeof(sockaddr_in));
+    LeaveCriticalSection(&g_syncCs);
 }
 static void SendReady(const TickObjs& t) {
     static DWORD last = 0; if (GetTickCount() - last < 250 || g_syncSock == INVALID_SOCKET || !GuestReadyNow(t)) return;
@@ -306,7 +347,13 @@ static void TickWaitGuest(const TickObjs& t) {
     if (w != worldSeen) { worldSeen = w; since = GetTickCount(); active = true; Log("waitguest: %s loaded, pausing until a guest joins (max %d s)", map, g_waitGuestSec); }
     if (!active) return;
     // the guest has logged in, reports ready (pawn, its movie over) and the host's own movie is over
-    bool guest = t.npc >= 2 && GetTickCount() - g_guestReadyAt < 2000 && !MoviePlaying() && GetTickCount() - g_movieEnd > 2000;
+    bool guestPawns = t.npc >= 2;   // every guest controller already has its pawn on the host (the intro matinee binds pawns at its start)
+    for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && !IsLocalPC(t.pc[a]) && !PawnOf(t.pc[a])) guestPawns = false;
+    static DWORD readySince = 0;
+    bool ready = t.npc >= 2 && GetTickCount() - g_guestReadyAt < 2000 && !MoviePlaying() && GetTickCount() - g_movieEnd > 2000;
+    if (!ready) readySince = 0; else if (!readySince) readySince = GetTickCount();
+    if (ready && !guestPawns && GetTickCount() - readySince > 3000) { guestPawns = true; Log("waitguest: guest ready 3 s but its pawn is not on the host yet -> going on"); }
+    bool guest = ready && guestPawns;
     bool timeout = GetTickCount() - since > (DWORD)g_waitGuestSec * 1000;
     for (int i = 0; i < t.nworld; i++) {
         BYTE** pauser = (BYTE**)(t.world[i] + 0x394);
@@ -501,6 +548,8 @@ static void SyncGetStr(const char* snap, const char* key, char* out, size_t n) {
 static void PostKey(UINT vk);   // overlay.inc
 static int ChapterSnap(const TickObjs& t, char* out, size_t n);   // story_title.inc (host: chap= lines)
 static void ChapterApply(const TickObjs& t, const char* body);     // story_title.inc (guest)
+static int MirrorSnap(const TickObjs& t, char* out, size_t n);    // mirror.inc (host: matanim=)
+static void MirrorApply(const TickObjs& t, const char* body);      // mirror.inc (guest)
 static void TickSync(const TickObjs& t) {
     TickWaitGuest(t);
     TickEscalationRules(t);
@@ -525,6 +574,7 @@ static void TickSync(const TickObjs& t) {
         n += _snprintf_s(snap + n, sizeof(snap) - n, _TRUNCATE, "%sseq=%ld\nmap=%s\nobj=%d\n", kSyncMagic, ++seq, map, m ? *(int*)(m + 0x3c) : -2);
         if (m) n += HostMarkers(m, snap + n, sizeof(snap) - n);
         n += ChapterSnap(t, snap + n, sizeof(snap) - n);
+        n += MirrorSnap(t, snap + n, sizeof(snap) - n);
         EnterCriticalSection(&g_syncCs);
         for (int i = 0; i < g_syncNPeers; i++) {
             if (now - g_syncPeers[i].seen > 10000) continue;
@@ -536,10 +586,12 @@ static void TickSync(const TickObjs& t) {
     }
     // guest: tell the host when ready, apply the latest snapshot
     SendReady(t);
+    SendPos(t);
     char snap[1200];
     EnterCriticalSection(&g_syncCs); memcpy(snap, g_syncRx, sizeof(snap)); LeaveCriticalSection(&g_syncCs);
     if (!snap[0]) return;
     char hmap[96]; SyncGetStr(snap + sizeof(kSyncMagic) - 2, "map", hmap, sizeof(hmap));
+    if (hmap[0] && t.ngame == 0) { strncpy_s(g_hostMapHint, hmap, _TRUNCATE); g_hostMapAt = GetTickCount(); }   // client: the host's map is ours (MapName)
     if (_stricmp(hmap, map) != 0) return;   // still loading, or another map
     const char* body = snap + sizeof(kSyncMagic) - 2;   // starts at the '\n' that ends the magic
     int obj = SyncGetInt(body, "obj", -2);
@@ -547,4 +599,5 @@ static void TickSync(const TickObjs& t) {
     if (m && obj >= -1) ApplyObjective(m, obj);
     if (m) ApplyMarkers(m, body);
     ChapterApply(t, body);
+    MirrorApply(t, body);
 }

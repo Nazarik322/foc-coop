@@ -17,7 +17,75 @@ lease, worktree builds), title (B16). Wave 2: cine, tp, input. Wave 3: merge, mu
 - Todo: rerun `inputtest.ps1 -Twin` on main (it hung once and SKIPped); B25 remaining checks (BUGS); B17; switch the
   ESC_Ark character pick and move/look tests to `input tap/hold` (infra files); then R1 sweep.
 
+## Resume point 2026-10-21 afternoon - LOBBY works
+Lobby suite 2026-10-21 14:30-14:37 (Steam mock, one PC): pausetest -Guest PASS, lobbytest PASS, lobbycontinue -Late
+PASS (CONTINUE, guest leaves and joins the running game again: in L01 as client, hp 200), chapter select PASS.
+Open: after a rejoin the host counts 3 players (the left guest's controller lingers, B24); real two-account Steam
+test; owner's manual test; release when the owner agrees.
+
+## Resume point 2026-10-21 - LOBBY
+Branch wip/lobby-b4 (local, not pushed): a98f340 (all of 2026-10-20), aa61485 (B29 fixed: CONTINUE takes the guests
+along, lobbycontinue PASS), d457882 (test keys). Next: run `tools/lobbycontinue.ps1 -Keys "ENTER,ENTER,ENTER"` (chapter
+select path) with the remote desktop shown; then the owner's manual test; then late join check and the real Steam test.
+
+## Resume point 2026-10-20 late night (owner stopped here) - LOBBY (history)
+Everything below is UNCOMMITTED in the working tree (build deployed to test copies A/B, nothing pushed).
+Done and tested:
+- B4 fixed: `fakelogin` (TnPlayerController.HasCheckedForLogin set on class defaults + local controllers) -> host/join
+  inside the running game. tools/b4test.ps1 PASS, twin (fakelogin=0) FAIL. F10 Host/Join/Leave use it (InProcessTravel).
+- Lobby (lobby.inc, relay host port 0 / "port" / "go" / lobby type / password hash, mock drops lobbies of dead owners):
+  tools/lobbytest.ps1 PASS (A lobby, B joins from the main menu, A starts via the hooked console Exec, B follows, no
+  relaunch). Stray join relays and leftover relay.cmd "quit" fixed.
+Open (the owner's real flow does not work yet):
+- The game's own menu CONTINUE does not go through the console Exec: it loads L01 with TnCampaignGameSolo and
+  ?LoadCheckpoint (options logged). The fallback reopens the map with TnCampaignGame + the same options + ?listen
+  (works, port 7779 bound) but the host then reads its map as "UI_FrontEnd_m" again, so "port"/"go" never reach the
+  relay and the guest does not follow (tools/lobbycontinue.ps1, driven by key presses, FAIL).
+- Cause: after a travel inside the running game many UWorld objects exist (old ones + sublevel worlds that carry the
+  old URL, 12 after Continue). Tried: first world, newest world, GWorld global search (nothing found), "one switch per
+  tick" rule, and last: map from the local controller's Outer chain (PcMapName) - "tick: UObject Outer at" was never
+  logged, so the Outer offset is still unknown (+0x08..+0x30 had no pointer to PersistentLevel). Next: find the Outer
+  field (fnprobe / hdrprobe on a controller: compare with known packages), or hook the travel itself (UGameEngine
+  Browse / LoadMap) to know the map, or count on WorldInfo of the local controller.
+- Also open: Esc on the host after the reopen once dropped it to the front end with a call to address 0 (pause menu
+  in a "network" game without the online service?) - retest after the map fix.
+- Startup hitches: slow-part log shows TickMirror ~1 s and TickGfxSync ~1.5 s once at startup (property lookups);
+  per-map fakelogin pass is now class-filtered.
+
+## Owner plan 2026-10-20: lobby and drop-in without restarts
+1. F10 finds lobbies created by players: public, friends only, private / with password (Steam lobby data).
+2. The host starts the campaign from the game's normal menu; every player in the lobby goes along (cutscenes for all).
+3. The game is never restarted (today Host/Join relaunch it, B4).
+4. Joining a running game is allowed: the newcomer gets the host's world state and a fresh character (full health and
+   ammo, as if just loaded into the map) - fair to everybody.
+Steps: (a) B4 root cause: the "You must be signed in to play online" check (Demonware login status) - make it report
+signed in, then open the listen session in-process (no relaunch); the same message dropped a guest on 2026-10-20.
+(b) host in the front end as a listen server, guests connect to it from the lobby; the game's chapter start becomes a
+ServerTravel so clients follow. (c) Steam lobby types and password in the relay + F10 list. (d) late join: replay the
+host's mirrored Kismet ops (kmirror log) and markers/objective to the newcomer, spawn at the host with defaults.
+
 ## Next step (where to resume)
+**2026-10-20 late (owner stopped here): "the guest repeats the script".** Owner rule: everything the story script does
+to one player (animation, lying/carried, teleport, scene, hide, input lock) happens to both; only walking, running,
+jumping, ammo, health and the combat camera stay per player. Work only in chapter 1 (L01) until it matches, test with
+`tools/l01test.ps1` (host left, guest right in `grid_*.jpg`). Uncommitted in the working tree: mirror.inc, tpfollow,
+7 s rescue for host and guest, B26 title scan fix, tph command, tptest host fall, l01test, side-by-side windows.
+Results: SWEEP-0.6.md "Chapter 1 mirror test". 
+Findings of the trace build (sessions\mirror\l01c): all 92 L01 Player variables already have bAllPlayers (Kismet
+already targets both); the intro is matinee driving the host pawn (controller state AnimControl) seen through scene
+CameraActors; the intro matinee started 0.4 s before the guest had a pawn. Added: ptrace/kismet logging (trace.inc),
+camview (guest gets the host's scene camera, works: 17 switches ok, the guest later also entered AnimControl), waitguest
+waits up to 3 s for the guest pawn, scriptdown (TnSeqAct_DownRevive mirrored). Seen: the guest died ~6 s after tpfollow
+put it into the scene (game over -> checkpoint restart, after which both were in the scene). Owner tests by hand now.
+Plan, in order:
+1. Make `allplayers` work: find the UObject Outer offset (dump one SeqVar_Player and one property), confirm
+   SeqVar_Player.bAllPlayers, check that L01 Kismet actions then also target the guest (log "mirror: allplayers").
+2. L01 intro: the host starts lying and is carried (scripted downed + matinee); the guest stands. With allplayers the
+   same matinee/actions should bind the guest pawn; if not, mirror the host pawn's state (downed flag +0x5d0 bit
+   0x80000, matinee anim flag, hidden, physics) onto the guest pawn on the server, and the anim state over sync.
+3. Kismet op mirroring as the general tool: hook SequenceOp activation on the host, log which ops touch player 0 in
+   L01, and re-run the ones whose effect is client-side (PlayAnim, camera, HUD, sound) on the guest over sync.
+4. Then: tptest -Auto (guest and host falls), titletest rerun, must-pass, FPS check with 60 on both; push only after.
 **2026-10-20 (stopped by the owner here): story bugs.** Done: B14 part (guest HUD/movement follow the host's
 cutscenes, `cinesync`, commit 4eaa654, local, not pushed). Resume with:
 1. B16: on L06 `-Keep`, `chapter 10` on the guest (B) + `shot`; if the title shows, wire host -> guest over sync.

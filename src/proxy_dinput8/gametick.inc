@@ -14,9 +14,10 @@ struct TickObjs {
     BYTE* world[16]; int nworld;
     BYTE* lp[4]; int nlp;           // TnLocalPlayer instances
     BYTE* helper[8]; int nhelper;   // TnPlayerSpawnHelper* instances
-    BYTE* uworld[4]; int nuworld;   // UWorld objects ("TheWorld", name number 0); one has the map URL
+    BYTE* uworld[16]; int nuworld;  // UWorld objects ("TheWorld", name number 0); one has the map URL (16: old worlds linger after a travel)
 };
 static TickObjs g_to;
+static DWORD g_scriptDownAt = 0;   // host: last TnSeqAct_DownRevive activation (trace.inc Kismet tracker)
 static volatile LONG g_tickCount = 0;
 static double g_tickMsLast = 0, g_tickMsMax = 0;
 static signed char g_spawnState[16];   // per g_to.pc[i]: spawn helper GameState 0..3, or -1 when unknown
@@ -75,7 +76,7 @@ static void TickCollect(TArr* go, TickObjs& t) {
         case K_WORLD: if (t.nworld < 16) t.world[t.nworld++] = obj; break;
         case K_LOCALPLAYER: if (t.nlp < 4) t.lp[t.nlp++] = obj; break;
         case K_SPAWNHELPER: if (t.nhelper < 8) t.helper[t.nhelper++] = obj; break;
-        case K_UWORLD: if (t.nuworld < 4) t.uworld[t.nuworld++] = obj; break;
+        case K_UWORLD: if (t.nuworld < 16) t.uworld[t.nuworld++] = obj; break;
         }
     }
 }
@@ -206,33 +207,58 @@ static void TickHostFirst(const TickObjs& t) {
 }
 
 // ---------------------------------------------------------------- rescue
-// When a player pawn has fallen far below another player's pawn (its streamed-out area no longer exists on the host),
-// teleport it next to the other pawn. Actor.Location is at +0xe4, with a copy at +0x134.
+// A player pawn (host or guest) that has been falling for kRescueFallSec seconds (every one-second sample dropped more
+// than kRescueDropPerSec uu) is teleported next to a player that is not falling (its streamed-out area no longer
+// exists, B15/B27). Walking down a level is not a fall (2b goes down 6000 uu in steps). No absolute height limit:
+// chapter 8b lies around z = -64000 (the old z > -20000 check switched rescue off there). Actor.Location is at +0xe4,
+// with a copy at +0x134.
+static const int kRescueFallSec = 7;
+static const float kRescueDropPerSec = 400.0f;
 static bool TpGuestNear(BYTE* host, BYTE* guest, const float* off, const char* why);   // tp.inc
+static bool TpAnyCinematic();                                                          // tp.inc
+static void TickTpFollow(const TickObjs& t);
+static void TickLeash(const TickObjs& t);    // tp.inc
+static void TickReconcile(const TickObjs& t); // tp.inc
+static void TickMirror(const TickObjs& t);    // mirror.inc
+static void TickTraceAll(const TickObjs& t);  // trace.inc
+static void TickGfxSync(const TickObjs& t);   // gfxsync.inc
+static void TickKMirror(const TickObjs& t);   // kmirror.inc
+static void TickLobby(const TickObjs& t);     // lobby.inc (overlay.inc)                                          // tp.inc
 static void TickRescue(const TickObjs& t) {
     if (!g_rescue || t.npc < 2) return;
     BYTE* pawns[16]; int np = 0;
-    for (int a = 0; a < t.npc; a++) { BYTE* pw = PawnOf(t.pc[a]); if (pw) pawns[np++] = pw; }
+    for (int a = 0; a < t.npc && np < 16; a++) { BYTE* pw = PawnOf(t.pc[a]); if (pw) pawns[np++] = pw; }
     if (np < 2) return;
-    // Only a real fall: walking down a level is not one (2b goes down 6000 uu and used to pull the lower player back
-    // up). A pawn counts as falling after 4 one-second samples in a row that each dropped more than 800 uu.
     static BYTE* fp[16]; static float fz[16]; static int fticks[16]; static DWORD lastSample = 0;
-    bool sample = GetTickCount() - lastSample >= 1000; if (sample) lastSample = GetTickCount();
-    int hi = 0; for (int a = 1; a < np; a++) if (LocOf(pawns[a])[2] > LocOf(pawns[hi])[2]) hi = a;
-    float* ref = LocOf(pawns[hi]);
+    if (GetTickCount() - lastSample < 1000) return;
+    lastSample = GetTickCount();
+    int kOf[16];
     for (int a = 0; a < np; a++) {
         int k = -1; for (int j = 0; j < 16; j++) if (fp[j] == pawns[a]) k = j;
         if (k < 0) { for (int j = 0; j < 16 && k < 0; j++) if (!fp[j] || !InList(fp[j], pawns, np)) { k = j; fp[j] = pawns[a]; fz[j] = LocOf(pawns[a])[2]; fticks[j] = 0; } }
-        if (k >= 0 && sample) { float z = LocOf(pawns[a])[2]; fticks[k] = (fz[k] - z > 800.0f) ? fticks[k] + 1 : 0; fz[k] = z; }
-        if (a == hi || k < 0) continue;
+        kOf[a] = k;
+        if (k < 0) continue;
+        float z = LocOf(pawns[a])[2]; fticks[k] = (fz[k] - z > kRescueDropPerSec) ? fticks[k] + 1 : 0; fz[k] = z;
+    }
+    // anchor: the highest pawn that is not falling
+    int anc = -1;
+    for (int a = 0; a < np; a++) if (kOf[a] >= 0 && fticks[kOf[a]] == 0 && (anc < 0 || LocOf(pawns[a])[2] > LocOf(pawns[anc])[2])) anc = a;
+    if (anc < 0) return;   // everybody falls: death and the checkpoint restart handle it
+    float* ref = LocOf(pawns[anc]);
+    for (int a = 0; a < np; a++) {
+        int k = kOf[a];
+        if (a == anc || k < 0 || fticks[k] < kRescueFallSec) continue;
         float* loc = LocOf(pawns[a]);
-        if (!(fticks[k] >= 4 && ref[2] - loc[2] > 4000.0f && ref[2] > -20000.0f)) continue;
-        fticks[k] = 0;
-        static volatile LONG nl = 0; if (InterlockedIncrement(&nl) <= 20) Log("rescue: pawn %p fell to z=%.0f, moving next to %p (%.0f,%.0f,%.0f)", pawns[a], loc[2], pawns[hi], ref[0], ref[1], ref[2]);
-        if (g_tpSync && TpGuestNear(pawns[hi], pawns[a], nullptr, "rescue")) continue;   // tp.inc: native SetLocation
-        float nx = ref[0] + 250.0f * (a + 1), ny = ref[1] + 60.0f, nz = ref[2] + 120.0f;
+        if (ref[2] - loc[2] < 1500.0f) continue;
+        static volatile LONG nl = 0; if (InterlockedIncrement(&nl) <= 20) Log("rescue: pawn %p fell %d s to z=%.0f, moving next to %p (%.0f,%.0f,%.0f)", pawns[a], fticks[k], loc[2], pawns[anc], ref[0], ref[1], ref[2]);
+        if (g_tpSync) {
+            if (TpGuestNear(pawns[anc], pawns[a], nullptr, "rescue")) { fticks[k] = 0; fz[k] = LocOf(pawns[a])[2]; continue; }   // tp.inc: native SetLocation
+            if (TpAnyCinematic()) continue;   // retry after the cutscene; the pawn keeps its fall count
+        }
+        float nx = ref[0] + 400.0f, ny = ref[1], nz = ref[2] + 120.0f;
         loc[0] = nx; loc[1] = ny; loc[2] = nz;
         float* loc2 = (float*)(pawns[a] + 0x134); loc2[0] = nx; loc2[1] = ny; loc2[2] = nz;
+        fticks[k] = 0; fz[k] = nz;
     }
 }
 
@@ -299,8 +325,127 @@ static bool WideIs(const BYTE* fstr, const wchar_t* text) {
     const wchar_t* d = *(const wchar_t* const*)fstr; int num = *(const int*)(fstr + 4);
     return d && num == (int)wcslen(text) + 1 && Rd(d, num * 2) && !wcscmp(d, text);
 }
+// GWorld (the current world): after a travel inside the running game the old world object lingers until GC, and the
+// first UWorld in GObjects was the old front end (2026-10-20: the lobby host in L01 still read "UI_FrontEnd_m").
+// The global is found once: a pointer in the exe's writable data that points at the only UWorld (searched while just
+// one world exists). Then MapName reads that world first.
+static BYTE** g_gworldPtr = nullptr;
+static void FindGWorld(const TickObjs& t) {
+    static DWORD last = 0;
+    if (g_gworldPtr || t.nuworld < 1 || g_urlOff < 0 || GetTickCount() - last < 5000) return;
+    last = GetTickCount();
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    IMAGE_SECTION_HEADER* sh = IMAGE_FIRST_SECTION(nt);
+    BYTE** found[8]; int nf = 0;
+    for (int s = 0; s < nt->FileHeader.NumberOfSections; s++) {
+        if (!(sh[s].Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
+        BYTE** p = (BYTE**)(base + sh[s].VirtualAddress); BYTE** e = p + sh[s].Misc.VirtualSize / 4;
+        for (; p < e && nf < 8; p++) for (int w = 0; w < t.nuworld; w++) if (*p == t.uworld[w]) { found[nf++] = p; break; }
+    }
+    if (nf < 1) return;
+    g_gworldPtr = found[0];   // UE3 keeps GWorld as the first such global
+    char line[300]; size_t k = _snprintf_s(line, _TRUNCATE, "tick: GWorld at ghidra %lx (candidates:", (DWORD)((BYTE*)found[0] - base) + 0x400000);
+    for (int i = 0; i < nf; i++) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %lx", (DWORD)((BYTE*)found[i] - base) + 0x400000);
+    Log("%s)", line);
+}
+// Map of the local player: PlayerController -> Outer "PersistentLevel" -> Outer = the map package (its name is the map).
+// The world objects were not reliable after a travel inside the running game (old worlds and sublevel worlds with the
+// old URL linger), the controller always lives in the current persistent level. The Outer offset is found once: the
+// header word of a controller that points at an object named "PersistentLevel".
+// Travels we start ourselves (F10 host, lobby reopen, the hooked console `open` of the game's menu) name the map: it
+// becomes the current map as soon as a new GameInfo exists, and stays it while that GameInfo lives. After a travel
+// inside the running game the world objects did not tell the map reliably (B29, 2026-10-20).
+static char g_pendingMap[96] = "", g_knownMap[96] = ""; static BYTE* g_pendingOldGame = nullptr; static BYTE* g_knownGame = nullptr; static DWORD g_pendingAt = 0;
+static void NoteTravel(const char* cmd) {   // "open <map>?..." / "start <map>..."
+    const char* p = cmd; while (*p == ' ') p++;
+    if (_strnicmp(p, "open ", 5) && _strnicmp(p, "start ", 6)) return;
+    p = strchr(p, ' '); while (p && *p == ' ') p++; if (!p) return;
+    char m[96]; size_t k = 0; while (p[k] && p[k] != '?' && p[k] != ' ' && k < sizeof(m) - 1) { m[k] = p[k]; k++; } m[k] = 0;
+    if (!m[0] || strchr(m, ':') || strchr(m, '.')) return;   // an address (join), not a map
+    strncpy_s(g_pendingMap, m, _TRUNCATE); g_pendingOldGame = g_to.ngame ? g_to.game[0] : nullptr; g_pendingAt = GetTickCount();
+    Log("tick: travel to %s noted", m);
+}
+static char g_hostMapHint[96] = ""; static DWORD g_hostMapAt = 0;   // client: map= of the host's sync snapshots (sync.inc)
+static bool KnownMapName(const TickObjs& t, char* out, size_t n) {
+    // a client connected to a host: the host's map, while its snapshots arrive and our controller is not a front end one
+    if (t.ngame == 0 && g_hostMapHint[0] && GetTickCount() - g_hostMapAt < 5000) {
+        bool frontEnd = false; for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && IsLocalPC(t.pc[a])) { char cn[64] = ""; ClassNameOf(t.pc[a], cn, sizeof(cn)); if (strstr(cn, "FrontEnd")) frontEnd = true; }
+        if (!frontEnd) { strncpy_s(out, n, g_hostMapHint, _TRUNCATE); return true; }
+    }
+    BYTE* game = t.ngame ? t.game[0] : nullptr;
+    if (g_pendingMap[0] && game && game != g_pendingOldGame) {
+        strncpy_s(g_knownMap, g_pendingMap, _TRUNCATE); g_knownGame = game; g_pendingMap[0] = 0;
+        char cn[64] = ""; ClassNameOf(game, cn, sizeof(cn)); Log("tick: current map %s (game %s)", g_knownMap, cn);
+    }
+    if (g_pendingMap[0] && GetTickCount() - g_pendingAt > 120000) g_pendingMap[0] = 0;   // the travel failed
+    if (g_knownGame && game == g_knownGame && IsObjFast(game)) { strncpy_s(out, n, g_knownMap, _TRUNCATE); return true; }
+    return false;
+}
+static int g_outerOff = -1;
+static bool PcMapName(const TickObjs& t, char* out, size_t n) {
+    BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && IsLocalPC(t.pc[a])) pc = t.pc[a];
+    if (!pc) return false;
+    if (g_outerOff < 0) {
+        for (int off = 0x08; off <= 0x30; off += 4) {
+            BYTE* q = *(BYTE**)(pc + off); char nm[64];
+            if (IsObjFast(q) && ObjNameStr(q, nm, sizeof(nm)) && !strcmp(nm, "PersistentLevel")) { g_outerOff = off; Log("tick: UObject Outer at +0x%x", off); break; }
+        }
+        if (g_outerOff < 0) return false;
+    }
+    BYTE* lvl = *(BYTE**)(pc + g_outerOff); if (!IsObjFast(lvl)) return false;
+    BYTE* pkg = *(BYTE**)(lvl + g_outerOff); if (!IsObjFast(pkg)) return false;
+    char nm[96]; if (!ObjNameStr(pkg, nm, sizeof(nm)) || !nm[0]) return false;
+    strncpy_s(out, n, nm, _TRUNCATE); return true;
+}
 static void MapName(const TickObjs& t, char* out, size_t n) {
     out[0] = 0;
+    if (KnownMapName(t, out, n)) return;
+    if (PcMapName(t, out, n)) return;
+    // newest world wins: a UWorld that appears with a URL is the one just travelled to (the old one lingers until GC);
+    // GWorld itself was not found in the exe's data (FindGWorld logged nothing), so it stays a fallback
+    {   // debug: every change of the world list (2026-10-20, lobby host stuck on "UI_FrontEnd_m")
+        static BYTE* last[16]; static int nlast = -1;
+        bool diff = nlast != t.nuworld; for (int w = 0; w < t.nuworld && !diff; w++) diff = last[w] != t.uworld[w];
+        if (diff) {
+            nlast = t.nuworld; char line[900]; size_t k = _snprintf_s(line, _TRUNCATE, "tick: %d world(s):", t.nuworld);
+            for (int w = 0; w < t.nuworld; w++) {
+                last[w] = t.uworld[w]; char m[64] = "-";
+                if (g_urlOff >= 0 && Rd(t.uworld[w], 0x800) && WideIs(t.uworld[w] + g_urlOff, L"unreal")) FStrAscii(t.uworld[w] + g_urlOff + 0x1c, m, sizeof(m));
+                k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %p=%s", t.uworld[w], m);
+            }
+            Log("%s", line);
+        }
+    }
+    if (g_urlOff >= 0) {
+        static BYTE* seen[32]; static int nseen = 0; static BYTE* cur = nullptr;
+        static char leftMap[96] = ""; static DWORD leftAt = 0;
+        char prevMap[96] = ""; if (cur && Rd(cur, 0x800) && WideIs(cur + g_urlOff, L"unreal")) FStrAscii(cur + g_urlOff + 0x1c, prevMap, sizeof(prevMap));
+        bool switched = false;
+        for (int w = 0; w < t.nuworld; w++) {
+            BYTE* x = t.uworld[w]; bool known = false;
+            for (int i = 0; i < nseen; i++) if (seen[i] == x) known = true;
+            if (known || !Rd(x, 0x800) || !WideIs(x + g_urlOff, L"unreal")) continue;
+            if (nseen < 32) seen[nseen++] = x; else { memmove(seen, seen + 1, 31 * sizeof(BYTE*)); seen[31] = x; }
+            // a travel brings one world with the new map plus sublevel worlds that still carry the old URL (12 worlds,
+            // one L01 and eleven "UI_FrontEnd_m" after Continue): take a new world whose map differs from the current one
+            // (at most one switch per tick, never to the map of the tick start, not back to the map just left for 30 s)
+            char nm[96]; FStrAscii(x + g_urlOff + 0x1c, nm, sizeof(nm));
+            bool backToLeft = leftMap[0] && !strcmp(nm, leftMap) && GetTickCount() - leftAt < 30000;
+            if (!cur || (!switched && strcmp(nm, prevMap) && !backToLeft)) {
+                if (cur) { strncpy_s(leftMap, prevMap, _TRUNCATE); leftAt = GetTickCount(); Log("tick: current world %p %s -> %p %s", cur, prevMap, x, nm); }
+                cur = x; switched = true;
+            }
+        }
+        bool alive = false; for (int w = 0; w < t.nuworld; w++) if (t.uworld[w] == cur) alive = true;
+        if (cur && alive && Rd(cur, 0x800) && WideIs(cur + g_urlOff, L"unreal")) { FStrAscii(cur + g_urlOff + 0x1c, out, n); return; }
+    }
+    FindGWorld(t);
+    if (g_gworldPtr && g_urlOff >= 0) {
+        BYTE* cur = *g_gworldPtr;
+        static BYTE* lastCur = nullptr; if (cur != lastCur) { lastCur = cur; Log("tick: GWorld -> %p (%d worlds)", cur, t.nuworld); }
+        for (int w = 0; w < t.nuworld; w++) if (t.uworld[w] == cur && Rd(cur, 0x800) && WideIs(cur + g_urlOff, L"unreal")) { FStrAscii(cur + g_urlOff + 0x1c, out, n); return; }
+    }
     for (int w = 0; w < t.nuworld && !out[0]; w++) {
         BYTE* world = t.uworld[w];
         if (!Rd(world, 0x800)) continue;
@@ -826,6 +971,19 @@ static bool PawnAlive(BYTE* pc) {
 // Called by the VEH on the game thread when the game wants the game-over state. true = skip it.
 // story chapters only (L01..L09): Escalation keeps its own rules (team lives, bleeding out)
 static bool StoryMapNow(const TickObjs& t) { char m[96]; MapName(t, m, sizeof(m)); return m[0] == 'L' && m[1] >= '0' && m[1] <= '9'; }
+// Host: a scripted moment runs (owner 2026-10-20: both players lie in the chapter 1 intro, that must not end the
+// mission): the host is in cinematic mode or matinee control (AnimControl), or the script downed/revived a player
+// (TnSeqAct_DownRevive) less than 30 s ago. Then "everybody down" never ends the mission.
+static bool ScriptedMomentNow(const TickObjs& t) {
+    if (t.ngame < 1) return false;
+    if (g_scriptDownAt && GetTickCount() - g_scriptDownAt < 30000) return true;
+    for (int a = 0; a < t.npc; a++) {
+        BYTE* pc = t.pc[a]; if (!IsObjFast(pc) || !IsLocalPC(pc)) continue;
+        if (*(unsigned*)(pc + 0x360) & 0x20000) return true;
+        char st[48]; StateName(pc, st, sizeof(st)); if (!strcmp(st, "AnimControl")) return true;
+    }
+    return false;
+}
 static bool CoopDeathSkip(BYTE* obj) {
     if (!StoryMapNow(g_to)) return false;
     int alive = 0, down = 0, n = g_to.npc;
@@ -841,6 +999,8 @@ static bool CoopDeathSkip(BYTE* obj) {
     }
     // only a death ends the mission here: with everybody alive it is a scripted failure (objective lost) and stays
     bool skip = g_coopDeath && n >= 2 && alive >= 1 && down >= 1;
+    bool scripted = g_coopDeath && n >= 2 && ScriptedMomentNow(g_to);
+    if (scripted) { skip = true; k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " (scripted moment)"); }
     if (g_to.ngame == 0 && n >= 1) {   // client: its own UI decides on its own pawn's death; the other players' pawns
         BYTE* own = nullptr;           // are the unpossessed player pawns it sees
         for (int a = 0; a < n; a++) if (IsObjFast(g_to.pc[a]) && IsLocalPC(g_to.pc[a])) own = PawnOf(g_to.pc[a]);
@@ -934,7 +1094,7 @@ static void TickDowned(const TickObjs& t) {
     if (t.ngame >= 1) {
         int up = 0, downed = 0;
         for (int a = 0; a < t.npc; a++) { if (PawnAlive(t.pc[a])) up++; else if (PawnDowned(PawnOf(t.pc[a]))) downed++; }
-        if (up > 0 || downed == 0) { allDownSince = 0; allDown = false; }
+        if (up > 0 || downed == 0 || ScriptedMomentNow(t)) { allDownSince = 0; allDown = false; }
         else if (!allDownSince) allDownSince = GetTickCount();
         else if (!allDown && GetTickCount() - allDownSince > 5000) { allDown = true; Log("downed: every player is down -> bleeding out (mission failed, restart from checkpoint)"); }
     }
@@ -975,6 +1135,16 @@ static void TickCharDiag(const TickObjs& t) {
     Log("%s", line);
 }
 
+// ---------------------------------------------------------------- slow part log (owner 2026-10-20: "wild lags on the host")
+// Every timed part of the tick that takes more than 25 ms is logged (at most 200 lines per run).
+static void TimedPart(const char* name, void (*fn)(const TickObjs&), const TickObjs& t) {
+    LARGE_INTEGER f, a, b; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&a);
+    fn(t);
+    QueryPerformanceCounter(&b);
+    double ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+    static volatile LONG n = 0; if (ms > 25.0 && InterlockedIncrement(&n) <= 200) Log("slow: %s took %.0f ms", name, ms);
+}
+
 // ---------------------------------------------------------------- the tick
 static void TickSync(const TickObjs& t);   // sync.inc
 static void GameTick() {
@@ -989,10 +1159,18 @@ static void GameTick() {
     if (t.ngame > 0) {   // host only: on a client the old front-end controller lingers during travel, and sharing its
         TickCtrlShare(t); // objects into the new controller / reordering the list dropped the guest (2a, 2026-10-19)
         TickHostFirst(t);
-        TickRescue(t);
+        TimedPart("TickRescue", TickRescue, t);
+        TimedPart("TickTpFollow", TickTpFollow, t);
+        TimedPart("TickReconcile", TickReconcile, t);
+        TimedPart("TickLeash", TickLeash, t);
     }
     TickSpawnHelper(t);
-    TickViewFix(t);
+    TimedPart("TickViewFix", TickViewFix, t);
+    TimedPart("TickMirror", TickMirror, t);
+    TimedPart("TickTraceAll", TickTraceAll, t);
+    TimedPart("TickGfxSync", TickGfxSync, t);
+    TimedPart("TickKMirror", TickKMirror, t);
+    TimedPart("TickLobby", TickLobby, t);
     TickPossessFix(t);
     TickPeFind(go);
     TickSpawnTrace(t);
@@ -1002,7 +1180,7 @@ static void GameTick() {
     TickSpawnShift(t);
     TickCoopDeath(t);
     TickDowned(t);
-    TickSync(t);
+    TimedPart("TickSync", TickSync, t);
     TickCharDiag(t);
     DWORD now = GetTickCount();
     static DWORD lastDiag = 0, lastStat = 0, lastPawns = 0, lastState = 0;

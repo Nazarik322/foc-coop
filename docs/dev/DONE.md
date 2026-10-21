@@ -3,6 +3,15 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-21: lobby without restarts (branch wip/lobby-b4, not released)
+- B4 fixed (fakelogin): host and join inside the running game; F10 Host/Join/Leave without a restart.
+- F10 lobby: Create lobby (friends / public / private, password), Join lobby from the main menu; the host starts the
+  mission from the game's own menu (CONTINUE or CAMPAIGN > chapter), everybody in the lobby follows; late join works.
+- Also from 2026-10-20: v0.6 map sweep (SWEEP-0.6.md), trace/Kismet logs, Kismet op mirror for the guest, camview,
+  tpfollow, 7 s rescue for any player, leash, reconcile, streamguard, netspeed, gfxdiag, B26 host hitch fix, B31.
+- Verified: lobbytest, lobbycontinue (-Late, chapter), pausetest -Guest, b4test (twin FAIL); must-pass d970658: 5/5 PASS,
+  Steam mock L03b PASS. Only the Steam mock on one PC so far.
+
 ## 2026-10-20: B16 chapter title on both screens (lane title, merged 051719d)
 - story_title.inc: host detection (ActivateCount), sync keys chap/chapseq, guest native GFx invoke. titletest
   (screen based) PASS host/guest 296/303 in the lane, twin FAIL; screenshots E:\FoC-coop\sessions\title\t2.

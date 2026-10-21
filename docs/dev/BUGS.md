@@ -35,12 +35,31 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Not checked: which characters are unlocked without save data, and whether the guest has the same problem
   (the guest got Cliffjumper automatically).
 
-### B4. Opening a session without a restart is rejected — workaround
+### B4. Opening a session without a restart is rejected — fixed 2026-10-20 (`fakelogin`, default on)
+- Cause: TnPlayerController.PlayerTick checks once per controller in any network game: "if (!HasCheckedForLogin &&
+  NetMode != Standalone) { if (GetLoginStatus != LS_LoggedIn) NotifyLoginChange(); HasCheckedForLogin = true; }" ->
+  back to the front end with "You must be signed in to play online" (Demonware is gone, never signed in). The same
+  text replaces every kick reason in ClientWasKicked. Fix: HasCheckedForLogin is set on the controller class defaults
+  and on local controllers (mirror.inc TickFakeLogin). Replacing the GetLoginStatus UFunction thunk did nothing (the
+  scripts are compiled to C++). The F10 menu now hosts and joins inside the running game (InProcessTravel).
+- Test: tools/b4test.ps1 (A hosts L01 from a focused main menu via `open ...?listen`, B joins via `open ip:port`):
+  PASS 2026-10-20; -Twin (fakelogin=0): FAIL, the guest never reaches the map.
+- History:
 - In-process `open <map>?listen` from a focused front end ends with "You must be signed in to play online"
   (Demonware session code, TCP 3074). Blocking 3074 and spoofing foreground did not help.
 - Workaround: the menu relaunches the game with the URL on the command line (20–30 s).
 
-### B5. Guest visuals: dark silhouettes in cutscenes — open (owner said: not now)
+### B5. Guest visuals: dark silhouettes in cutscenes — open
+- 2026-10-20: also in gameplay (L03a) and only on NPC robots; follows the guest role. Details in B25.
+- Owner 2026-10-20: switching off blur/post effects in the Advanced Configurator (F1) did NOT fix it (first report
+  withdrawn).
+- 2026-10-20 gfxdiag (new: both sides write Binariesoc_gfx.txt every 30 s + `gfxdiag` command; tools/gfxdiff.ps1
+  compares). L01 intro, both looking through CameraActor_6095, host vs guest: ShaderCache 95 vs 47 (the guest loaded
+  half the shader caches), PointLightComponent 168 vs 151, LightEnvironmentComponent 287 vs 277, TnRampLightManager
+  67 vs 51, DecalComponent 56 vs 6, and 8 fewer of each NPC-side helper (TnCharacterTextureLoader,
+  TnCharacterMaterialManager, every Tn*MaterialOverrider). Leads: packages with shaders/lights loaded only on the
+  server (spawned by Kismet / AI), light ramp managers of the NPC robots. Next: list which packages own the missing
+  ShaderCache objects and lights (outer chain / package names) and load them on the guest.
 
 ### B6. Guest starts "downed" in chapter 1 — workaround (rescue teleport)
 
@@ -201,6 +220,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   commands (the pawn has to stand at the armory).
 
 ### B24. Rejoin leaves stale controllers on the host — open
+- 2026-10-21 lobby late join: after the guest left and joined again the host listed 3 players (lobbycontinue -Late).
 - Owner's 41-minute Escalation session: npc=4 for 2 players at the end, two controllers shared one PRI
   (pridiag PC0 and PC2 -> the same PRI). Probably old controllers of a guest who reconnected. Check what the game does
   with them (scoreboard rows, spawn helper, sync peers).
@@ -226,6 +246,63 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   Still to check separately: (1) profile settings on the guest (exec TnPlayerController.UpdateLocalCacheOfProfileSettings
   applies PCSettingManager texture quality; does it run on a network client?), (2) the character texture loader for
   remote pawns (above), (3) host vs guest shots with ReShade off on both (pure engine difference).
+- 2026-10-20 sweep (SWEEP-0.6.md): the guest sees **NPC robots** black (emissive parts glow) in L03a gameplay and the
+  L04a cutscene, the host sees them lit. Role swap (host = B, guest = A) moves the black robots to A: it follows the
+  network role, not the copy. Still black 45 s later. Black + emissive = no light / material parameter, not texture
+  mips. Level Kismet does not use SeqAct_AddTextureStreamingViewInfo / SeqAct_FlushTextureStreaming (none of 458
+  story packages), and NPCs (TnHtnAiPawn) have no character texture loader. Next: dump a dark NPC on both sides
+  (light environment, lighting channels, material instance scalars) and diff. This is the same thing as B5.
+
+### B26. Host frame hitches since v0.6.0 (owner: "very strong lags on the host") — fix built 2026-10-20
+- story_title.inc ChapterSnap runs every 250 ms on the host (sync snapshot, also in Escalation) and did two full
+  GObjects passes each time (ClassIdByName without a cache, then ChapterActions). DLL tick max rose from 70-140 ms
+  (289671b) to 220-265 ms on every map after the title merge (051719d).
+- Fix: class id cached, one full pass per map, then 20000 objects per call. Check: tickMsMax back to the old range,
+  titletest PASS / twin FAIL (DONE).
+- Measured by EndScene counts: host 41-43 FPS on the old build, 60 with the fix (L06, ESC_Ark). tickMsMax itself is
+  a one-time load spike and did not change. The steady DLL tick was already small (avg 1.8 ms).
+- Owner 2026-10-20: the lags he saw came from different FPS limits (the FPS-unlock mod; the test copies ran 200 FPS
+  on one window): now 60 FPS everywhere. The 41-43 vs 60 FPS numbers above were taken with those mixed limits, so
+  the gain from the fix is not proven; recheck host FPS with 60 on both.
+- titletest on the fixed build (sweep060\lagfix\title): logs OK (host chapter 10, guest shows 10) but both
+  screenshot scores 0 - not explained yet, rerun.
+
+### B27. Chapter 8b: a player falls through the world after the first cutscene — open
+- Steam sweep run 1: after the cutscene at 74-79 s the host's pawn fell (Z -63878 -> -109248), died; coopdeath
+  cleared the pawn for a respawn; the test ended before the checkpoint restart. Rerun 1: the guest fell
+  (Z -119282) and then the host crashed (B28). Rerun 2 and LAN: no fall. Likely B15 (streaming unload under one
+  player); `rescue`/`tpsync` only move a falling *guest* to the host, a falling host is never rescued.
+
+### B28. Host crashes in 8b and 9 (Steam sweep) — open, 1 of 3 runs each
+- L09 Steam at 108 s: ghidra `0xae6773` reads null+0x20; object on the stack `TnInteractActionTogglePause`.
+  Dump `sweep060\steam\L09_FinalFight_BASE_m_A_foc_crash_50056_crash1.dmp`. Two reruns (Steam) and LAN: no crash.
+- L08b Steam rerun 1 at 75 s, right after the guest fell through the world (B27): ghidra `0xb560b0` (the HUD role
+  gate, ecx = 0x10, object null); stack has TnGrabManager, TnRobotAnimator, both TnPlayerPawns.
+  Dump `sweep060\rerun\l08b_1\..._crash1.dmp`.
+
+### B29. Lobby: the guest does not follow when the host uses the game's own CONTINUE - fixed 2026-10-21 (aa61485)
+- Fix: the lobby host watches the GameInfo object: a solo game (TnCampaignGameSolo, the menu's CONTINUE / CHAPTER) is
+  reopened as a session with the same URL options (?LoadCheckpoint kept); a session game with its listen port sends
+  "port" and "go". MapName knows the map of travels we start (NoteTravel) while that GameInfo lives.
+- Test: tools/lobbycontinue.ps1 (key presses Up+Enter in the main menu): PASS 2026-10-21 - the guest followed within
+  30 s (Steam mock relay, 2 players), Esc on the host keeps the game. The CHAPTER path (-Keys "ENTER,ENTER,ENTER":
+  CAMPAIGN > chapter I > overwrite warning Continue): PASS 2026-10-21 - guest in the mission 20 s after the warning
+  was confirmed. A lobby guest that starts a mission itself (clicks in its window) also follows the host on "go".
+- CONTINUE loads TnCampaignGameSolo with ?LoadCheckpoint, not through the console Exec, so the lobby reopens the map
+  as a session; after that MapName returns the old "UI_FrontEnd_m" (many UWorld objects linger) and the relay never
+  gets "port"/"go". Details and next steps: PLAN.md "Resume point 2026-10-20 late night". Test: tools/lobbycontinue.ps1.
+
+### B31. Host: Esc (pause menu) with a guest connected called address 0 - fixed 2026-10-21 (`exechook` default 0)
+- The engine console Exec hook (lobby.inc, vtable slot ghidra 0x1522ba4) broke "onrelease showmenu" while a guest was
+  connected: EXCEPTION at 00000000, [esp]=0 (looks like a corrupted return), the host process died once. Without a
+  guest, or with exechook=0, the pause menu is fine. The hook is not needed: the menu's CHAPTER / CONTINUE never use
+  Exec (the lobby reopens solo games). Test: tools/pausetest.ps1 -Guest (PASS with exechook=0, FAIL with 1).
+  NULLCALL lines in the log now show [esp] slots with their module for calls to address 0.
+
+### B30. Host hitches every few seconds with the 2026-10-20 trace/mirror build - mostly fixed
+- Full GObjects passes with a name lookup per object (fakelogin class defaults every 5 s, netspeed every 5 s, texsync
+  every 10 s, property lookups) froze the host 1-4 s. Now: class-filtered and once per map; "slow: <part> took N ms"
+  logs every tick part over 25 ms. Remaining: ~1 s + 1.5 s once at startup.
 
 ### B10. Host camera follows the guest's pawn — fixed 2026-10-19 (see DONE, TESTS)
 

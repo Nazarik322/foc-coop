@@ -145,12 +145,16 @@ __declspec(dllexport) void* API SteamAPI_SteamMatchmaking_v009(void) { return (v
 __declspec(dllexport) uint64_t API SteamAPI_ISteamMatchmaking_CreateLobby(void* s, int type, int max) {
     (void)s; (void)type; (void)max;
     uint64_t lobby = 109775240000000000ull + (g_me % 100000) * 10 + (GetTickCount() % 10);
-    char p[MAX_PATH]; LobbyPath(lobby, p); char lines[2][160]; sprintf(lines[0], "owner=%llu", g_me); sprintf(lines[1], "member=%llu", g_me); WriteLines(p, lines, 2);
+    char p[MAX_PATH]; LobbyPath(lobby, p); char lines[3][160]; sprintf(lines[0], "owner=%llu", g_me); sprintf(lines[1], "member=%llu", g_me);
+    sprintf(lines[2], "pid=%lu", GetCurrentProcessId()); WriteLines(p, lines, 3);   /* a killed owner leaves no stale lobby (list) */
     WriteUser(lobby);
     LobbyCreated_t r = {1, lobby}; return PushResult(513, &r, sizeof(r));
 }
 __declspec(dllexport) uint64_t API SteamAPI_ISteamMatchmaking_JoinLobby(void* s, uint64_t lobby) {
     (void)s; char p[MAX_PATH]; LobbyPath(lobby, p); char lines[64][160]; int n = ReadLines(p, lines, 63);
+    /* a lobby whose owner process is gone cannot be joined (real Steam deletes it; a test joined such a lobby) */
+    for (int i = 0; i < n; i++) if (!strncmp(lines[i], "pid=", 4)) { DWORD pid = (DWORD)strtoul(lines[i] + 4, NULL, 10); HANDLE ph = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        DWORD w = ph ? WaitForSingleObject(ph, 0) : WAIT_OBJECT_0; if (ph) CloseHandle(ph); if (w != WAIT_TIMEOUT) { DeleteFileA(p); n = -1; } break; }
     LobbyEnter_t r; memset(&r, 0, sizeof(r)); r.lobby = lobby; r.response = n < 0 ? 2 : 1;
     if (n >= 0) { sprintf(lines[n++], "member=%llu", g_me); WriteLines(p, lines, n); }
     return PushResult(504, &r, sizeof(r));
@@ -219,6 +223,9 @@ __declspec(dllexport) uint64_t API SteamAPI_ISteamMatchmaking_RequestLobbyList(v
     if (h != INVALID_HANDLE_VALUE) {
         do {
             uint64_t l = _strtoui64(fd.cFileName, NULL, 10); if (!l || g_nfound >= 64) continue;
+            DWORD pid = (DWORD)strtoul(SteamAPI_ISteamMatchmaking_GetLobbyData(s, l, "pid"), NULL, 10);
+            if (pid) { HANDLE ph = OpenProcess(SYNCHRONIZE, FALSE, pid); DWORD w = ph ? WaitForSingleObject(ph, 0) : WAIT_OBJECT_0; if (ph) CloseHandle(ph);
+                       if (w != WAIT_TIMEOUT) { char lp[MAX_PATH]; LobbyPath(l, lp); DeleteFileA(lp); continue; } }   /* owner process gone */
             if (g_filtKey[0] && strcmp(SteamAPI_ISteamMatchmaking_GetLobbyData(s, l, g_filtKey), g_filtVal)) continue;
             g_found[g_nfound++] = l;
         } while (FindNextFileA(h, &fd));
