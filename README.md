@@ -23,11 +23,19 @@ Works with the Steam version of the game (build 12831). Every player needs their
 
 Steam must be running for everyone, and you must be Steam friends.
 
-- **Host:** start the game, press **F10** → Host a game → pick a chapter or Escalation map → Start hosting.
-- **Friend:** start the game, press **F10** → Join a game → pick the game in the list (friends are on top) → **Join**.
+**Story with a lobby (recommended):**
+- **Host:** start the game, press **F10** → Host a game → at the bottom **Create lobby** (friends only, public or
+  private, optional password). Nothing loads yet.
+- **Friends:** press **F10** → Join a game → **Join lobby** (type the password if there is one) and wait in the main menu.
+- **Host:** start the mission from the game's own menu as in single player (**Continue** or **Campaign** → chapter).
+  Everybody in the lobby is taken into it; the intro waits until they have loaded. Joining a game that already runs
+  works the same way (**Join game**), with a fresh character.
+
+**Direct:** Host a game → pick a chapter or Escalation map → Start hosting; friends: Join a game → **Join**.
+No game restart any more: hosting, joining and leaving happen inside the running game.
 
 No IP addresses, no port forwarding: traffic goes through Steam. While the mod is installed, Steam shows the game as
-"Spacewar" (the free Steam app the co-op connection uses); `spacewar=0` in `Binariesoc_coop.ini` turns that off. On one network you can also join from the lobby list
+"Spacewar" (the free Steam app the co-op connection uses); `spacewar=0` in `Binaries\foc_coop.ini` turns that off. On one network you can also join from the lobby list
 or by IP.
 
 ## What works
@@ -41,6 +49,8 @@ or by IP.
   everybody is down: MISSION FAILED, restart from the checkpoint. If a player really dies (e.g. falls into a pit),
   both restart at the last checkpoint after about 15 seconds.
 - The chapter title shows on both screens.
+- A player left behind (a scripted door closed, a scene moved the host) is brought to the host; scenes use the
+  host's camera for everybody.
 - In cutscenes the friend's HUD hides and they cannot walk away, as for the host.
 - A player who falls out of the level is teleported next to the other one instead of falling forever.
 
@@ -51,7 +61,8 @@ or by IP.
   robot can stand in the scene.
 - Reaching some markers loads the next area only around that player: stay together (the teleport is not yet tested
   on every such marker).
-- Hosting or joining restarts the game once (about 20–30 s).
+- Starting a mission from the lobby loads the chapter twice on the host (once as single player, then as the session).
+- After a friend leaves and joins again the host shows one player too many for a while.
 
 Bugs and progress: [docs/dev](docs/dev/README.md).
 
