@@ -1,7 +1,8 @@
 # Lobby + the game's own "Continue" (owner 2026-10-20), driven by keys: A creates a lobby, B joins it, A presses Up +
 # Enter in the main menu (CONTINUE), B must follow into the mission; then Esc on the host (pause menu) and the game must
 # stay in the map. Screenshots of both windows in $Out. Leaves the games running with -Keep.
-param([string]$Out = "E:\FoC-coop\sessions\lobbycont", [switch]$Keep)
+# -Keys: the menu path; "UP,ENTER" = CONTINUE (default), "ENTER,ENTER,ENTER" = CAMPAIGN > chapter I > overwrite warning Continue
+param([string]$Out = "E:\FoC-coop\sessions\lobbycont", [switch]$Keep, [string]$Keys = "UP,ENTER")
 . "$PSScriptRoot\dev.ps1"
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -25,8 +26,8 @@ try {
   if (-not $id) { Say "RESULT: FAIL host lobby not created"; return }
   Send-Cmd B "lobby join $id"; Start-Sleep 7
   Say "lobby $id, guest relay: $(((Get-Content E:\FoC-coop\B\Binaries\foc_relay\relay.status) -match '^state='))"
-  Send-Cmd A "input tap UP"; Start-Sleep 1; Send-Cmd A "input tap ENTER"
-  Say "host: CONTINUE pressed"
+  foreach ($k in $Keys -split ",") { Send-Cmd A "input tap $k"; Start-Sleep 3 }
+  Say "host: menu keys $Keys pressed"
   $t0 = Get-Date; $ok = $false
   while (((Get-Date) - $t0).TotalSeconds -lt 200) {
     Start-Sleep 5
