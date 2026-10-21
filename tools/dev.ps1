@@ -10,6 +10,7 @@ public class W {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint fl);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte sc, uint fl, UIntPtr ex);
@@ -195,8 +196,19 @@ function Start-Foc([string]$Copy,[string]$MapUrl = "", [int]$W = 960, [int]$H = 
   return $p.Id
 }
 function Wait-FocWindow([int]$ProcId, [int]$Timeout = 120) {
-  for ($i = 0; $i -lt $Timeout; $i++) { $h = [W]::Find([uint32]$ProcId); if ($h -ne [IntPtr]::Zero) { return $h }; Start-Sleep 1 }
+  for ($i = 0; $i -lt $Timeout; $i++) { $h = [W]::Find([uint32]$ProcId); if ($h -ne [IntPtr]::Zero) { Set-FocWindowSlot $ProcId $h; return $h }; Start-Sleep 1 }
   return [IntPtr]::Zero
+}
+# Owner 2026-10-20: the test windows stood on top of each other. Copy A (host) goes to the left, B to the right of it,
+# C/D below (960x540 client area each); no resize, no focus change.
+function Set-FocWindowSlot([int]$ProcId, $h) {
+  try {
+    $path = (Get-Process -Id $ProcId -ErrorAction Stop).Path
+    if ($path -notmatch '\\FoC-coop\\([A-Z])\\') { return }
+    $slot = [int][char]$Matches[1] - [int][char]'A'
+    $x = ($slot % 2) * 980; $y = [math]::Floor($slot / 2) * 590
+    [void][W]::SetWindowPos($h, [IntPtr]::Zero, $x, $y, 0, 0, 0x0015)   # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+  } catch {}
 }
 # B9: a window handle of 0 (the game has no window, e.g. the guest did not start) is noted, never an exception.
 function Test-FocWin($h) { return ($null -ne $h -and $h -ne [IntPtr]::Zero) }

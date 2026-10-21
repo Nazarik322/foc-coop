@@ -138,19 +138,11 @@ static void VtDiffCommand(const char* args) {
 // ShowChapter2 once per new chapseq.
 static bool ShowChapterHud(const TickObjs& t, float number, int mode);
 static int g_chapSeq = 0; static int g_chapNum = 0;
+// Runs every 250 ms on the host (sync snapshot). It used to do two full GObjects passes per call (host hitches, B26).
 static int ChapterSnap(const TickObjs& t, char* out, size_t n) {
+    // the host detection moved into the Kismet tracker (trace.inc TickKismetLog): it already watches every
+    // SequenceOp ActivateCount, the own scan here missed the L01 title (2026-10-20)
     if (!g_chapterSync) return 0;
-    static BYTE* seen[16]; static int cnt[16]; static int ns = 0;
-    BYTE* acts[16]; int na = ChapterActions(acts, 16);
-    for (int i = 0; i < na; i++) {
-        int k = 0; while (k < ns && seen[k] != acts[i]) k++;
-        int c = *(int*)(acts[i] + 0x70);
-        if (k == ns && ns < 16) { seen[ns] = acts[i]; cnt[ns] = c; ns++; continue; }   // first sight: baseline
-        if (k < ns && c > cnt[k]) {
-            cnt[k] = c; g_chapNum = (int)*(float*)(acts[i] + 0x8c); g_chapSeq++;
-            Log("title: host chapter %d (activateCount %d)", g_chapNum, c);
-        } else if (k < ns) cnt[k] = c;
-    }
     if (!g_chapSeq) return 0;
     return _snprintf_s(out, n, _TRUNCATE, "chap=%d\nchapseq=%d\n", g_chapNum, g_chapSeq);
 }

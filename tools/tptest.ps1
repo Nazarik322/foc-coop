@@ -47,16 +47,27 @@ try {
   if ($d2 -gt 800) { $fails += "tpg back: host view dist $d2" }
   if ($d2b -gt 800) { $fails += "tpg back: guest own view dist $d2b" }
   if ($Auto) {
-    Send-Cmd $HostCopy "tpg 0 0 -5000"; Say "auto: guest dropped 5000 below"
-    $ok = $false
-    for ($i = 0; $i -lt 45; $i++) {
-      Start-Sleep 1
-      $h = Pos $HostCopy $true; $g = Pos $HostCopy $false
-      if ($h -and $g -and (Dist $h $g) -lt 800) { $ok = $true; break }
+    # rescue rule: a pawn falling for 7 s is moved next to the player that stands; first the guest falls, then the host
+    foreach ($who in "guest", "host") {
+      Start-Sleep 3
+      $cmd = if ($who -eq "guest") { "tpg 0 0 -5000" } else { "tph 0 0 -5000" }
+      $t0 = Get-Date
+      Send-Cmd $HostCopy $cmd; Say "auto: $who dropped 5000 below ($cmd)"
+      $fell = $false; $ok = $false; $sec = -1
+      for ($i = 0; $i -lt 40; $i++) {
+        Start-Sleep 1
+        $h = Pos $HostCopy $true; $g = Pos $HostCopy $false
+        if (-not $h -or -not $g) { continue }
+        $d = Dist $h $g
+        if (-not $fell) { if ($d -gt 2000) { $fell = $true; Say "auto: $who is falling (dist $([int]$d) after $i s)" }; continue }
+        if ($d -lt 800) { $ok = $true; $sec = [int]((Get-Date) - $t0).TotalSeconds; break }
+      }
+      Say "auto: $who fell=$fell rescued=$ok after $sec s"
+      Send-Cmd $HostCopy "shot $Out\auto_${who}_A.bmp"; Start-Sleep 2; Send-Cmd $GuestCopy "shot $Out\auto_${who}_B.bmp"; Start-Sleep 2
+      if (-not $fell) { $fails += "auto: the $who did not fall (drop refused?)" }
+      elseif (-not $ok) { $fails += "auto rescue did not bring the $who back" }
+      elseif ($sec -lt 6) { $fails += "auto: $who rescued after $sec s, before the 7 s rule" }
     }
-    Say "auto: rescued=$ok after $i s"
-    Send-Cmd $HostCopy "shot $Out\auto_A.bmp"; Start-Sleep 2; Send-Cmd $GuestCopy "shot $Out\auto_B.bmp"; Start-Sleep 2
-    if (-not $ok) { $fails += "auto rescue did not bring the guest back" }
   }
   if (-not (Get-Process -Id $pa -ErrorAction SilentlyContinue)) { $fails += "host died" }
   if (-not (Get-Process -Id $pb -ErrorAction SilentlyContinue)) { $fails += "guest died" }

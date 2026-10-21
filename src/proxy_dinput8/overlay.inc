@@ -16,6 +16,9 @@ typedef BOOL(__thiscall* PFN_Exec)(void* self, const wchar_t* cmd, void* ar);
 static void __fastcall OutStub(void* self, void* edx, const wchar_t* v, int ev) { if (v) Log("engine says: %ls", v); }
 static void* g_outVtbl[32];
 static void* g_outDev[2] = {g_outVtbl, nullptr};
+static volatile LONG g_gfxDiagReq = 0;   // `gfxdiag` command -> trace.inc GfxDiagWrite on the next tick
+static void KImpulseCommand(const char* args);   // kmirror.inc
+static void LobbyCommand(const char* args);      // lobby.inc
 static PFN_Exec g_exec = nullptr;
 static void* g_execSelf = nullptr;
 // The engine routine is called with every register and the stack pointer saved around it (its exact convention is unverified).
@@ -346,10 +349,17 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("dump ", 0) == 0) { DumpClass(cmd.c_str() + 5); return; }
     if (cmd.rfind("fall ", 0) == 0) { MovePawnCommand(cmd.c_str() + 5, true); return; }
     if (cmd.rfind("tpg", 0) == 0) { TpGuestCommand(cmd.size() > 4 ? cmd.c_str() + 4 : ""); return; }
+    if (cmd.rfind("tph ", 0) == 0) { TpHostCommand(cmd.c_str() + 4); return; }
+    if (cmd.rfind("hdrprobe ", 0) == 0) { HdrProbeCommand(cmd.c_str() + 9); return; }
+    if (cmd.rfind("kimpulse ", 0) == 0) { KImpulseCommand(cmd.c_str() + 9); return; }
+    if (cmd.rfind("fnprobe ", 0) == 0) { FnProbeCommand(cmd.c_str() + 8); return; }
+    if (cmd.rfind("lobby ", 0) == 0) { LobbyCommand(cmd.c_str() + 6); return; }
+    if (cmd == "gfxdiag") { InterlockedExchange(&g_gfxDiagReq, 1); return; }
     if (cmd.rfind("tp ", 0) == 0) { MovePawnCommand(cmd.c_str() + 3, false); return; }
     if (!g_exec && !FindExec()) { Log("menu: cannot run '%s': %s", cmd.c_str(), g_execStatus); return; }
     wchar_t w[512]; MultiByteToWideChar(CP_ACP, 0, cmd.c_str(), -1, w, 512);
     Log("menu: exec '%s'", cmd.c_str());
+    if (cmd.find("?listen") != std::string::npos) { g_hostBoundPort = 0; g_captureBind = 1; }   // in-process hosting: note the listen port
     g_spoofUntil = GetTickCount() + 30000;
     strncpy_s(g_lastCmd, cmd.c_str(), _TRUNCATE);
     BOOL r = FALSE;
@@ -580,8 +590,11 @@ static void RelaunchWithUrl(const char* url, const char* extra = "") {
         TerminateProcess(GetCurrentProcess(), 0);
     } else Log("menu: relaunch failed (%lu)", GetLastError());
 }
+// B4 fixed (fakelogin, 2026-10-20): with the sign-in check off, `open` works inside the running game, no restart
+static bool InProcessTravel() { return g_fastTravel || g_fakeLogin; }
+static char g_hostUrl[400] = "";   // the URL of an in-process host (the relay thread reads map / mode / players from it)
 static void RunSessionCommand(const char* url, const char* openCmd) {
-    if (g_fastTravel) QueueCommand(openCmd);
+    if (InProcessTravel()) QueueCommand(openCmd);
     else RelaunchWithUrl(url);
 }
 
@@ -591,13 +604,14 @@ static void RunSessionCommand(const char* url, const char* openCmd) {
 // foc_relay so it never replaces the game's Steam_api.dll.
 static const int kRelayLocalPort = 7790;
 static bool g_useSteam = true;            // Host page checkbox
-static char g_joinLobby[32] = "";         // Join page: lobby id, empty = first friend who hosts
+static char g_joinLobby[32] = ""; static char g_joinPw[32] = "";         // Join page: lobby id, empty = first friend who hosts
 static char g_relayState[160] = "";
 static unsigned long long g_relayLobby = 0; static int g_relayPeers = 0; static char g_relayRole[16] = "";
 static void RelayDir(wchar_t* out) { GetModuleFileNameW(nullptr, out, MAX_PATH); wchar_t* sl = wcsrchr(out, L'\\'); if (sl) wcscpy_s(sl, 32, L"\\foc_relay"); }
 static bool StartRelay(const char* args) {
     wchar_t dir[MAX_PATH]; RelayDir(dir);
     wchar_t st[MAX_PATH]; _snwprintf_s(st, _TRUNCATE, L"%s\\relay.status", dir); DeleteFileW(st);
+    _snwprintf_s(st, _TRUNCATE, L"%s\\relay.cmd", dir); DeleteFileW(st);   // a leftover "quit" stopped the next relay at once
     wchar_t wa[128]; MultiByteToWideChar(CP_ACP, 0, args, -1, wa, 128);
     wchar_t cmd[MAX_PATH + 160]; _snwprintf_s(cmd, _TRUNCATE, L"\"%s\\FoCRelay.exe\" %s", dir, wa);
     STARTUPINFOW si = {sizeof(si)}; PROCESS_INFORMATION pi = {};
@@ -607,6 +621,7 @@ static bool StartRelay(const char* args) {
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     Log("relay: started %ls", cmd); return true;
 }
+static char g_relayGo[128] = "";   // relay.status go= (lobby guest: the host started a mission, lobby.inc)
 static void ReadRelayStatus() {   // relay.status: key=value lines
     wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\relay.status", dir);
     FILE* f = nullptr; _wfopen_s(&f, p, L"r"); if (!f) return;
@@ -618,6 +633,7 @@ static void ReadRelayStatus() {   // relay.status: key=value lines
         else if (!strncmp(line, "peers=", 6)) g_relayPeers = atoi(line + 6);
         else if (!strncmp(line, "role=", 5)) strncpy_s(g_relayRole, line + 5, _TRUNCATE);
         else if (!strncmp(line, "persona=", 8)) strncpy_s(g_relayPersona, line + 8, _TRUNCATE);
+        else if (!strncmp(line, "go=", 3)) strncpy_s(g_relayGo, line + 3, _TRUNCATE);
     }
     fclose(f);
 }
@@ -632,7 +648,7 @@ static DWORD WINAPI HostRelayThread(LPVOID) {
     Sleep(2000);
     if (!g_hostBoundPort) { Log("relay: no listen port, host relay not started"); return 0; }
     // lobby data for the Join page: max players, mode and map from our command line URL
-    const char* url = CmdlineUrl();
+    const char* url = g_hostUrl[0] ? g_hostUrl : CmdlineUrl();
     char map[96] = ""; int i = 0; while (url[i] && url[i] != '?' && i < 95) { map[i] = url[i]; i++; } map[i] = 0;
     const char* mp = strstr(url, "MaxPlayers="); int maxp = mp ? atoi(mp + 11) : 5;
     const char* mode = strstr(url, "TnSurvivalGame") ? "Escalation" : "Story";
@@ -654,7 +670,8 @@ static DWORD WINAPI JoinSteamThread(LPVOID) {
             char name[64]; strncpy_s(name, g_relayPersona[0] ? g_relayPersona : g_playerName, _TRUNCATE);
             for (char* c = name; *c; c++) if (*c == '?' || *c == '=' || *c == ' ' || *c == '"' || *c == ',' || *c == '#' || (unsigned char)*c < 0x20) *c = '_';
             char url[128]; _snprintf_s(url, _TRUNCATE, "127.0.0.1:%d?Name=%s", kRelayLocalPort, name);
-            RelaunchWithUrl(url);
+            if (InProcessTravel()) { char cmd[160]; _snprintf_s(cmd, _TRUNCATE, "open %s", url); QueueCommand(cmd); }
+            else RelaunchWithUrl(url);
             return 0;
         }
         if (strstr(g_relayState, "failed") || strstr(g_relayState, "not a ") || strstr(g_relayState, "missing")) return 0;
@@ -667,7 +684,7 @@ static void JoinViaSteam() { CreateThread(nullptr, 0, JoinSteamThread, nullptr, 
 
 // Join page: a "FoCRelay list" process searches Steam for foc-coop lobbies (public ones, plus friends' lobbies) and
 // writes lobbies.txt every 3 s: lobby|owner|name|mode|map|members|max|friend.
-struct SteamLobby { char id[24]; char name[64]; char mode[24]; char map[96]; int members, maxp; bool isFriend; };
+struct SteamLobby { char id[24]; char name[64]; char mode[24]; char map[96]; int members, maxp; bool isFriend; char pwHash[24]; bool inGame; };
 static std::vector<SteamLobby> g_steamLobbies;
 static DWORD g_listStarted = 0, g_listRead = 0;
 static void ListRelayStop() { wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\list.cmd", dir); FILE* f = nullptr; _wfopen_s(&f, p, L"w"); if (f) { fputs("quit", f); fclose(f); } g_listStarted = 0; }
@@ -694,13 +711,14 @@ static void ListRelayTick() {   // called while the Join page is open
     FILE* f = nullptr; _wfopen_s(&f, p, L"r"); if (!f) return;
     std::vector<SteamLobby> v; char line[400];
     while (fgets(line, sizeof(line), f)) {
-        char* fld[8] = {0}; int n = 0; char* c = line; fld[n++] = c;
-        for (; *c && n < 8; c++) if (*c == '|') { *c = 0; fld[n++] = c + 1; }
+        char* fld[10] = {0}; int n = 0; char* c = line; fld[n++] = c;
+        for (; *c && n < 10; c++) if (*c == '|') { *c = 0; fld[n++] = c + 1; }
         if (n < 8) continue;
-        char* e = fld[7]; while (*e && *e != '\n' && *e != '\r') e++; *e = 0;
+        char* e = fld[n - 1]; while (*e && *e != '\n' && *e != '\r') e++; *e = 0;
         SteamLobby l = {}; strncpy_s(l.id, fld[0], _TRUNCATE); strncpy_s(l.name, fld[2][0] ? fld[2] : "?", _TRUNCATE);
         strncpy_s(l.mode, fld[3], _TRUNCATE); strncpy_s(l.map, MapTitle(fld[4]), _TRUNCATE);
         l.members = atoi(fld[5]); l.maxp = atoi(fld[6]); l.isFriend = fld[7][0] == '1';
+        if (n >= 10) { strncpy_s(l.pwHash, fld[8], _TRUNCATE); l.inGame = fld[9][0] == '1'; }
         v.push_back(l);
     }
     fclose(f);
@@ -721,8 +739,10 @@ static void StartHosting() {
     strncpy_s(g_hostTitle, m.title, _TRUNCATE); strcpy_s(g_hostModeName, g_hostMode == 0 ? "Story" : "Escalation");
     g_hostMax = g_hostPlayers; g_hostBoundPort = 0; g_captureBind = 1; g_hosting = 1;
     g_menuOpen = 0;
-    if (g_useSteam && !g_fastTravel) { RelaunchWithUrl(url, "-steamrelay"); return; }
+    if (g_useSteam && !InProcessTravel()) { RelaunchWithUrl(url, "-steamrelay"); return; }
+    strncpy_s(g_hostUrl, url, _TRUNCATE);
     RunSessionCommand(url, cmd);
+    if (g_useSteam) { Log("menu: hosting through Steam (relay) without a restart"); CreateThread(nullptr, 0, HostRelayThread, nullptr, 0, nullptr); }
 }
 static void JoinServer(const char* ip, int port) {
     char url[200], cmd[220]; _snprintf_s(url, _TRUNCATE, "%s:%d", ip, port);
@@ -774,6 +794,7 @@ static void FeedInput(ImGuiIO& io) {
 // ---------------------------------------------------------------- the menu UI
 static void Tooltip(const char* t) { if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", t); }
 
+#include "lobby.inc"
 static void DrawHostPage() {
     ImGui::TextUnformatted("HOST A GAME");
     ImGui::Separator();
@@ -797,9 +818,10 @@ static void DrawHostPage() {
     ImGui::TextWrapped("Your game appears in your friends' Join list through Steam (no IP addresses, no port forwarding). Steam must be running.");
     ImGui::Spacing();
     if (ImGui::Button("Start hosting", ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
-    ImGui::SameLine(); ImGui::TextDisabled("(the game restarts into the session)");
+    ImGui::SameLine(); ImGui::TextDisabled("(loads the chapter now)");
     ImGui::SameLine();
     if (ImGui::Button("Back")) g_page = 0;
+    DrawLobbyHostPart();
 }
 
 static void DrawJoinPage() {
@@ -820,15 +842,20 @@ static void DrawJoinPage() {
             ImGui::TableNextColumn(); ImGui::TextUnformatted(l.map);
             ImGui::TableNextColumn(); if (l.maxp) ImGui::Text("%d / %d", l.members, l.maxp); else ImGui::TextUnformatted("?");
             ImGui::TableNextColumn();
-            char b[48]; _snprintf_s(b, _TRUNCATE, "Join##%s", l.id);
-            if (ImGui::SmallButton(b)) { strncpy_s(g_joinLobby, l.id, _TRUNCATE); JoinViaSteam(); }
+            bool locked = l.pwHash[0] && strcmp(l.pwHash, "-") && strcmp(l.pwHash, "0");
+            char b[48]; _snprintf_s(b, _TRUNCATE, "%s##%s", l.inGame ? "Join game" : "Join lobby", l.id);
+            if (locked) { ImGui::SameLine(); ImGui::TextDisabled("(password)"); }
+            if (ImGui::SmallButton(b)) { strncpy_s(g_joinLobby, l.id, _TRUNCATE); if (LobbyJoin(l.id, l.pwHash, g_joinPw)) g_menuOpen = 0; }
         }
         if (g_steamLobbies.empty()) { ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextDisabled(g_listStarted && GetTickCount() - g_listStarted > 8000 ? "no games found yet - ask your friend to host" : "searching..."); }
         ImGui::EndTable();
     }
     ImGui::EndChild();
+    ImGui::SetNextItemWidth(180); ImGui::InputText("Lobby password", g_joinPw, sizeof(g_joinPw), ImGuiInputTextFlags_Password);
     if (g_relayState[0] && !strcmp(g_relayRole, "join")) ImGui::TextDisabled("Steam: %s", g_relayState);
-    ImGui::TextDisabled("Joining restarts the game once into the session.");
+    if (g_lobbyStatus[0]) ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s", g_lobbyStatus);
+    if (g_lobbyRole == 2 && ImGui::Button("Leave lobby")) LobbyLeave();
+    ImGui::TextDisabled("You wait in the main menu; when the host starts the mission you join it (no restart).");
     ImGui::Spacing();
     if (ImGui::Button("Back")) { ListRelayStop(); g_page = 0; }
 }
@@ -853,7 +880,7 @@ static void DrawMainPage() {
         // no window), so it only showed the overlay; friends find the game in their Join list instead
         if (!strcmp(g_relayRole, "host")) ImGui::TextDisabled("Friends see your game in F10 > Join a game.");
     }
-    if (ImGui::Button(g_fastTravel ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; if (g_fastTravel) QueueCommand("disconnect"); else RelaunchWithUrl(""); }
+    if (ImGui::Button(InProcessTravel() ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; g_hostUrl[0] = 0; if (InProcessTravel()) { QueueCommand("disconnect"); RelayCommand("quit"); } else RelaunchWithUrl(""); }
     if (ImGui::Button("Settings", bs)) g_page = 4;
     Tooltip("Co-op options; most apply at once, also during a game");
     if (ImGui::Button("About / status", bs)) g_page = 3;
@@ -926,7 +953,14 @@ static void DrawMenu(ImGuiIO& io) {
 // ---------------------------------------------------------------- Direct3D9 hook
 typedef HRESULT(WINAPI* PFN_EndScene)(IDirect3DDevice9*);
 typedef HRESULT(WINAPI* PFN_Reset)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
-struct D3dVt { void** vt; PFN_EndScene end; PFN_Reset reset; };
+typedef HRESULT(WINAPI* PFN_DrawPrim)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT);
+typedef HRESULT(WINAPI* PFN_DrawIdx)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
+typedef HRESULT(WINAPI* PFN_SetTex)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
+typedef HRESULT(WINAPI* PFN_SetPS)(IDirect3DDevice9*, IDirect3DPixelShader9*);
+struct D3dVt { void** vt; PFN_EndScene end; PFN_Reset reset; PFN_DrawPrim dp; PFN_DrawIdx dip; PFN_SetTex st; PFN_SetPS sps; };
+// gfx statistics (gfxdiag, trace.inc): counts of the last finished frame (the frame that ends at the final EndScene)
+static volatile LONG g_gfxDraws = 0, g_gfxPrims = 0, g_gfxTex = 0, g_gfxTexNull = 0, g_gfxPs = 0, g_gfxPsNull = 0;
+static LONG g_gfxFrame[6];   // draws, prims, texture sets, null texture sets, pixel shader sets, null pixel shaders
 static D3dVt g_d3dVts[4]; static int g_d3dVtN = 0;
 static D3dVt* D3dFor(void* dev) { void** vt = *(void***)dev; for (int i = 0; i < g_d3dVtN; i++) if (g_d3dVts[i].vt == vt) return &g_d3dVts[i]; return nullptr; }
 static IDirect3DDevice9* g_imDev = nullptr;
@@ -1028,12 +1062,18 @@ static HRESULT WINAPI h_EndScene(IDirect3DDevice9* dev) {
     if ((++nEnd % 600) == 1) Log("menu: EndScene calls=%ld final=%ld rt=%p bb=%p", nEnd, nFinal, rt, bb);
     if (rt) rt->Release();
     if (bb) bb->Release();
+    if (isFinal) { g_gfxFrame[0] = InterlockedExchange(&g_gfxDraws, 0); g_gfxFrame[1] = InterlockedExchange(&g_gfxPrims, 0); g_gfxFrame[2] = InterlockedExchange(&g_gfxTex, 0);
+                   g_gfxFrame[3] = InterlockedExchange(&g_gfxTexNull, 0); g_gfxFrame[4] = InterlockedExchange(&g_gfxPs, 0); g_gfxFrame[5] = InterlockedExchange(&g_gfxPsNull, 0); }
     if (isFinal && InterlockedExchange(&g_shotReq, 0)) { __try { SaveBackBuffer(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("shot: exception"); } }
     if (isFinal) { __try { RenderOverlay(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { static int n = 0; if (n++ < 3) Log("menu: exception in overlay render"); } }
     if (isFinal && InterlockedExchange(&g_shotUiReq, 0)) { __try { SaveBackBuffer(dev); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("shot: exception"); } }
     return D3dFor(dev)->end(dev);
 }
 
+static HRESULT WINAPI h_DrawPrim(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT s, UINT c) { g_gfxDraws++; g_gfxPrims += c; return D3dFor(dev)->dp(dev, t, s, c); }
+static HRESULT WINAPI h_DrawIdx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT b, UINT mi, UINT nv, UINT si, UINT c) { g_gfxDraws++; g_gfxPrims += c; return D3dFor(dev)->dip(dev, t, b, mi, nv, si, c); }
+static HRESULT WINAPI h_SetTex(IDirect3DDevice9* dev, DWORD st, IDirect3DBaseTexture9* tx) { g_gfxTex++; if (!tx) g_gfxTexNull++; return D3dFor(dev)->st(dev, st, tx); }
+static HRESULT WINAPI h_SetPS(IDirect3DDevice9* dev, IDirect3DPixelShader9* ps) { g_gfxPs++; if (!ps) g_gfxPsNull++; return D3dFor(dev)->sps(dev, ps); }
 static HRESULT WINAPI h_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp) {
     if (g_imDev) ImGui_ImplDX9_InvalidateDeviceObjects();
     HRESULT r = D3dFor(dev)->reset(dev, pp);
@@ -1047,9 +1087,12 @@ static void PatchD3dVtable(IDirect3DDevice9* dev, const char* tag) {
     if (g_d3dVtN >= 4) return;
     D3dVt& e = g_d3dVts[g_d3dVtN++];
     e.vt = vt; e.end = (PFN_EndScene)vt[42]; e.reset = (PFN_Reset)vt[16];
+    e.dp = (PFN_DrawPrim)vt[81]; e.dip = (PFN_DrawIdx)vt[82]; e.st = (PFN_SetTex)vt[65]; e.sps = (PFN_SetPS)vt[107];
     DWORD old;
     VirtualProtect(&vt[42], 4, PAGE_READWRITE, &old); vt[42] = (void*)h_EndScene; VirtualProtect(&vt[42], 4, old, &old);
     VirtualProtect(&vt[16], 4, PAGE_READWRITE, &old); vt[16] = (void*)h_Reset; VirtualProtect(&vt[16], 4, old, &old);
+    struct { int i; void* f; } more[] = { {81, (void*)h_DrawPrim}, {82, (void*)h_DrawIdx}, {65, (void*)h_SetTex}, {107, (void*)h_SetPS} };
+    for (auto& m : more) { VirtualProtect(&vt[m.i], 4, PAGE_READWRITE, &old); vt[m.i] = m.f; VirtualProtect(&vt[m.i], 4, old, &old); }
     Log("menu: d3d9 vtable %p (%s) hooked", vt, tag);
 }
 
