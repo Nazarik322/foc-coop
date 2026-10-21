@@ -54,6 +54,7 @@ static bool g_scriptDown = false; // ini scriptdown: the script downs/revives th
 static bool g_fakeLogin = true;  // ini fakelogin: no sign-in check, so Host/Join work without a restart (mirror.inc, B4)
 static bool g_escLogin = true;   // ini esclogin: the front end skips the Demonware login, ESCALATION opens (online.inc)
 static bool g_escLan = true;     // ini esclan: online game settings are LAN matches (local sessions, online.inc)
+static bool g_escAutoAccept = false;   // ini escautoaccept: Steam lobby invites are accepted at once (test copies)
 static bool g_escOnline = true;  // ini esconline: online subsystem reports signed in (online.inc vtable patches)
 static char g_pendingPlayerName[64] = "";   // ini playername, copied into sync.inc g_iniPlayerName
 static bool g_execHook = false; // ini exechook: hook the engine console Exec; off: Esc (showmenu) with a guest connected
@@ -1946,6 +1947,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_fakeLogin = GetPrivateProfileIntW(L"foc_coop", L"fakelogin", 1, ini2) != 0;
         g_escLogin = GetPrivateProfileIntW(L"foc_coop", L"esclogin", 1, ini2) != 0;
         g_escOnline = GetPrivateProfileIntW(L"foc_coop", L"esconline", 1, ini2) != 0;
+        g_escAutoAccept = GetPrivateProfileIntW(L"foc_coop", L"escautoaccept", 0, ini2) != 0;
         g_escLan = GetPrivateProfileIntW(L"foc_coop", L"esclan", 1, ini2) != 0;
         g_ptrace = GetPrivateProfileIntW(L"foc_coop", L"ptrace", 1, ini2) != 0;
         g_scriptDown = GetPrivateProfileIntW(L"foc_coop", L"scriptdown", 0, ini2) != 0;

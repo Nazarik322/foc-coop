@@ -152,7 +152,7 @@ static DWORD __fastcall ChatUnsubscribe(void*, void*, const DWORD* id) {
 }
 static LONG g_chatLogN = 0;   // first channel messages are logged (type, size, first bytes)
 static void ChatLogMsg(const char* what, unsigned long long ch, unsigned long long peer, const void* data, int size) {
-    if (InterlockedIncrement(&g_chatLogN) > 200) return;
+    if (InterlockedIncrement(&g_chatLogN) > 5000) return;
     char hex[64] = ""; const BYTE* b = (const BYTE*)data;
     for (int i = 0; i < size && i < 16; i++) _snprintf_s(hex + 2 * i, sizeof(hex) - 2 * i, _TRUNCATE, "%02x", b[i]);
     Log("steamchat: %s %016llx %llu %d bytes %s", what, ch, peer, size, hex);
@@ -234,9 +234,44 @@ static void SnInstallUid() {
     }
 }
 
+// ---------------------------------------------------------------- Steam lobby: friends join a party through Steam
+// The party host keeps a friends-only Steam lobby whose data "chan" is its party channel; a friend who presses "Join
+// game" in Steam (GameLobbyJoinRequested -> relay "joinrequest") joins that lobby and then the party, the way the
+// game joins an accepted invite (invite.inc InviteJoinChannel). Invites sent from the game are Steam lobby invites;
+// with ini escautoaccept=1 (test copies, mock Steam has no overlay) an invite is accepted at once.
+static unsigned long long g_invitedBy[8]; static int g_nInvitedBy = 0;   // friends who invited us (friends screen)
+static unsigned long long g_steamLobby = 0, g_partyChan = 0; static bool g_lobbyCreating = false, g_joinViaLobby = false;
+static bool InviteJoinChannel(unsigned long long ch);   // invite.inc
+static void SnPartyChannel(unsigned long long ch) {
+    g_partyChan = ch;
+    if (g_steamLobby) { char c[64]; _snprintf_s(c, _TRUNCATE, "data chan %016llx", ch); SnCmd(c); }
+    else if (!g_lobbyCreating) { g_lobbyCreating = true; SnCmd("create 1 8"); }
+}
+static void SnSteamLobbyEvent(const char* e) {
+    unsigned long long a = 0, b = 0, c = 0; char chan[32] = "";
+    if (sscanf_s(e, "created %llu", &a) == 1) {
+        g_steamLobby = a; g_lobbyCreating = false;
+        if (g_partyChan) { char cmd[64]; _snprintf_s(cmd, _TRUNCATE, "data chan %016llx", g_partyChan); SnCmd(cmd); }
+    } else if (sscanf_s(e, "joinrequest %llu %llu", &a, &b) == 2) {
+        Log("steamnet: Steam asks to join lobby %llu (friend %llu)", a, b);
+        g_joinViaLobby = true; char cmd[64]; _snprintf_s(cmd, _TRUNCATE, "join %llu", a); SnCmd(cmd);
+    } else if (sscanf_s(e, "invite %llu %llu", &a, &b) == 2) {
+        Log("steamnet: %llu invited us to lobby %llu%s", a, b, g_escAutoAccept ? " (accepted: escautoaccept)" : "");
+        if (g_nInvitedBy < 8) g_invitedBy[g_nInvitedBy++] = a;
+        if (g_escAutoAccept) { g_joinViaLobby = true; char cmd[64]; _snprintf_s(cmd, _TRUNCATE, "join %llu", b); SnCmd(cmd); }
+    } else if (sscanf_s(e, "joined %llu %llu %31s", &a, &b, chan, (unsigned)sizeof(chan)) >= 2) {
+        if (b != g_snMe) g_steamLobby = 0;   // we are in someone else's lobby now
+        c = _strtoui64(chan, nullptr, 16);
+        if (g_joinViaLobby && c && b != g_snMe) { g_joinViaLobby = false; Log("steamnet: joining the party %016llx of %llu", c, b); InviteJoinChannel(c); }
+    }
+}
+
 // ---------------------------------------------------------------- incoming
+static void FriendsEvent(const char* e); static void TickFriends();   // invite.inc
 static void SnEvent(const char* e) {
-    Log("steamnet: event %s", e);
+    if (strncmp(e, "friend", 6)) Log("steamnet: event %s", e);
+    FriendsEvent(e);
+    SnSteamLobbyEvent(e);
     if (!strncmp(e, "hello ", 6)) {
         char name[64] = ""; unsigned long long me = 0;
         if (sscanf_s(e + 6, "%llu %63[^\n]", &me, name, (unsigned)sizeof(name)) >= 1) { g_snMe = me; strncpy_s(g_snPersona, name, _TRUNCATE); }
@@ -350,7 +385,7 @@ static void TickSteamTravel(const TickObjs& t) {
         Log("steamnet: hosting the match on port %ld (relay forwards it)", sentPort);
     }
     // member: the host started the match and the game did not connect by itself
-    if (g_travelHost && now - g_travelAt > 1500) {
+    if (g_travelHost && (LONG)(now - g_travelAt) > 1500) {
         unsigned long long host = g_travelHost; g_travelHost = 0;
         if ((LONG)(g_resolvedAt - g_travelAt) >= 0) { Log("steamnet: the game resolved the host itself"); return; }
         int port = 7790 + (int)(GetCurrentProcessId() % 40);
@@ -366,6 +401,7 @@ static void TickSteamChat(const TickObjs& t) {
     SnInstallUid();
     InstallInvitePatches();
     SnFixLocalIds(t);
+    TickFriends();
     SnHookAccountId();
     DWORD now = GetTickCount();
     if (g_sn == INVALID_SOCKET) {
@@ -386,14 +422,17 @@ static void TickSteamChat(const TickObjs& t) {
         SnChan* c = ChanAdd(ch);
         if (c) { c->state = 2; c->n = 0; ChanAddMember(c, g_snMe); }
         Log("steamchat: channel %016llx created", ch);
+        bool gameChannel = false;
+        for (int i = 0; i < g_nchans; i++) if (g_chans[i].id != ch && g_chans[i].owner == g_snMe && g_chans[i].n > 1) gameChannel = true;
+        if (!gameChannel) SnPartyChannel(ch);
         for (int i = 0; i < g_nchans; i++) {   // members of our other channels (the party) learn the new one
             SnChan* o = &g_chans[i]; if (o->id == ch || o->owner != g_snMe) continue;
             for (int k = 0; k < o->n; k++) if (o->mem[k] != g_snMe) SnPkt(o->mem[k], 'N', o->id, &ch, 1, nullptr, 0);
         }
         ChatFireOk(CL_CREATE, c != nullptr, ch);
-    } else if (g_chatPendingCreate && now - g_chatCreateAt > 15000) {
+    } else if (g_chatPendingCreate && (LONG)(now - g_chatCreateAt) > 15000) {
         g_chatPendingCreate = 0; Log("steamchat: no Steam relay - channel not created"); ChatFireOk(CL_CREATE, false, 0);
     }
     for (int i = g_nchans - 1; i >= 0; i--)   // owner did not answer the subscribe
-        if (g_chans[i].state == 1 && now - g_chans[i].asked > 10000) { unsigned long long ch = g_chans[i].id, local = g_chans[i].local; ChanRemove(ch); Log("steamchat: subscribe to %016llx timed out", ch); ChatFireOk(CL_SUBSCRIBE, false, local); }
+        if (g_chans[i].state == 1 && (LONG)(now - g_chans[i].asked) > 10000) { unsigned long long ch = g_chans[i].id, local = g_chans[i].local; ChanRemove(ch); Log("steamchat: subscribe to %016llx timed out", ch); ChatFireOk(CL_SUBSCRIBE, false, local); }
 }

@@ -398,7 +398,9 @@ static void SvcDispatch(int cb, uint8_t* data) {
         if (le->response != 1) { SvcEvent("joinfail %u", le->response); return; }
         g_lobby = le->lobby; g_inLobby = 1;
         SetState("svc: in a lobby");
-        SvcEvent("joined %llu %llu", g_lobby, SteamAPI_ISteamMatchmaking_GetLobbyOwner(g_mm, g_lobby)); SvcMembers();
+        { char chan[32]; CopyData(chan, 32, g_lobby, "chan");   /* the owner's party channel (DLL steamnet.inc) */
+          SvcEvent("joined %llu %llu %s", g_lobby, SteamAPI_ISteamMatchmaking_GetLobbyOwner(g_mm, g_lobby), chan[0] ? chan : "0"); }
+        SvcMembers();
     } else if (cb == 1251) {                                 /* SessionRequest: anybody may talk to us (public matchmaking) */
         NetIdentity* id = (NetIdentity*)data; printf("session request from %llu: accepted\n", SteamAPI_SteamNetworkingIdentity_GetSteamID64(id));
         SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(g_nm, id);

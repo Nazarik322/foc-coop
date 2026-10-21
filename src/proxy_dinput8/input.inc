@@ -58,6 +58,15 @@ static HWND WINAPI h_InGetForegroundWindow() { if (InFocusSpoof()) return g_game
 static HWND WINAPI h_InGetFocus() { if (InFocusSpoof()) return g_gameWnd; return o_GetFocus(); }
 static HWND WINAPI h_InGetActiveWindow() { if (InFocusSpoof()) return g_gameWnd; return o_GetActiveWindow(); }
 
+// GetCursorPos: during a test click (input click) the game sees the cursor at the click point; the menus read the
+// cursor position when a mouse message arrives (a moved-only message put the cursor in the corner, 2026-10-22).
+typedef BOOL(WINAPI* PFN_GetCursorPos)(LPPOINT);
+static PFN_GetCursorPos o_GetCursorPos;
+static volatile LONG g_clickX = 0, g_clickY = 0; static volatile DWORD g_clickUntil = 0;
+static BOOL WINAPI h_InGetCursorPos(LPPOINT p) {
+    if (p && g_gameWnd && (LONG)(g_clickUntil - GetTickCount()) > 0) { POINT q = { g_clickX, g_clickY }; ClientToScreen(g_gameWnd, &q); *p = q; return TRUE; }
+    return o_GetCursorPos(p);
+}
 static void InputStart() {   // called at the end of OverlayStart (after the GetForegroundWindow import was patched there)
     o_GetAsyncKeyState = (PFN_GetKeyS)Resolve("user32.dll", "GetAsyncKeyState");
     o_GetKeyState = (PFN_GetKeyS)Resolve("user32.dll", "GetKeyState");
@@ -69,6 +78,9 @@ static void InputStart() {   // called at the end of OverlayStart (after the Get
     int c = PatchIat((void*)o_GetFocus, (void*)h_InGetFocus);
     int d = PatchIat((void*)o_GetActiveWindow, (void*)h_InGetActiveWindow);
     int e = PatchIat((void*)h_GetForegroundWindow, (void*)h_InGetForegroundWindow);
+    o_GetCursorPos = (PFN_GetCursorPos)Resolve("user32.dll", "GetCursorPos");
+    int f = PatchIat((void*)o_GetCursorPos, (void*)h_InGetCursorPos);
+    Log("input: GetCursorPos import patched=%d", f);
     Log("input: injection %s mode %d; imports patched GetAsyncKeyState=%d GetKeyState=%d GetFocus=%d GetActiveWindow=%d GetForegroundWindow=%d",
         g_inputInject ? "on" : "OFF (inputinject=0)", g_inputMode, a, b, c, d, e);
 }
@@ -98,12 +110,40 @@ static void InputHold(const char* name, int ms) {
     Log("input: hold %s (sc 0x%02x vk 0x%02x) %d ms, mode %d, window %p", name, sc, vk, ms, g_inputMode, g_gameWnd);
 }
 
+// `input click <x> <y>` (2026-10-22, menu tests with the mouse): a left click at x,y given in 960x540 screenshot
+// coordinates, scaled to the window's client area; sent as window messages (move, button down, button up) - the
+// Scaleform menus follow the window's mouse messages. The focus spoof covers the click.
+// The menu cursor follows DirectInput mouse deltas (window messages put it in the corner): the click first pushes the
+// cursor into the top-left corner, then moves it by x,y times the scale (ini clickscale, default 100 = 1 delta per
+// screenshot pixel; calibrate with `input clickmove`), then presses the DirectInput left button.
+static int g_clickScale = 100;
+struct InClick { HWND w; int x, y; bool press; };
+static DWORD WINAPI InClickThread(LPVOID p) {
+    InClick c = *(InClick*)p; delete (InClick*)p;
+    InjectCommand("mouse -8000 -8000 250"); Sleep(500);
+    char m[64]; _snprintf_s(m, _TRUNCATE, "mouse %d %d 250", c.x * g_clickScale / 100, c.y * g_clickScale / 100); InjectCommand(m); Sleep(500);
+    if (c.press) InjectCommand("button 150");
+    return 0;
+}
+static void InjectCommand(const char* args);   // overlay.inc
+static void InputClick(int x, int y, bool press = true) {
+    if (!g_gameWnd) { Log("input: click ignored (no window)"); return; }
+    RECT r; GetClientRect(g_gameWnd, &r);
+    int cx = (int)((long long)x * (r.right - r.left) / 960), cy = (int)((long long)y * (r.bottom - r.top) / 540);
+    DWORD until = GetTickCount() + 1500; if ((LONG)(until - g_inFocusUntil) > 0) g_inFocusUntil = until;
+    g_clickX = cx; g_clickY = cy; g_clickUntil = until;
+    CreateThread(nullptr, 0, InClickThread, new InClick{g_gameWnd, x, y, press}, 0, nullptr);
+    Log("input: click %d,%d -> client %d,%d (%ldx%ld)", x, y, cx, cy, r.right - r.left, r.bottom - r.top);
+}
 static void InputCommand(const char* args) {
     char kind[16] = "", name[24] = ""; int a = 0, b = 0, c = 0;
     if (sscanf_s(args, "%15s", kind, (unsigned)sizeof(kind)) != 1) return;
     if (!strcmp(kind, "hold") && sscanf_s(args, "%*s %23s %d", name, (unsigned)sizeof(name), &a) == 2) InputHold(name, a);
     else if (!strcmp(kind, "tap") && sscanf_s(args, "%*s %23s", name, (unsigned)sizeof(name)) == 1) InputHold(name, 120);
     else if (!strcmp(kind, "mode") && sscanf_s(args, "%*s %d", &a) == 1) { g_inputMode = a; Log("input: mode now %d", a); }
+    else if (!strcmp(kind, "click") && sscanf_s(args, "%*s %d %d", &a, &b) == 2) InputClick(a, b);
+    else if (!strcmp(kind, "clickmove") && sscanf_s(args, "%*s %d %d", &a, &b) == 2) InputClick(a, b, false);
+    else if (!strcmp(kind, "clickscale") && sscanf_s(args, "%*s %d", &a) == 1) { g_clickScale = a; Log("input: click scale %d", a); }
     else if (!strcmp(kind, "mouse")) {
         int n = sscanf_s(args, "%*s %d %d %d", &a, &b, &c);
         if (n < 2) { Log("input: bad command '%s'", args); return; }

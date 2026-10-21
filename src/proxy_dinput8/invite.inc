@@ -24,9 +24,10 @@ static DWORD* __fastcall InvResult(void* self, void*, DWORD* ret, DWORD num) {
     return g_origInvResult ? ((InvResultFn)g_origInvResult)(self, ret, num) : ret;
 }
 static void InstallGameSpy(); static void InstallPeerPatch();
+static void InstallFriendPatches();
 static void InstallInvitePatches() {
     static bool done = false; if (done || !g_escOnline) return; done = true;
-    InstallGameSpy(); InstallPeerPatch();
+    InstallGameSpy(); InstallPeerPatch(); InstallFriendPatches();
     VtPatch list[] = {
         { "Game.AddGameInviteAccepted",   0x152ca18, 42, 0xa07f60, (void*)InvAdd, 0 },
         { "Game.ClearGameInviteAccepted", 0x152ca18, 43, 0x5d7550, (void*)InvClear, 0 },
@@ -244,4 +245,103 @@ static void SessionsCommand() {
         ObjNameStr(pc, pn, sizeof(pn)); if (IsObjFast(pri)) ObjNameStr(pri, rn, sizeof(rn));
         Log("sessions: pc %s local=%d pri %s id %llu", pn, (int)IsLocalPC(pc), rn, IsObjFast(pri) ? *(unsigned long long*)(pri + 0x230) : 0ull);
     }
+}
+
+// `escinvite <steam id>` (test command): a Steam lobby invite to our party (steamnet.inc SnPartyChannel lobby).
+static void EscInviteCommand(const char* args) {
+    unsigned long long id = _strtoui64(args, nullptr, 10);
+    if (!id || !g_steamLobby) { Log("escinvite: need a Steam id and our party lobby (lobby %llu)", g_steamLobby); return; }
+    char c[64]; _snprintf_s(c, _TRUNCATE, "invite %llu", id); SnCmd(c); Log("escinvite: invited %llu to lobby %llu", id, g_steamLobby);
+}
+
+// ---------------------------------------------------------------- Steam friends in the game's ONLINE FRIENDS screen
+// The screen shows UIDataProvider_OnlineFriends.FriendsList (TArray<OnlineFriend>, 0x3c bytes each: UniqueId +0,
+// SessionId +8, UniqueName +0x10, DisplayName +0x1c, PresenceInfo +0x28 (FStrings), FriendState +0x34, bits +0x38:
+// 1 online, 2 playing, 4 playing this game, 8 joinable, 0x40 has invited you). Without Demonware it stays empty: it
+// is filled from the relay's Steam friends ("friends" -> "friend <id> <state> <lobby> <name>" ... "friendsend").
+struct SnFriend { unsigned long long id, lobby; int state; char name[64]; };
+static SnFriend g_friends[64], g_friendsNew[64]; static int g_nFriends = 0, g_nFriendsNew = 0;
+static MirrorProp g_mpFriendsList = {};
+static void FriendsEvent(const char* e) {
+    unsigned long long id = 0, lobby = 0; int st = 0; char name[64] = "";
+    if (sscanf_s(e, "friend %llu %d %llu %63[^\n]", &id, &st, &lobby, name, (unsigned)sizeof(name)) >= 3) {
+        if (g_nFriendsNew < 64) { SnFriend& f = g_friendsNew[g_nFriendsNew++]; f.id = id; f.lobby = lobby; f.state = st; strncpy_s(f.name, name, _TRUNCATE); }
+    } else if (!strcmp(e, "friendsend")) {
+        memcpy(g_friends, g_friendsNew, sizeof(SnFriend) * g_nFriendsNew); g_nFriends = g_nFriendsNew; g_nFriendsNew = 0;
+    }
+}
+struct FriendArr { BYTE* Data; int Num; int Max; };
+static void FillFriendArray(FriendArr* a) {
+    int n = g_nFriends;
+    if (a->Max < n) { void* d = GameRealloc(a->Data, n * 0x3c); if (!d) return; memset((BYTE*)d + a->Max * 0x3c, 0, (n - a->Max) * 0x3c); a->Data = (BYTE*)d; a->Max = n; }
+    for (int k = 0; k < n; k++) {
+        BYTE* e = a->Data + 0x3c * k; const SnFriend& f = g_friends[k];
+        *(unsigned long long*)e = f.id; *(unsigned long long*)(e + 8) = 0;
+        wchar_t w[64]; _snwprintf_s(w, _TRUNCATE, L"%llu", f.id); SetFStr(e + 0x10, w);
+        MultiByteToWideChar(CP_UTF8, 0, f.name, -1, w, 64); SetFStr(e + 0x1c, w);
+        bool inGame = f.lobby != 0, invited = false;
+        for (int j = 0; j < g_nInvitedBy; j++) if (g_invitedBy[j] == f.id) invited = true;
+        SetFStr(e + 0x28, inGame ? L"Fall of Cybertron co-op" : (f.state ? L"Online" : L"Offline"));
+        *(BYTE*)(e + 0x34) = (BYTE)(f.state ? 1 : 0);
+        *(DWORD*)(e + 0x38) = (f.state ? 1 : 0) | (inGame ? (2 | 4 | 8) : 0) | (invited ? 0x40 : 0);
+    }
+    a->Num = n;
+}
+// PlayerInterface slot 51 GetFriendsList(byte, out array<OnlineFriend>, count, start) -> EOnlineEnumerationReadState
+// (2 = done): the menus look friends up here before Join Game (Demonware: empty -> "Join Game Failed").
+typedef BYTE(__thiscall* GetFriendsFn)(void* self, DWORD num, FriendArr* out, DWORD count, DWORD start);
+static void* g_origGetFriends = nullptr;
+static BYTE __fastcall SnGetFriendsList(void* self, void*, DWORD num, FriendArr* out, DWORD count, DWORD start) {
+    if (!g_onlineCtx || !out) return ((GetFriendsFn)g_origGetFriends)(self, num, out, count, start);
+    FillFriendArray(out);
+    return 2;
+}
+static void FillFriendsProvider() {
+    static unsigned cid = 0; if (!cid) cid = ClassIdByName("UIDataProvider_OnlineFriends");
+    if (!cid || !MirrorPropFind("UIDataProvider_OnlineFriends", "FriendsList", g_mpFriendsList)) return;
+    TArr* go = GObj();
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i];
+        if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        char nm[80]; if (!ObjNameStr(o, nm, sizeof(nm)) || !strncmp(nm, "Default__", 9)) continue;
+        FillFriendArray((FriendArr*)(o + g_mpFriendsList.off));
+    }
+}
+static void TickFriends() {
+    static DWORD next = 0; DWORD now = GetTickCount();
+    if (!g_onlineCtx || !g_snPort || (LONG)(now - next) < 0) return;
+    next = now + 15000;
+    SnCmd("friends");
+    FillFriendsProvider();
+}
+
+// PlayerInterface slot 70 JoinFriendGame(byte, UniqueNetId* friend) -> bool (Demonware 0xa36d80 behind a this-adjust
+// thunk 0x515e00): the friend's Steam lobby (friends list "lobby") is joined through the relay; the lobby data names
+// the party channel and the join continues like an accepted invite (steamnet.inc SnSteamLobbyEvent).
+typedef DWORD(__thiscall* JoinFriendFn)(void* self, DWORD num, const unsigned long long* id);
+static void* g_origJoinFriend = nullptr;
+static DWORD __fastcall SnJoinFriendGame(void* self, void*, DWORD num, const unsigned long long* id) {
+    if (!g_onlineCtx || !id) return ((JoinFriendFn)g_origJoinFriend)(self, num, id);
+    for (int k = 0; k < g_nFriends; k++) if (g_friends[k].id == *id) {
+        unsigned long long lobby = g_friends[k].lobby;
+        if (lobby <= 1) { Log("invite: friend %llu is not in a party lobby", *id); return 0; }
+        g_joinViaLobby = true; char c[64]; _snprintf_s(c, _TRUNCATE, "join %llu", lobby); SnCmd(c);
+        Log("invite: joining friend %llu through Steam lobby %llu", *id, lobby);
+        return 1;
+    }
+    Log("invite: JoinFriendGame: %llu is not in the friends list", *id);
+    return 0;
+}
+static void InstallFriendPatches() {
+    {
+        void** t = (void**)((BYTE*)GetModuleHandleW(nullptr) + (0x168ec38 - 0x400000));
+        if (ExeVa(t[70]) == 0x515e00) {
+            DWORD o = 0; VirtualProtect(t + 70, 4, PAGE_READWRITE, &o); g_origJoinFriend = t[70]; t[70] = (void*)SnJoinFriendGame; VirtualProtect(t + 70, 4, o, &o);
+            Log("invite: Player.JoinFriendGame patched (Steam lobby)");
+        }
+    }
+    void** t = (void**)((BYTE*)GetModuleHandleW(nullptr) + (0x168ec38 - 0x400000));
+    if (ExeVa(t[51]) != 0x9ab810) { Log("invite: GetFriendsList slot holds %lx - not patched", ExeVa(t[51])); return; }
+    DWORD old = 0; VirtualProtect(t + 51, 4, PAGE_READWRITE, &old); g_origGetFriends = t[51]; t[51] = (void*)SnGetFriendsList; VirtualProtect(t + 51, 4, old, &old);
+    Log("invite: Player.GetFriendsList patched (Steam friends)");
 }

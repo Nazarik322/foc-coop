@@ -89,7 +89,7 @@ static bool GotoStateNative(BYTE* obj, DWORD stateName) {
     __try { fn(obj, stateName, 0, 0, 0); return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 static void InstallOnlinePatches();
-static void TickSteamChat(const TickObjs& t); static void TickLanSessions(const TickObjs& t); static void EscJoinCommand(const char* args); static void SessionsCommand();
+static void TickSteamChat(const TickObjs& t); static void TickLanSessions(const TickObjs& t); static void EscJoinCommand(const char* args); static void SessionsCommand(); static void EscInviteCommand(const char* args);
 static void TickEscLogin(const TickObjs& t) {
     InstallOnlinePatches();
     TickSteamChat(t);
@@ -99,8 +99,11 @@ static void TickEscLogin(const TickObjs& t) {
         BYTE* game = t.game[g]; char cn[80] = "";
         if (!IsObjFast(game) || !ClassNameOf(game, cn, sizeof(cn))) continue;
         char st[80]; bool got = CurrentStateName(game, st, sizeof(st));
-        static char lastSeen[160] = ""; char seen[160]; _snprintf_s(seen, _TRUNCATE, "%s %s", cn, got ? st : "(no state)");
-        if (strcmp(seen, lastSeen)) { strcpy_s(lastSeen, seen); Log("esclogin: game %s", seen); }
+        // state changes per class (several GameInfo-like objects are listed)
+        static char seenCls[8][64], seenSt[8][64]; static int nSeen = 0;
+        int k = 0; while (k < nSeen && strcmp(seenCls[k], cn)) k++;
+        if (k == nSeen && nSeen < 8) { strcpy_s(seenCls[nSeen], cn); seenSt[nSeen][0] = 1; seenSt[nSeen][1] = 0; nSeen++; }
+        if (k < nSeen && strcmp(seenSt[k], got ? st : "(no state)")) { strcpy_s(seenSt[k], got ? st : "(no state)"); Log("esclogin: game %s %s", cn, seenSt[k]); }
         if (strcmp(cn, "TnFrontEndGame") || !got) continue;
         bool login = false;
         for (const char* s : kLoginStates) if (!strcmp(st, s)) login = true;
@@ -206,7 +209,7 @@ static void ApplyVtPatches(const VtPatch* list, size_t n) {
 // created locally; Steam does the rest (SteamChat, relay). On a story map (L01..L13) the flag is cleared again:
 // signed in + LAN sessions left the guest without a pawn in chapter 2 (must-pass L02a/L02b FAIL 2026-10-21, PASS with
 // esclan=0 or esconline=0; excluding only TnOnlineGameSettingsCPSolo did not help). Checked once a second.
-static MirrorProp g_mpLan = {};
+static MirrorProp g_mpLan = {}, g_mpBestHost = {};
 static void TickLanSessions(const TickObjs& t) {
     char map[96]; MapName(t, map, sizeof(map));
     bool story = (map[0] == 'L' || map[0] == 'l') && map[1] >= '0' && map[1] <= '9';
@@ -215,6 +218,7 @@ static void TickLanSessions(const TickObjs& t) {
     static DWORD next = 0; DWORD now = GetTickCount();
     if ((LONG)(now - next) < 0) return; next = now + 1000;
     if (!MirrorPropFind("OnlineGameSettings", "bIsLanMatch", g_mpLan) || !g_mpLan.mask) return;
+    MirrorPropFind("OnlineGameSettings", "AllowLobbyBestHostDeterminationHostMigration", g_mpBestHost);
     static signed char isSettings[8192];   // per class id: 1 = an OnlineGameSettings class, -1 = not
     TArr* go = GObj(); int changed = 0;
     for (int i = 0; i < go->Num; i++) {
@@ -222,6 +226,9 @@ static void TickLanSessions(const TickObjs& t) {
         unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff;
         if (!isSettings[cid]) { char c[80] = ""; ClassNameOf(o, c, sizeof(c)); isSettings[cid] = c[0] ? (strstr(c, "OnlineGameSettings") ? 1 : -1) : 0; }
         if (isSettings[cid] != 1) continue;
+        // no "best host" migration: the host picked a member as the better host, stopped its heartbeats while the
+        // migration was pending and every member lost the host at the countdown (3+ players, 2026-10-22)
+        if (!story && g_mpBestHost.off > 0 && g_mpBestHost.mask) { DWORD* bw = (DWORD*)(o + g_mpBestHost.off); if (*bw & g_mpBestHost.mask) *bw &= ~g_mpBestHost.mask; }
         DWORD* w = (DWORD*)(o + g_mpLan.off);
         bool has = (*w & g_mpLan.mask) != 0;
         if (has == !story) continue;

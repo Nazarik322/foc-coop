@@ -359,6 +359,7 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("vttrace ", 0) == 0) { VtTraceCommand(cmd.c_str() + 8); return; }
     if (cmd.rfind("escjoin ", 0) == 0) { EscJoinCommand(cmd.c_str() + 8); return; }
     if (cmd == "sessions") { SessionsCommand(); return; }
+    if (cmd.rfind("escinvite ", 0) == 0) { EscInviteCommand(cmd.c_str() + 10); return; }
     if (cmd.rfind("lobby ", 0) == 0) { LobbyCommand(cmd.c_str() + 6); return; }
     if (cmd == "pcprobe") { PcProbeCommand(); return; }
     if (cmd == "gfxdiag") { InterlockedExchange(&g_gfxDiagReq, 1); return; }
@@ -1171,10 +1172,11 @@ static volatile DWORD g_injKeyUntil[256];
 static volatile LONG g_injKeyEdge[256];      // 1 = key-down event pending, 2 = key-up event pending (buffered reads)
 static volatile LONG g_injMouseDx = 0, g_injMouseDy = 0;      // motion still to deliver
 static volatile DWORD g_injMouseUntil = 0, g_injMouseLast = 0;
+static volatile DWORD g_injBtnUntil = 0; static volatile LONG g_injBtnEdge = 0;   // left button (menu clicks): 1 down pending, 2 up pending
 static bool InjectActive() {
     DWORD now = GetTickCount();
     for (int k = 0; k < 256; k++) if ((LONG)(g_injKeyUntil[k] - now) > 0 || g_injKeyEdge[k]) return true;
-    return g_injMouseDx || g_injMouseDy;
+    return g_injMouseDx || g_injMouseDy || g_injBtnEdge || (LONG)(g_injBtnUntil - now) > 0;
 }
 static void InjectMouseStep(LONG* dx, LONG* dy) {   // the part of the remaining motion that is due by now
     DWORD now = GetTickCount();
@@ -1196,8 +1198,9 @@ static HRESULT WINAPI h_GetDeviceState(void* self, DWORD cb, void* data) {
         if (cb == 256) {
             DWORD now = GetTickCount();
             for (int k = 0; k < 256; k++) if ((LONG)(g_injKeyUntil[k] - now) > 0) ((BYTE*)data)[k] = 0x80;
-        } else if (cb == 16 || cb == 20) {   // DIMOUSESTATE / DIMOUSESTATE2: lX, lY first
+        } else if (cb == 16 || cb == 20) {   // DIMOUSESTATE / DIMOUSESTATE2: lX, lY first, rgbButtons at +12
             LONG dx, dy; InjectMouseStep(&dx, &dy); ((LONG*)data)[0] += dx; ((LONG*)data)[1] += dy;
+            if ((LONG)(g_injBtnUntil - GetTickCount()) > 0) ((BYTE*)data)[12] = 0x80;
         }
     }
     return r;
@@ -1222,6 +1225,8 @@ static HRESULT WINAPI h_GetDeviceData(void* self, DWORD cb, void* data, DWORD* i
             LONG dx, dy; InjectMouseStep(&dx, &dy);
             if (dx) add(0 /*DIMOFS_X*/, (DWORD)dx);
             if (dy) add(4 /*DIMOFS_Y*/, (DWORD)dy);
+            if (g_injBtnEdge == 1) { add(12 /*DIMOFS_BUTTON0*/, 0x80); g_injBtnEdge = 2; }
+            else if (g_injBtnEdge == 2 && (LONG)(g_injBtnUntil - GetTickCount()) <= 0) { add(12, 0); g_injBtnEdge = 0; }
         }
         *inout = n;
     }
@@ -1244,6 +1249,9 @@ static void InjectCommand(const char* args) {
             if (k->w) PostMessageW(k->w, WM_KEYUP, k->vk, 1 | (k->sc << 16) | (1u << 30) | (1u << 31));
             delete k; return 0; }, ku, 0, nullptr);
         Log("input: key 0x%02x (vk 0x%02x) held for %d ms", a, vk, b);
+    } else if (!strcmp(kind, "button") && sscanf_s(args, "%*s %d", &b) == 1) {   // `button <ms>`: left mouse button
+        g_injBtnUntil = GetTickCount() + (DWORD)b; g_injBtnEdge = 1;
+        Log("input: left button %d ms", b);
     } else if (!strcmp(kind, "mouse") && sscanf_s(args, "%*s %d %d %d", &b, &c, (int*)&a) == 3) {
         g_injMouseLast = GetTickCount(); g_injMouseUntil = g_injMouseLast + a; g_injMouseDx = b; g_injMouseDy = c;
         Log("input: mouse %d,%d over %u ms", b, c, a);
