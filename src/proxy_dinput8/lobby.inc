@@ -78,6 +78,7 @@ static BOOL __fastcall h_EngineExec(void* self, void* edx, const wchar_t* cmd, v
             _snwprintf_s(buf, _TRUNCATE, L"%s?listen?MaxPlayers=%d", cmd, g_lobbyMax);
             g_hostBoundPort = 0; g_captureBind = 1; g_hosting = 1;
             Log("lobby: mission start from the game's menu -> %ls", buf);
+            { char nb[600]; WideCharToMultiByte(CP_ACP, 0, buf, -1, nb, sizeof(nb), nullptr, nullptr); NoteTravel(nb); }
             return CallExecSafe((void*)g_execOrig, self, buf, ar);
         }
     }
@@ -121,10 +122,16 @@ static void TickLobby(const TickObjs& t) {
     bool story = map[0] == 'L' && map[1] >= '0' && map[1] <= '9';
     DWORD now = GetTickCount();
     if (g_lobbyRole == 1) {
-        static char inMap[96] = ""; static DWORD since = 0; static int stage = 0; static DWORD stageAt = 0; static bool reopened = false;
-        if (strcmp(map, inMap)) { strncpy_s(inMap, map, _TRUNCATE); since = now; stage = 0; reopened = false; }
-        if (!story || t.ngame < 1) return;
-        if (!g_hostBoundPort && !reopened && now - since > 6000) {   // the menu loaded the map without ?listen: reopen it
+        // keyed on the GameInfo object (a new one per load), not on the map name: the map name was not reliable after a
+        // travel inside the running game (B29). Solo game (the menu's CHAPTER / CONTINUE) -> reopen as a session; the
+        // session game with its listen port -> "port", then "go".
+        static BYTE* game = nullptr; static DWORD since = 0; static int stage = 0; static DWORD stageAt = 0; static bool reopened = false;
+        BYTE* g = t.ngame ? t.game[0] : nullptr;
+        if (g != game) { game = g; since = now; stage = 0; reopened = false; }
+        if (!g || !story) return;
+        char gcls[80] = ""; ClassNameOf(g, gcls, sizeof(gcls));
+        bool solo = strstr(gcls, "Solo") != nullptr;
+        if (solo && !reopened && now - since > 3000) {   // the menu loaded the map as single player: reopen it as a session
             reopened = true;
             char opts[300]; LobbyWorldOptions(t, opts, sizeof(opts));
             char cn[80] = ""; if (t.ngame) ClassNameOf(t.game[0], cn, sizeof(cn));
@@ -134,7 +141,7 @@ static void TickLobby(const TickObjs& t) {
             Log("lobby: %s is not listening, reopening it as a session: %s", map, cmd);
             QueueCommand(cmd); return;
         }
-        if (!g_hostBoundPort) return;
+        if (solo || !g_hostBoundPort) return;
         if (stage == 0) { char c[32]; _snprintf_s(c, _TRUNCATE, "port %ld", g_hostBoundPort); RelayCommand(c); stage = 1; stageAt = now; Log("lobby: relay port %ld", g_hostBoundPort); }
         else if (stage == 1 && now - stageAt > 1600) { char c[128]; _snprintf_s(c, _TRUNCATE, "go %s", map); RelayCommand(c); stage = 2; strcpy_s(g_lobbyStatus, "mission started: friends are joining"); Log("lobby: go %s", map); }
     } else if (g_lobbyRole == 2) {
@@ -198,4 +205,21 @@ static void TickWindowSlot() {
     RECT r; if (!GetWindowRect(g_gameWnd, &r)) return;
     int x = (slot % 2) * 980, y = (slot / 2) * 590;
     if (r.left != x || r.top != y) SetWindowPos(g_gameWnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// `pcprobe` (test command): the local controller's header words +0x00..+0x3c as object pointers and as GObjects
+// indexes (also the low/high 16 bits and >>13), with the names they lead to, twice up the chain - to find the Outer.
+static void PcProbeName(DWORD w, char* out, size_t n) {
+    TArr* go = GObj(); out[0] = 0; char a[64];
+    if (IsObjFast((BYTE*)(UINT_PTR)w) && ObjNameStr((BYTE*)(UINT_PTR)w, a, sizeof(a))) { _snprintf_s(out, n, _TRUNCATE, "ptr:%s", a); return; }
+    DWORD cand[4] = {w, w & 0xffff, w >> 16, w >> 13};
+    for (int c = 0; c < 4; c++) if (cand[c] > 0 && (int)cand[c] < go->Num && go->Data[cand[c]] && ObjNameStr((BYTE*)go->Data[cand[c]], a, sizeof(a))) { _snprintf_s(out, n, _TRUNCATE, "idx%d:%s", c, a); return; }
+}
+static void PcProbeCommand() {
+    BYTE* pc = nullptr; for (int a = 0; a < g_to.npc; a++) if (IsObjFast(g_to.pc[a]) && IsLocalPC(g_to.pc[a])) pc = g_to.pc[a];
+    if (!pc) { Log("pcprobe: no local controller"); return; }
+    for (int off = 0; off <= 0x3c; off += 4) {
+        DWORD w = *(DWORD*)(pc + off); char nm[96]; PcProbeName(w, nm, sizeof(nm));
+        Log("pcprobe: +%02x %08lx %s", off, w, nm);
+    }
 }

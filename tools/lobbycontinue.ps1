@@ -12,11 +12,17 @@ Enter-FocSlot -Owner (Get-FocSlotOwner "")
 try {
   Stop-Foc; Stop-Relay
   Remove-Item E:\FoC-coop\A\Binaries\foc_relay\relay.cmd, E:\FoC-coop\B\Binaries\foc_relay\relay.cmd -ErrorAction SilentlyContinue
+  Remove-Item E:\FoC-coop\A\Binaries\foc_relay\relay.status, E:\FoC-coop\B\Binaries\foc_relay\relay.status -ErrorAction SilentlyContinue   # an old status gave a stale lobby id
   $pa = Start-Foc "A" "" 960 540; [void](Wait-FocWindow $pa 90)
   $pb = Start-Foc "B" "" 960 540; [void](Wait-FocWindow $pb 90)
-  Start-Sleep 30
-  Send-Cmd A "lobby create 4"; Start-Sleep 7
-  $id = ((Get-Content E:\FoC-coop\A\Binaries\foc_relay\relay.status) -match '^lobby=') -replace 'lobby=', ''
+  # wait until both games sit in the main menu (a fixed 30 s was too short once the window took 59 s to appear)
+  foreach ($c in "A", "B") { if (-not (Wait-FocState $c { param($s) $s.map -like "UI_FrontEnd*" } 240)) { Say "RESULT: FAIL $c never reached the main menu"; return } }
+  # and until both have their D3D window (it came ~60 s later while the remote desktop was not shown)
+  foreach ($c in "A", "B") { $ok = $false; for ($i = 0; $i -lt 240 -and -not $ok; $i++) { Start-Sleep 1; $ok = [bool](Select-String -Path "E:\FoC-coop\$c\Binaries\foc_coop.log" -Pattern "overlay initialised" -Quiet) }; if (-not $ok) { Say "RESULT: SKIP $c has no game window after 240 s (remote desktop not shown?)"; return } }
+  Start-Sleep 8
+  Send-Cmd A "lobby create 4"
+  $id = $null; for ($i = 0; $i -lt 30 -and -not $id; $i++) { Start-Sleep 1; $st = Get-Content "E:\FoC-coop\A\Binaries\foc_relay\relay.status" -ErrorAction SilentlyContinue; if (($st -match "^state=hosting")) { $id = ($st -match "^lobby=") -replace "lobby=", "" } }
+  if (-not $id) { Say "RESULT: FAIL host lobby not created"; return }
   Send-Cmd B "lobby join $id"; Start-Sleep 7
   Say "lobby $id, guest relay: $(((Get-Content E:\FoC-coop\B\Binaries\foc_relay\relay.status) -match '^state='))"
   Send-Cmd A "input tap UP"; Start-Sleep 1; Send-Cmd A "input tap ENTER"

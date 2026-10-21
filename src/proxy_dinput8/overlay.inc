@@ -19,6 +19,7 @@ static void* g_outDev[2] = {g_outVtbl, nullptr};
 static volatile LONG g_gfxDiagReq = 0;   // `gfxdiag` command -> trace.inc GfxDiagWrite on the next tick
 static void KImpulseCommand(const char* args);   // kmirror.inc
 static void LobbyCommand(const char* args);      // lobby.inc
+static void PcProbeCommand();                     // lobby.inc
 static PFN_Exec g_exec = nullptr;
 static void* g_execSelf = nullptr;
 // The engine routine is called with every register and the stack pointer saved around it (its exact convention is unverified).
@@ -354,12 +355,14 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("kimpulse ", 0) == 0) { KImpulseCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("fnprobe ", 0) == 0) { FnProbeCommand(cmd.c_str() + 8); return; }
     if (cmd.rfind("lobby ", 0) == 0) { LobbyCommand(cmd.c_str() + 6); return; }
+    if (cmd == "pcprobe") { PcProbeCommand(); return; }
     if (cmd == "gfxdiag") { InterlockedExchange(&g_gfxDiagReq, 1); return; }
     if (cmd.rfind("tp ", 0) == 0) { MovePawnCommand(cmd.c_str() + 3, false); return; }
     if (!g_exec && !FindExec()) { Log("menu: cannot run '%s': %s", cmd.c_str(), g_execStatus); return; }
     wchar_t w[512]; MultiByteToWideChar(CP_ACP, 0, cmd.c_str(), -1, w, 512);
     Log("menu: exec '%s'", cmd.c_str());
     if (cmd.find("?listen") != std::string::npos) { g_hostBoundPort = 0; g_captureBind = 1; }   // in-process hosting: note the listen port
+    NoteTravel(cmd.c_str());
     g_spoofUntil = GetTickCount() + 30000;
     strncpy_s(g_lastCmd, cmd.c_str(), _TRUNCATE);
     BOOL r = FALSE;
@@ -402,7 +405,9 @@ static DWORD WINAPI CmdThread(LPVOID) {
         WaitForSingleObject(g_cmdEvent, 500);
         std::string c;
         EnterCriticalSection(&g_cmdCs); c.swap(g_cmdQueue); LeaveCriticalSection(&g_cmdCs);
-        if (c.empty()) {   // command file for scripted tests
+        // command file for scripted tests: left in place until the game window exists (it came ~60 s after the main
+        // menu logic once, and commands sent in between were dropped, 2026-10-21)
+        if (c.empty() && g_gameWnd && IsWindow(g_gameWnd)) {
             FILE* f = _wfopen(cmdFile, L"rb");
             if (f) { char b[512] = {0}; size_t n = fread(b, 1, sizeof(b) - 1, f); fclose(f); DeleteFileW(cmdFile); while (n && (b[n - 1] == '\r' || b[n - 1] == '\n' || b[n - 1] == ' ')) b[--n] = 0; c = b; }
         }

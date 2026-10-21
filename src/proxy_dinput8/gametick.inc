@@ -353,6 +353,29 @@ static void FindGWorld(const TickObjs& t) {
 // The world objects were not reliable after a travel inside the running game (old worlds and sublevel worlds with the
 // old URL linger), the controller always lives in the current persistent level. The Outer offset is found once: the
 // header word of a controller that points at an object named "PersistentLevel".
+// Travels we start ourselves (F10 host, lobby reopen, the hooked console `open` of the game's menu) name the map: it
+// becomes the current map as soon as a new GameInfo exists, and stays it while that GameInfo lives. After a travel
+// inside the running game the world objects did not tell the map reliably (B29, 2026-10-20).
+static char g_pendingMap[96] = "", g_knownMap[96] = ""; static BYTE* g_pendingOldGame = nullptr; static BYTE* g_knownGame = nullptr; static DWORD g_pendingAt = 0;
+static void NoteTravel(const char* cmd) {   // "open <map>?..." / "start <map>..."
+    const char* p = cmd; while (*p == ' ') p++;
+    if (_strnicmp(p, "open ", 5) && _strnicmp(p, "start ", 6)) return;
+    p = strchr(p, ' '); while (p && *p == ' ') p++; if (!p) return;
+    char m[96]; size_t k = 0; while (p[k] && p[k] != '?' && p[k] != ' ' && k < sizeof(m) - 1) { m[k] = p[k]; k++; } m[k] = 0;
+    if (!m[0] || strchr(m, ':') || strchr(m, '.')) return;   // an address (join), not a map
+    strncpy_s(g_pendingMap, m, _TRUNCATE); g_pendingOldGame = g_to.ngame ? g_to.game[0] : nullptr; g_pendingAt = GetTickCount();
+    Log("tick: travel to %s noted", m);
+}
+static bool KnownMapName(const TickObjs& t, char* out, size_t n) {
+    BYTE* game = t.ngame ? t.game[0] : nullptr;
+    if (g_pendingMap[0] && game && game != g_pendingOldGame) {
+        strncpy_s(g_knownMap, g_pendingMap, _TRUNCATE); g_knownGame = game; g_pendingMap[0] = 0;
+        char cn[64] = ""; ClassNameOf(game, cn, sizeof(cn)); Log("tick: current map %s (game %s)", g_knownMap, cn);
+    }
+    if (g_pendingMap[0] && GetTickCount() - g_pendingAt > 120000) g_pendingMap[0] = 0;   // the travel failed
+    if (g_knownGame && game == g_knownGame && IsObjFast(game)) { strncpy_s(out, n, g_knownMap, _TRUNCATE); return true; }
+    return false;
+}
 static int g_outerOff = -1;
 static bool PcMapName(const TickObjs& t, char* out, size_t n) {
     BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && IsLocalPC(t.pc[a])) pc = t.pc[a];
@@ -371,6 +394,7 @@ static bool PcMapName(const TickObjs& t, char* out, size_t n) {
 }
 static void MapName(const TickObjs& t, char* out, size_t n) {
     out[0] = 0;
+    if (KnownMapName(t, out, n)) return;
     if (PcMapName(t, out, n)) return;
     // newest world wins: a UWorld that appears with a URL is the one just travelled to (the old one lingers until GC);
     // GWorld itself was not found in the exe's data (FindGWorld logged nothing), so it stays a fallback

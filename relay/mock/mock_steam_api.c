@@ -152,6 +152,9 @@ __declspec(dllexport) uint64_t API SteamAPI_ISteamMatchmaking_CreateLobby(void* 
 }
 __declspec(dllexport) uint64_t API SteamAPI_ISteamMatchmaking_JoinLobby(void* s, uint64_t lobby) {
     (void)s; char p[MAX_PATH]; LobbyPath(lobby, p); char lines[64][160]; int n = ReadLines(p, lines, 63);
+    /* a lobby whose owner process is gone cannot be joined (real Steam deletes it; a test joined such a lobby) */
+    for (int i = 0; i < n; i++) if (!strncmp(lines[i], "pid=", 4)) { DWORD pid = (DWORD)strtoul(lines[i] + 4, NULL, 10); HANDLE ph = OpenProcess(SYNCHRONIZE, FALSE, pid);
+        DWORD w = ph ? WaitForSingleObject(ph, 0) : WAIT_OBJECT_0; if (ph) CloseHandle(ph); if (w != WAIT_TIMEOUT) { DeleteFileA(p); n = -1; } break; }
     LobbyEnter_t r; memset(&r, 0, sizeof(r)); r.lobby = lobby; r.response = n < 0 ? 2 : 1;
     if (n >= 0) { sprintf(lines[n++], "member=%llu", g_me); WriteLines(p, lines, n); }
     return PushResult(504, &r, sizeof(r));
