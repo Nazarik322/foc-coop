@@ -279,7 +279,14 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   gate, ecx = 0x10, object null); stack has TnGrabManager, TnRobotAnimator, both TnPlayerPawns.
   Dump `sweep060\rerun\l08b_1\..._crash1.dmp`.
 
-### B29. Lobby: the guest does not follow when the host uses the game's own CONTINUE - open (2026-10-20)
+### B29. Lobby: the guest does not follow when the host uses the game's own CONTINUE - fixed 2026-10-21 (aa61485)
+- Fix: the lobby host watches the GameInfo object: a solo game (TnCampaignGameSolo, the menu's CONTINUE / CHAPTER) is
+  reopened as a session with the same URL options (?LoadCheckpoint kept); a session game with its listen port sends
+  "port" and "go". MapName knows the map of travels we start (NoteTravel) while that GameInfo lives.
+- Test: tools/lobbycontinue.ps1 (key presses Up+Enter in the main menu): PASS 2026-10-21 - the guest followed within
+  30 s (Steam mock relay, 2 players), Esc on the host keeps the game. The CHAPTER path (-Keys "ENTER,ENTER,ENTER":
+  CAMPAIGN > chapter I > overwrite warning Continue) is not run yet: the games stopped drawing frames (remote desktop
+  not shown) - rerun it.
 - CONTINUE loads TnCampaignGameSolo with ?LoadCheckpoint, not through the console Exec, so the lobby reopens the map
   as a session; after that MapName returns the old "UI_FrontEnd_m" (many UWorld objects linger) and the relay never
   gets "port"/"go". Details and next steps: PLAN.md "Resume point 2026-10-20 late night". Test: tools/lobbycontinue.ps1.
