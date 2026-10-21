@@ -26,7 +26,7 @@ try {
   if (-not $id) { Say "RESULT: FAIL host lobby not created"; return }
   Send-Cmd B "lobby join $id"; Start-Sleep 7
   Say "lobby $id, guest relay: $(((Get-Content E:\FoC-coop\B\Binaries\foc_relay\relay.status) -match '^state='))"
-  foreach ($k in $Keys -split ",") { Send-Cmd A "input tap $k"; Start-Sleep 3 }
+  foreach ($k in $Keys -split ",") { Send-Cmd A "input tap $k"; Start-Sleep 5 }   # the overwrite warning needs time to open
   Say "host: menu keys $Keys pressed"
   $t0 = Get-Date; $ok = $false
   while (((Get-Date) - $t0).TotalSeconds -lt 200) {

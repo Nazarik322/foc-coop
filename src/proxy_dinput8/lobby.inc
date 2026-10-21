@@ -145,7 +145,10 @@ static void TickLobby(const TickObjs& t) {
         if (stage == 0) { char c[32]; _snprintf_s(c, _TRUNCATE, "port %ld", g_hostBoundPort); RelayCommand(c); stage = 1; stageAt = now; Log("lobby: relay port %ld", g_hostBoundPort); }
         else if (stage == 1 && now - stageAt > 1600) { char c[128]; _snprintf_s(c, _TRUNCATE, "go %s", map); RelayCommand(c); stage = 2; strcpy_s(g_lobbyStatus, "mission started: friends are joining"); Log("lobby: go %s", map); }
     } else if (g_lobbyRole == 2) {
-        if (story || !g_relayGo[0] || !strcmp(g_relayGo, g_lobbyGoDone)) return;
+        // a guest that started a mission itself (single player, it owns a GameInfo) also goes to the host; a guest that
+        // is already a client of the host stays (2026-10-21: the guest window got clicks during a test and loaded L01 solo)
+        bool own = story && t.ngame > 0;
+        if ((story && !own) || !g_relayGo[0] || !strcmp(g_relayGo, g_lobbyGoDone)) return;
         if (strncmp(g_relayState, "joined", 6) && strncmp(g_relayState, "connected", 9)) return;
         strncpy_s(g_lobbyGoDone, g_relayGo, _TRUNCATE);
         char name[64]; strncpy_s(name, g_relayPersona[0] ? g_relayPersona : g_playerName, _TRUNCATE);

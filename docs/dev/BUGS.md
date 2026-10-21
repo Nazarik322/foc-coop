@@ -285,8 +285,8 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   "port" and "go". MapName knows the map of travels we start (NoteTravel) while that GameInfo lives.
 - Test: tools/lobbycontinue.ps1 (key presses Up+Enter in the main menu): PASS 2026-10-21 - the guest followed within
   30 s (Steam mock relay, 2 players), Esc on the host keeps the game. The CHAPTER path (-Keys "ENTER,ENTER,ENTER":
-  CAMPAIGN > chapter I > overwrite warning Continue) is not run yet: the games stopped drawing frames (remote desktop
-  not shown) - rerun it.
+  CAMPAIGN > chapter I > overwrite warning Continue): PASS 2026-10-21 - guest in the mission 20 s after the warning
+  was confirmed. A lobby guest that starts a mission itself (clicks in its window) also follows the host on "go".
 - CONTINUE loads TnCampaignGameSolo with ?LoadCheckpoint, not through the console Exec, so the lobby reopens the map
   as a session; after that MapName returns the old "UI_FrontEnd_m" (many UWorld objects linger) and the relay never
   gets "port"/"go". Details and next steps: PLAN.md "Resume point 2026-10-20 late night". Test: tools/lobbycontinue.ps1.

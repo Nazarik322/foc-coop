@@ -36,6 +36,8 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | Stage 6 unfocused input | `inputinject` (input.inc) | `tools/inputtest.ps1` (L06 -Keep, focus on another window, `input hold W 2000` on guest then host: own pawn >= 150 uu, other <= 40 uu) | `-Twin` (inputinject=0): FAIL (0 uu) | 2026-10-20 input lane: PASS [B=2904/A=0 A=2855/B=0], twin FAIL |
 | B16 chapter title on the guest | `chaptersync` (story_title.inc) | `tools/titletest.ps1` (L06): white pixels of the title text x 785-880, y 470-498 (1920 wide) >= 100 on host AND guest | `-Twin` (chaptersync=0): FAIL | 2026-10-20 lane: PASS 296/303, twin FAIL |
 | B4 host/join without a restart | `fakelogin` (HasCheckedForLogin set) | `tools/b4test.ps1` (L01): host and guest reach the map from a focused main menu and stay 40 s | `-Twin` (fakelogin=0): FAIL | 2026-10-20 PASS, twin FAIL |
+| Lobby: guest follows the host (no restart) | lobby.inc (`lobby create/join`, Exec hook) + relay port/go | `tools/lobbytest.ps1` (menustart through the hooked Exec) | - | 2026-10-20 PASS |
+| B29 lobby: the game's own CONTINUE / CHAPTER | lobby.inc solo -> session reopen, NoteTravel | `tools/lobbycontinue.ps1` (keys Up+Enter) and `-Keys "ENTER,ENTER,ENTER"` (chapter I); do not touch the windows during the run | - | 2026-10-21 PASS both (chapter: warning confirmed by hand once) |
 | Slot lease (team mode) | `Enter-FocSlot` etc. in dev.ps1 | `tools/slottest.ps1` (no game): 5/5 PASS | - | 2026-10-20: 5/5 PASS (lead rerun) |
 
 ## Known flaky
