@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>
 
 typedef int bool8;
 #pragma pack(push, 8)
@@ -88,6 +89,9 @@ F(void, SteamAPI_SteamNetworkingMessage_t_Release, (void*))
 F(void*, SteamAPI_SteamNetworkingUtils_SteamAPI_v004, (void))
 F(bool8, SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32, (void*, int, int32_t))
 F(void, SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess, (void*))
+/* optional (svc mode; missing in old builds of the mock) */
+F(bool8, SteamAPI_ISteamMatchmaking_InviteUserToLobby, (void*, uint64_t, uint64_t))
+F(int, SteamAPI_ISteamFriends_GetFriendPersonaState, (void*, uint64_t))
 #undef F
 
 static int LoadApi(void) {
@@ -118,11 +122,14 @@ static int LoadApi(void) {
     L(SteamAPI_SteamNetworkingUtils_SteamAPI_v004) L(SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32)
     L(SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess)
 #undef L
+#define O(name) name = (t_##name)GetProcAddress(g_api, #name);
+    O(SteamAPI_ISteamMatchmaking_InviteUserToLobby) O(SteamAPI_ISteamFriends_GetFriendPersonaState)
+#undef O
     return ok;
 }
 
 /* ------------------------------------------------------------------ state */
-enum { CH_GAME = 0, CH_CTRL = 1 };
+enum { CH_GAME = 0, CH_CTRL = 1, CH_SVC = 2 };
 enum { SEND_UNRELIABLE_NONAGLE = 1, SEND_RELIABLE_NONAGLE = 9 };
 #define MAXPEERS 8
 typedef struct { uint64_t id; SOCKET s; DWORD seen; unsigned long long tx, rx; } Peer;
@@ -141,15 +148,32 @@ static SOCKET g_cs = INVALID_SOCKET;          /* join: socket the guest game tal
 static struct sockaddr_in g_gameAddr; static int g_haveGame;
 static DWORD g_hostSeen; static unsigned long long g_tx, g_rx;
 static volatile LONG g_quit;
+/* svc mode (2026-10-21, Escalation through the game's menus): one relay per game, started by the DLL. A local UDP
+ * control socket (port in relay.status "svcport=") talks to the DLL:
+ *   DLL -> relay  'P' flags(1) to(8) payload   message to a Steam user (flags bit 0: reliable), channel CH_SVC
+ *                 'L' text                      command: create <type> <max> | join <lobby> | leave | data <k> <v> |
+ *                                               list | invite <id> | overlay | friends | gameport <n> |
+ *                                               connect <hostId> <localPort> | disconnect | quit
+ *   relay -> DLL  'M' from(8) payload           message from a Steam user
+ *                 'E' text                      event: hello <me> <persona> | created <lobby> | joined <lobby> <owner> |
+ *                                               joinfail | member+ <id> | member- <id> | lobby <id> <owner> <n>
+ *                                               <max> <name> | listend | friend <id> <state> <lobby> <name> |
+ *                                               friendsend | invite <from> <lobby> | joinrequest <lobby> <from>
+ * Game traffic keeps the host/join tunnel: "gameport" makes this relay forward CH_GAME packets from anybody to the
+ * hosting game; "connect" opens the local port the joining game connects to. */
+static int g_isSvc; static SOCKET g_svc = INVALID_SOCKET; static int g_svcPort;
+static struct sockaddr_in g_dllAddr; static int g_haveDll;
+static uint64_t g_members[16]; static int g_nmembers;
 
 static void Status(void) {
     if (g_isList) return;   /* the lobby browser must not overwrite the session relay's status */
-    char p[MAX_PATH], t[MAX_PATH]; sprintf(p, "%s\\relay.status", g_dir); sprintf(t, "%s.tmp", p);
+    char p[MAX_PATH], t[MAX_PATH]; sprintf(p, "%s\\%s", g_dir, g_isSvc ? "relay_svc.status" : "relay.status"); sprintf(t, "%s.tmp", p);
     FILE* f = fopen(t, "w"); if (!f) return;
     fprintf(f, "role=%s\nstate=%s\nme=%llu\nlobby=%llu\nhost=%llu\npeers=%d\ntx=%llu\nrx=%llu\ngamePort=%d\nlocalPort=%d\npid=%lu\n",
-            g_isHost ? "host" : "join", g_state, g_me, g_lobby, g_hostId, g_isHost ? g_npeers : (g_hostId ? 1 : 0), g_tx, g_rx,
+            g_isSvc ? "svc" : g_isHost ? "host" : "join", g_state, g_me, g_lobby, g_hostId, g_isHost ? g_npeers : (g_hostId ? 1 : 0), g_tx, g_rx,
             g_gamePort, g_localPort, GetCurrentProcessId());
     fprintf(f, "go=%s\nlobbytype=%d\n", g_go, g_lobbyType);
+    if (g_isSvc) fprintf(f, "svcport=%d\n", g_svcPort);
     for (int i = 0; i < g_npeers; i++) fprintf(f, "peer=%llu tx=%llu rx=%llu\n", g_peers[i].id, g_peers[i].tx, g_peers[i].rx);
     if (g_fr) { const char* pn = SteamAPI_ISteamFriends_GetPersonaName(g_fr); fprintf(f, "persona=%s\n", pn ? pn : ""); }
     fclose(f);
@@ -233,6 +257,96 @@ static void RequestList(void) {
     g_listPending = 1; g_listAsked = GetTickCount();
 }
 
+/* ------------------------------------------------------------------ svc mode: DLL control socket */
+static void SvcRaw(char type, uint64_t id, const void* d, int n) {
+    if (!g_haveDll || g_svc == INVALID_SOCKET || n < 0 || n > 1400) return;
+    char buf[1500]; int k = 0; buf[k++] = type;
+    if (type == 'M') { memcpy(buf + k, &id, 8); k += 8; }
+    memcpy(buf + k, d, n); k += n;
+    sendto(g_svc, buf, k, 0, (struct sockaddr*)&g_dllAddr, sizeof(g_dllAddr));
+}
+static void SvcEvent(const char* fmt, ...) {
+    char t[1024]; va_list a; va_start(a, fmt); vsnprintf(t, sizeof(t), fmt, a); va_end(a);
+    printf("event: %s\n", t); SvcRaw('E', 0, t, (int)strlen(t));
+}
+static void SvcMembers(void) {   /* lobby member changes -> member+/member- (polled: the mock sends no LobbyChatUpdate) */
+    uint64_t now[16]; int n = 0;
+    if (g_inLobby && g_lobby) { int c = SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(g_mm, g_lobby); for (int i = 0; i < c && n < 16; i++) now[n++] = SteamAPI_ISteamMatchmaking_GetLobbyMemberByIndex(g_mm, g_lobby, i); }
+    for (int i = 0; i < n; i++) { int had = 0; for (int k = 0; k < g_nmembers; k++) if (g_members[k] == now[i]) had = 1; if (!had && now[i] != g_me) SvcEvent("member+ %llu", now[i]); }
+    for (int k = 0; k < g_nmembers; k++) { int has = 0; for (int i = 0; i < n; i++) if (g_members[k] == now[i]) has = 1; if (!has && g_members[k] != g_me) SvcEvent("member- %llu", g_members[k]); }
+    memcpy(g_members, now, sizeof(uint64_t) * n); g_nmembers = n;
+}
+static void SvcFriends(void) {
+    int n = SteamAPI_ISteamFriends_GetFriendCount(g_fr, 4);
+    for (int i = 0; i < n; i++) {
+        uint64_t f = SteamAPI_ISteamFriends_GetFriendByIndex(g_fr, i, 4); FriendGameInfo_t gi; memset(&gi, 0, sizeof(gi));
+        int st = SteamAPI_ISteamFriends_GetFriendPersonaState ? SteamAPI_ISteamFriends_GetFriendPersonaState(g_fr, f) : 1;
+        uint64_t lobby = (SteamAPI_ISteamFriends_GetFriendGamePlayed(g_fr, f, &gi) && (gi.gameID & 0xffffff) == 480) ? (gi.lobby ? gi.lobby : 1) : 0;
+        const char* nm = SteamAPI_ISteamFriends_GetFriendPersonaName(g_fr, f); char name[64]; strncpy(name, nm ? nm : "?", 63); name[63] = 0; Clean(name);
+        SvcEvent("friend %llu %d %llu %s", f, st, lobby, name);
+    }
+    SvcEvent("friendsend");
+}
+static void SvcLeave(void) {
+    if (g_lobby) SteamAPI_ISteamMatchmaking_LeaveLobby(g_mm, g_lobby);
+    g_lobby = 0; g_inLobby = 0; g_nmembers = 0; g_isHost = 0;
+}
+static void SvcCommand(const char* c) {
+    printf("svc: %s\n", c);
+    if (!strncmp(c, "create ", 7)) {
+        int type = 2, max = 4; sscanf(c + 7, "%d %d", &type, &max);
+        SvcLeave(); g_lobbyType = type; g_maxPlayers = max; g_isHost = 1;
+        SteamAPI_ISteamMatchmaking_CreateLobby(g_mm, type, max);
+    } else if (!strncmp(c, "join ", 5)) {
+        SvcLeave(); SteamAPI_ISteamMatchmaking_JoinLobby(g_mm, _strtoui64(c + 5, NULL, 10));
+    } else if (!strcmp(c, "leave")) SvcLeave();
+    else if (!strncmp(c, "data ", 5) && g_lobby && g_isHost) {
+        char k[64] = "", v[256] = ""; if (sscanf(c + 5, "%63s %255[^\n]", k, v) >= 1) SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, k, v);
+    } else if (!strcmp(c, "list")) {
+        SteamAPI_ISteamMatchmaking_AddRequestLobbyListStringFilter(g_mm, "focesc", "1", 0);
+        SteamAPI_ISteamMatchmaking_AddRequestLobbyListDistanceFilter(g_mm, 3);
+        SteamAPI_ISteamMatchmaking_AddRequestLobbyListResultCountFilter(g_mm, 50);
+        SteamAPI_ISteamMatchmaking_RequestLobbyList(g_mm); g_listPending = 1; g_listAsked = GetTickCount();
+    } else if (!strncmp(c, "invite ", 7) && g_lobby && SteamAPI_ISteamMatchmaking_InviteUserToLobby) {
+        SteamAPI_ISteamMatchmaking_InviteUserToLobby(g_mm, g_lobby, _strtoui64(c + 7, NULL, 10));
+    } else if (!strcmp(c, "overlay") && g_lobby) SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog(g_fr, g_lobby);
+    else if (!strcmp(c, "friends")) SvcFriends();
+    else if (!strncmp(c, "gameport ", 9)) {
+        g_gamePort = atoi(c + 9);
+        struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = htons((u_short)g_gamePort);
+        for (int i = 0; i < g_npeers; i++) connect(g_peers[i].s, (struct sockaddr*)&a, sizeof(a));
+        Status();
+    } else if (!strncmp(c, "connect ", 8)) {
+        uint64_t h = 0; int port = 7790; sscanf(c + 8, "%llu %d", &h, &port);
+        if (g_cs == INVALID_SOCKET || port != g_localPort) {
+            if (g_cs != INVALID_SOCKET) closesocket(g_cs);
+            g_cs = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = htons((u_short)port);
+            if (bind(g_cs, (struct sockaddr*)&a, sizeof(a))) { SvcEvent("connectfail port %d busy", port); closesocket(g_cs); g_cs = INVALID_SOCKET; return; }
+            u_long nb = 1; ioctlsocket(g_cs, FIONBIO, &nb);
+        }
+        g_hostId = h; g_localPort = port; g_haveGame = 0; g_hostSeen = GetTickCount();
+        SendTo(g_hostId, "H", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
+        SvcEvent("connecting %llu %d", h, port); Status();
+    } else if (!strcmp(c, "disconnect")) {
+        if (g_hostId) SendTo(g_hostId, "B", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
+        g_hostId = 0; g_haveGame = 0;
+    } else if (!strcmp(c, "ping")) SvcEvent("hello %llu %s", g_me, SteamAPI_ISteamFriends_GetPersonaName(g_fr));
+    else if (!strcmp(c, "quit")) g_quit = 1;
+}
+static void PumpSvc(void) {
+    char buf[1500]; struct sockaddr_in from; int fl = sizeof(from), n;
+    while ((n = recvfrom(g_svc, buf, sizeof(buf), 0, (struct sockaddr*)&from, &fl)) > 0) {
+        fl = sizeof(from);
+        int first = !g_haveDll; g_dllAddr = from; g_haveDll = 1;
+        if (first) SvcEvent("hello %llu %s", g_me, SteamAPI_ISteamFriends_GetPersonaName(g_fr));
+        if (buf[0] == 'P' && n >= 10) {
+            uint64_t to; memcpy(&to, buf + 2, 8);
+            SendTo(to, buf + 10, n - 10, (buf[1] & 1) ? SEND_RELIABLE_NONAGLE : SEND_UNRELIABLE_NONAGLE, CH_SVC);
+        } else if (buf[0] == 'L') { buf[n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1] = 0; SvcCommand(buf + 1); }
+    }
+}
+
 /* ------------------------------------------------------------------ callbacks */
 static void OnLobbyEntered(uint64_t lobby, uint32_t response) {
     if (response != 1) { SetState("joining the lobby failed"); return; }
@@ -263,6 +377,45 @@ static void OnLobbyEntered(uint64_t lobby, uint32_t response) {
     printf("lobby %llu, host %llu\n", g_lobby, g_hostId);
 }
 
+static void SvcDispatch(int cb, uint8_t* data) {
+    if (cb == 513) {                                         /* LobbyCreated (twice on real Steam) */
+        LobbyCreated_t* lc = (LobbyCreated_t*)data;
+        if (g_inLobby) return;
+        if (lc->result != 1) { SvcEvent("createfail %d", lc->result); g_isHost = 0; return; }
+        g_lobby = lc->lobby; g_inLobby = 1; g_hostId = 0;
+        char v[64];
+        SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "foccoop", "1");
+        SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "focesc", "1");
+        sprintf(v, "%llu", g_me); SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "owner", v);
+        SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "name", SteamAPI_ISteamFriends_GetPersonaName(g_fr));
+        sprintf(v, "%d", g_maxPlayers); SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "max", v);
+        sprintf(v, "+connect_lobby %llu", g_lobby); SteamAPI_ISteamFriends_SetRichPresence(g_fr, "connect", v);
+        SteamAPI_ISteamFriends_SetRichPresence(g_fr, "status", "Fall of Cybertron Escalation");
+        SetState("svc: lobby open"); SvcEvent("created %llu", g_lobby); SvcMembers();
+    } else if (cb == 504) {                                  /* LobbyEnter */
+        LobbyEnter_t* le = (LobbyEnter_t*)data;
+        if (g_isHost || g_inLobby) return;
+        if (le->response != 1) { SvcEvent("joinfail %u", le->response); return; }
+        g_lobby = le->lobby; g_inLobby = 1;
+        SetState("svc: in a lobby");
+        SvcEvent("joined %llu %llu", g_lobby, SteamAPI_ISteamMatchmaking_GetLobbyOwner(g_mm, g_lobby)); SvcMembers();
+    } else if (cb == 1251) {                                 /* SessionRequest: anybody may talk to us (public matchmaking) */
+        NetIdentity* id = (NetIdentity*)data; printf("session request from %llu: accepted\n", SteamAPI_SteamNetworkingIdentity_GetSteamID64(id));
+        SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(g_nm, id);
+    } else if (cb == 510) {                                  /* LobbyMatchList */
+        uint32_t count = ((LobbyMatchList_t*)data)->count; g_listPending = 0;
+        for (uint32_t i = 0; i < count && i < 50; i++) {
+            uint64_t l = SteamAPI_ISteamMatchmaking_GetLobbyByIndex(g_mm, (int)i); if (!l) continue;
+            char name[64], own[32], max[16]; CopyData(name, 64, l, "name"); CopyData(own, 32, l, "owner"); CopyData(max, 16, l, "max");
+            SvcEvent("lobby %llu %s %d %s %s", l, own[0] ? own : "0", SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(g_mm, l), max[0] ? max : "0", name);
+        }
+        SvcEvent("listend");
+    } else if (cb == 503) {                                  /* LobbyInvite: user, lobby, game id */
+        uint64_t* v = (uint64_t*)data; SvcEvent("invite %llu %llu", v[0], v[1]);
+    } else if (cb == 333) {                                  /* GameLobbyJoinRequested (accepted in the overlay) */
+        GameLobbyJoinRequested_t* j = (GameLobbyJoinRequested_t*)data; SvcEvent("joinrequest %llu %llu", j->lobby, j->friend_id);
+    }
+}
 static void Dispatch(void) {
     CallbackMsg_t m;
     SteamAPI_ManualDispatch_RunFrame(g_pipe);
@@ -274,7 +427,8 @@ static void Dispatch(void) {
             if (SteamAPI_ManualDispatch_GetAPICallResult(g_pipe, d->call, buf, d->param_size, d->callback, &failed) && !failed) { cb = d->callback; data = buf; }
             else cb = 0;
         }
-        if (cb == 513 && !g_inLobby) {                       /* LobbyCreated (arrives twice on real Steam) */
+        if (g_isSvc) SvcDispatch(cb, data);
+        else if (cb == 513 && !g_inLobby) {                  /* LobbyCreated (arrives twice on real Steam) */
             LobbyCreated_t* lc = (LobbyCreated_t*)data;
             if (lc->result != 1) { printf("CreateLobby failed: %d\n", lc->result); SetState("creating the lobby failed"); }
             else OnLobbyEntered(lc->lobby, 1);
@@ -301,16 +455,20 @@ static void Dispatch(void) {
 /* ------------------------------------------------------------------ packet pumps */
 static void PumpSteam(void) {
     void* msgs[64];
-    for (int ch = 0; ch < 2; ch++) {
+    for (int ch = 0; ch < (g_isSvc ? 3 : 2); ch++) {
         int n = SteamAPI_ISteamNetworkingMessages_ReceiveMessagesOnChannel(g_nm, ch, msgs, 64);
         for (int i = 0; i < n; i++) {
             uint8_t* m = (uint8_t*)msgs[i];
             const char* data = *(const char**)m; int size = *(int*)(m + 4);
             uint64_t sid = SteamAPI_SteamNetworkingIdentity_GetSteamID64((NetIdentity*)(m + 16));
             if (!sid) sid = SteamAPI_SteamNetworkingIdentity_GetSteamID64((NetIdentity*)(m + 12));
-            if (g_isHost) {
+            /* svc: CH_SVC goes to the DLL; game traffic from our host goes to the joining game, from anybody else to
+               the hosting game (when it has a port) */
+            int hosting = g_isSvc ? (g_gamePort > 0 && sid != g_hostId) : g_isHost;
+            if (ch == CH_SVC) { SvcRaw('M', sid, data, size); }
+            else if (hosting) {
                 Peer* p = FindPeer(sid);
-                if (!p && IsLobbyMember(sid)) p = AddPeer(sid);
+                if (!p && (g_isSvc || IsLobbyMember(sid))) p = AddPeer(sid);
                 if (p) {
                     p->seen = GetTickCount();
                     if (ch == CH_GAME) { send(p->s, data, size, 0); p->rx += size; g_rx += size; }
@@ -326,12 +484,13 @@ static void PumpSteam(void) {
 }
 static void PumpLocal(void) {
     char buf[2048];
-    if (g_isHost) {
+    if (g_isHost || g_isSvc) {
         for (int i = 0; i < g_npeers; i++) {
             int n;
             while ((n = recv(g_peers[i].s, buf, sizeof(buf), 0)) > 0) { SendTo(g_peers[i].id, buf, n, SEND_UNRELIABLE_NONAGLE, CH_GAME); g_peers[i].tx += n; g_tx += n; }
         }
-    } else if (g_cs != INVALID_SOCKET) {
+    }
+    if ((!g_isHost || g_isSvc) && g_cs != INVALID_SOCKET) {
         struct sockaddr_in from; int fl = sizeof(from), n;
         while ((n = recvfrom(g_cs, buf, sizeof(buf), 0, (struct sockaddr*)&from, &fl)) > 0) {
             if (!g_haveGame || from.sin_port != g_gameAddr.sin_port) { g_gameAddr = from; g_haveGame = 1; SetState("connected: game traffic flows through Steam"); }
@@ -371,15 +530,16 @@ int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     GetModuleFileNameA(NULL, g_dir, MAX_PATH); { char* s = strrchr(g_dir, '\\'); if (s) *s = 0; }
     g_isList = argc >= 2 && !strcmp(argv[1], "list");
+    g_isSvc = argc >= 2 && !strcmp(argv[1], "svc");
     {   /* log next to the exe (relay.log, relay_list.log), started fresh above 2 MB */
-        char lp[MAX_PATH]; sprintf(lp, "%s\\%s", g_dir, g_isList ? "relay_list.log" : "relay.log");
+        char lp[MAX_PATH]; sprintf(lp, "%s\\%s", g_dir, g_isList ? "relay_list.log" : g_isSvc ? "relay_svc.log" : "relay.log");
         WIN32_FILE_ATTRIBUTE_DATA fa; if (GetFileAttributesExA(lp, GetFileExInfoStandard, &fa) && fa.nFileSizeLow > 2000000) DeleteFileA(lp);
         if (freopen(lp, "a", stdout)) setvbuf(stdout, NULL, _IONBF, 0);
         SYSTEMTIME st; GetLocalTime(&st); printf("\n==== %04d-%02d-%02d %02d:%02d:%02d FoCRelay", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
         for (int i = 1; i < argc; i++) printf(" %s", argv[i]);
         printf("\n");
     }
-    if (!g_isList && (argc < 3 || (strcmp(argv[1], "host") && strcmp(argv[1], "join")))) { printf("usage: FoCRelay host <gamePort> [max] [mode] [map] | join <lobbyId|auto> <localPort> | list\n"); return 2; }
+    if (!g_isList && !g_isSvc && (argc < 3 || (strcmp(argv[1], "host") && strcmp(argv[1], "join")))) { printf("usage: FoCRelay host <gamePort> [max] [mode] [map] | join <lobbyId|auto> <localPort> | list | svc\n"); return 2; }
     g_isHost = !strcmp(argv[1], "host");
     if (g_isHost) {
         g_gamePort = atoi(argv[2]);
@@ -389,7 +549,7 @@ int main(int argc, char** argv) {
         if (argc > 6) g_lobbyType = !strcmp(argv[6], "friends") ? 1 : !strcmp(argv[6], "private") ? 0 : 2;
         if (argc > 7 && strcmp(argv[7], "-")) strncpy(g_pwHash, argv[7], sizeof(g_pwHash) - 1);
         if (g_maxPlayers < 2 || g_maxPlayers > 8) g_maxPlayers = 5;
-    } else if (!g_isList) g_localPort = argc > 3 ? atoi(argv[3]) : 7790;
+    } else if (!g_isList && !g_isSvc) g_localPort = argc > 3 ? atoi(argv[3]) : 7790;
     SetConsoleCtrlHandler(OnCtrl, TRUE);
     { char p[MAX_PATH]; sprintf(p, "%s\\steam_appid.txt", g_dir); FILE* f = fopen(p, "w"); if (f) { fputs("480", f); fclose(f); } }
     SetCurrentDirectoryA(g_dir);
@@ -404,7 +564,13 @@ int main(int argc, char** argv) {
     g_me = SteamAPI_ISteamUser_GetSteamID(g_user);
     SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess(g_nu);
     printf("Steam OK as %s (%llu)\n", SteamAPI_ISteamFriends_GetPersonaName(g_fr), g_me);
-    if (g_isHost) {
+    if (g_isSvc) {
+        g_svc = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = 0;
+        bind(g_svc, (struct sockaddr*)&a, sizeof(a)); int al = sizeof(a); getsockname(g_svc, (struct sockaddr*)&a, &al);
+        g_svcPort = ntohs(a.sin_port); u_long nb = 1; ioctlsocket(g_svc, FIONBIO, &nb);
+        printf("svc control port %d\n", g_svcPort); SetState("svc: ready"); Status();
+    } else if (g_isHost) {
         SteamAPI_ISteamMatchmaking_CreateLobby(g_mm, g_lobbyType /* 2 public, 1 friends only, 0 private */, g_maxPlayers);
         SetState("creating lobby");
     } else if (g_isList) {
@@ -421,12 +587,21 @@ int main(int argc, char** argv) {
     DWORD lastStatus = 0, lastKeep = 0, lastSearch = 0, lastGame = GetTickCount();
     while (!g_quit) {
         Dispatch(); if (!g_isList) { PumpSteam(); PumpLocal(); }
+        if (g_isSvc) PumpSvc();
         DWORD now = GetTickCount();
         if (g_isList && now - g_listAsked > (g_listPending ? 15000u : 3000u)) RequestList();
-        if (!g_isHost && !g_isList && !g_inLobby && !strcmp(argv[2], "auto") && now - lastSearch > 2000) {   /* list mode has no argv[2] */
+        if (!g_isHost && !g_isList && !g_isSvc && !g_inLobby && !strcmp(argv[2], "auto") && now - lastSearch > 2000) {   /* list mode has no argv[2] */
             lastSearch = now; uint64_t l = FindHostingFriend(); if (l) { SetState("joining lobby"); SteamAPI_ISteamMatchmaking_JoinLobby(g_mm, l); }
         }
-        if (now - lastKeep > 1000 && g_inLobby) {
+        if (g_isSvc && now - lastKeep > 500) {      /* svc: lobby member changes, keepalives for the game tunnel */
+            lastKeep = now; SvcMembers();
+            static DWORD lastK; if (now - lastK > 1000) {
+                lastK = now;
+                for (int i = 0; i < g_npeers; i++) SendTo(g_peers[i].id, "K", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
+                for (int i = g_npeers - 1; i >= 0; i--) if (now - g_peers[i].seen > 20000) DropPeer(i, "silent for 20 s");
+                if (g_hostId) SendTo(g_hostId, "K", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
+            }
+        } else if (!g_isSvc && now - lastKeep > 1000 && g_inLobby) {
             lastKeep = now;
             if (g_isHost) {
                 for (int i = 0; i < g_npeers; i++) SendTo(g_peers[i].id, "K", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
@@ -442,7 +617,7 @@ int main(int argc, char** argv) {
         if (now - lastStatus > 1000) {
             lastStatus = now; Status();
             if (GameRunning()) lastGame = now; else if (now - lastGame > 60000) { printf("no game running for 60 s, exiting\n"); break; }
-            char cp[MAX_PATH]; sprintf(cp, "%s\\%s", g_dir, g_isList ? "list.cmd" : "relay.cmd"); FILE* f = fopen(cp, "r");
+            char cp[MAX_PATH]; sprintf(cp, "%s\\%s", g_dir, g_isList ? "list.cmd" : g_isSvc ? "relay_svc.cmd" : "relay.cmd"); FILE* f = fopen(cp, "r");
             if (f) {
                 char c[160] = ""; fgets(c, sizeof(c), f); fclose(f); DeleteFileA(cp);
                 c[strcspn(c, "\r\n")] = 0;

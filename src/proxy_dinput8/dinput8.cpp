@@ -52,6 +52,9 @@ static bool g_tpSync = true;    // ini tpsync (default on: the launcher ini has 
 static bool g_ptrace = true;    // ini ptrace: per-second player trace + Kismet activations in foc_coop.log (trace.inc)
 static bool g_scriptDown = false; // ini scriptdown: the script downs/revives the host -> the guests too (trace.inc)
 static bool g_fakeLogin = true;  // ini fakelogin: no sign-in check, so Host/Join work without a restart (mirror.inc, B4)
+static bool g_escLogin = true;   // ini esclogin: the front end skips the Demonware login, ESCALATION opens (online.inc)
+static bool g_escLan = true;     // ini esclan: online game settings are LAN matches (local sessions, online.inc)
+static bool g_escOnline = true;  // ini esconline: online subsystem reports signed in (online.inc vtable patches)
 static char g_pendingPlayerName[64] = "";   // ini playername, copied into sync.inc g_iniPlayerName
 static bool g_execHook = false; // ini exechook: hook the engine console Exec; off: Esc (showmenu) with a guest connected
                                  // called address 0 through it (2026-10-21, tools/pausetest.ps1 -Guest); the menu's
@@ -322,9 +325,11 @@ static void fmtAddr(const sockaddr* a, char* out, size_t n) {
 }
 
 static volatile LONG g_captureBind = 0, g_hostBoundPort = 0;   // port the game really listens on once hosting started
+static volatile LONG g_lastGameBind = 0;   // newest successful bind in the game port range (steamnet: the host's port)
 static int WSAAPI h_bind(SOCKET s, const sockaddr* a, int len) {
     int r = o_bind(s, a, len);
     int e = WSAGetLastError();
+    if (r == 0 && a && a->sa_family == AF_INET) { int port = ntohs(((const sockaddr_in*)a)->sin_port); if (port >= 7777 && port <= 7800) g_lastGameBind = port; }
     if (r == 0 && g_captureBind && a && a->sa_family == AF_INET) {
         int port = ntohs(((const sockaddr_in*)a)->sin_port);
         if (port >= 7777 && port <= 7800) g_hostBoundPort = port;
@@ -1939,6 +1944,9 @@ static void LoadConfig(const wchar_t* dir) {
         g_execHook = GetPrivateProfileIntW(L"foc_coop", L"exechook", 0, ini2) != 0;
         { wchar_t w[64] = {0}; GetPrivateProfileStringW(L"foc_coop", L"playername", L"", w, 64, ini2); WideCharToMultiByte(CP_UTF8, 0, w, -1, g_pendingPlayerName, sizeof(g_pendingPlayerName), nullptr, nullptr); }
         g_fakeLogin = GetPrivateProfileIntW(L"foc_coop", L"fakelogin", 1, ini2) != 0;
+        g_escLogin = GetPrivateProfileIntW(L"foc_coop", L"esclogin", 1, ini2) != 0;
+        g_escOnline = GetPrivateProfileIntW(L"foc_coop", L"esconline", 1, ini2) != 0;
+        g_escLan = GetPrivateProfileIntW(L"foc_coop", L"esclan", 1, ini2) != 0;
         g_ptrace = GetPrivateProfileIntW(L"foc_coop", L"ptrace", 1, ini2) != 0;
         g_scriptDown = GetPrivateProfileIntW(L"foc_coop", L"scriptdown", 0, ini2) != 0;
         g_spawnAfter = GetPrivateProfileIntW(L"foc_coop", L"spawnafter", 0, ini2);
@@ -1986,7 +1994,10 @@ static void LoadConfig(const wchar_t* dir) {
 #include "tp.inc"
 #include "story_title.inc"
 #include "mirror.inc"
+#include "online.inc"
 #include "overlay.inc"
+#include "steamnet.inc"
+#include "invite.inc"
 #include "trace.inc"
 #include "gfxsync.inc"
 #include "kmirror.inc"

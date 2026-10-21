@@ -100,7 +100,21 @@ __declspec(dllexport) int API SteamAPI_InitFlat(char* err) {
 __declspec(dllexport) void API SteamAPI_Shutdown(void) { WriteUser(0); }
 __declspec(dllexport) int32_t API SteamAPI_GetHSteamPipe(void) { return 1; }
 __declspec(dllexport) void API SteamAPI_ManualDispatch_Init(void) {}
-__declspec(dllexport) void API SteamAPI_ManualDispatch_RunFrame(int32_t p) { (void)p; Drain(); }
+/* invites (svc mode): InviteUserToLobby writes users\<target>.invite ("from lobby"); the target's RunFrame turns it into
+ * a LobbyInvite callback (503: user, lobby, game id) */
+static void PollInvite(void) {
+    static DWORD last; DWORD now = GetTickCount(); if (now - last < 300) return; last = now;
+    char p[MAX_PATH]; sprintf(p, "%s\\users\\%llu.invite", g_root, g_me);
+    FILE* f = fopen(p, "r"); if (!f) return;
+    unsigned long long from = 0, lobby = 0; int got = fscanf(f, "%llu %llu", &from, &lobby); fclose(f); DeleteFileA(p);
+    if (got == 2) { uint64_t v[3] = { from, lobby, 480 }; PushCb(503, v, sizeof(v)); }
+}
+__declspec(dllexport) bool8 API SteamAPI_ISteamMatchmaking_InviteUserToLobby(void* s, uint64_t lobby, uint64_t user) {
+    (void)s; char p[MAX_PATH]; sprintf(p, "%s\\users\\%llu.invite", g_root, user);
+    FILE* f = fopen(p, "w"); if (!f) return 0; fprintf(f, "%llu %llu\n", g_me, lobby); fclose(f); return 1;
+}
+__declspec(dllexport) int API SteamAPI_ISteamFriends_GetFriendPersonaState(void* s, uint64_t id) { (void)s; (void)id; return 1; }
+__declspec(dllexport) void API SteamAPI_ManualDispatch_RunFrame(int32_t p) { (void)p; Drain(); PollInvite(); }
 __declspec(dllexport) bool8 API SteamAPI_ManualDispatch_GetNextCallback(int32_t p, CallbackMsg_t* m) {
     (void)p; if (!g_ncb) return 0;
     g_cur = g_cbs[0]; memmove(g_cbs, g_cbs + 1, (--g_ncb) * sizeof(Cb)); g_haveCur = 1;

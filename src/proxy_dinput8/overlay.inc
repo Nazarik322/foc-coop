@@ -354,6 +354,11 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("hdrprobe ", 0) == 0) { HdrProbeCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("kimpulse ", 0) == 0) { KImpulseCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("fnprobe ", 0) == 0) { FnProbeCommand(cmd.c_str() + 8); return; }
+    if (cmd.rfind("osprobe", 0) == 0) { OsProbeCommand(cmd.c_str() + 7); return; }
+    if (cmd.rfind("peek ", 0) == 0) { PeekCommand(cmd.c_str() + 5); return; }
+    if (cmd.rfind("vttrace ", 0) == 0) { VtTraceCommand(cmd.c_str() + 8); return; }
+    if (cmd.rfind("escjoin ", 0) == 0) { EscJoinCommand(cmd.c_str() + 8); return; }
+    if (cmd == "sessions") { SessionsCommand(); return; }
     if (cmd.rfind("lobby ", 0) == 0) { LobbyCommand(cmd.c_str() + 6); return; }
     if (cmd == "pcprobe") { PcProbeCommand(); return; }
     if (cmd == "gfxdiag") { InterlockedExchange(&g_gfxDiagReq, 1); return; }

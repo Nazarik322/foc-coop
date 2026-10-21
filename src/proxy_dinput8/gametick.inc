@@ -1142,6 +1142,7 @@ static void TickCharDiag(const TickObjs& t) {
 
 // ---------------------------------------------------------------- slow part log (owner 2026-10-20: "wild lags on the host")
 // Every timed part of the tick that takes more than 25 ms is logged (at most 200 lines per run).
+static void TickEscLogin(const TickObjs& t);   // online.inc
 static void TimedPart(const char* name, void (*fn)(const TickObjs&), const TickObjs& t) {
     LARGE_INTEGER f, a, b; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&a);
     fn(t);
@@ -1177,6 +1178,7 @@ static void GameTick() {
     TimedPart("TickGfxSync", TickGfxSync, t);
     TimedPart("TickKMirror", TickKMirror, t);
     TimedPart("TickLobby", TickLobby, t);
+    TimedPart("TickEscLogin", TickEscLogin, t);
     TickPossessFix(t);
     TickPeFind(go);
     TickSpawnTrace(t);
