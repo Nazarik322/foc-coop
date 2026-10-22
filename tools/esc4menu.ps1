@@ -3,7 +3,7 @@
 # once, ini escautoaccept=1 in B/C/D); A: Private Match -> Create Game (everyone in the game lobby) -> Start Game
 # (everyone loads the map through the Steam relay). No player actions. Windows 800x450 in a 2x2 grid; screenshots of
 # all copies after each step in $Out. Invented names (ini playername) so the lobby lists are readable.
-param([string[]]$Copies = @("A", "B", "C", "D"), [string]$Out = "E:\FoC-coop\sessions\esc4menu", [switch]$NoBuild, [switch]$Keep)
+param([string[]]$Copies = @("A", "B", "C", "D"), [string]$Out = "E:\FoC-coop\sessions\esc4menu", [switch]$NoBuild, [switch]$Keep, [switch]$Probe, [int]$LobbyWait = 0)
 . "$PSScriptRoot\dev.ps1"
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -42,8 +42,12 @@ try {
   foreach ($c in $Copies | Where-Object { $_ -ne "A" }) { Send-Cmd "A" "escinvite $($ids[$c])"; Start-Sleep 20 }
   Start-Sleep 15
   foreach ($c in $Copies) { Say "after invites: $c state $(State $c)"; Shot $c "2_party_together" }
-  Keys "A" @("DOWN", "ENTER", "WAIT6", "ENTER", "WAIT35")
+  if ($Probe) {   # registrant dumps (heartbeat times) every 3 s while the game lobby forms
+    Keys "A" @("DOWN", "ENTER", "WAIT6", "ENTER")
+    for ($i = 0; $i -lt 10; $i++) { foreach ($c in $Copies) { Send-Cmd $c "sessions" }; Start-Sleep 3 }
+  } else { Keys "A" @("DOWN", "ENTER", "WAIT6", "ENTER", "WAIT35") }
   foreach ($c in $Copies) { Say "after Create Game: $c state $(State $c)"; Shot $c "3_game_lobby" }
+  if ($LobbyWait -gt 0) { Say "waiting $LobbyWait s in the game lobby"; Start-Sleep $LobbyWait; foreach ($c in $Copies) { Say "after lobby wait: $c state $(State $c)" } }
   Keys "A" @("ENTER", "WAIT75")
   foreach ($c in $Copies) { Shot $c "4_map" }
   $n = Select-String -Path (Log "A") -Pattern "stat: npc=(\d+)" | Select-Object -Last 1

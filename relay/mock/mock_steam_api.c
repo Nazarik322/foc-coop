@@ -106,12 +106,15 @@ static void PollInvite(void) {
     static DWORD last; DWORD now = GetTickCount(); if (now - last < 300) return; last = now;
     char p[MAX_PATH]; sprintf(p, "%s\\users\\%llu.invite", g_root, g_me);
     FILE* f = fopen(p, "r"); if (!f) return;
-    unsigned long long from = 0, lobby = 0; int got = fscanf(f, "%llu %llu", &from, &lobby); fclose(f); DeleteFileA(p);
-    if (got == 2) { uint64_t v[3] = { from, lobby, 480 }; PushCb(503, v, sizeof(v)); }
+    unsigned long long from = 0, lobby = 0; int got = fscanf(f, "%llu %llu", &from, &lobby); fclose(f);
+    if (got != 2) return;   /* incomplete: keep it for the next poll (an invite was lost this way, 2026-10-22) */
+    DeleteFileA(p);
+    { uint64_t v[3] = { from, lobby, 480 }; PushCb(503, v, sizeof(v)); }
 }
 __declspec(dllexport) bool8 API SteamAPI_ISteamMatchmaking_InviteUserToLobby(void* s, uint64_t lobby, uint64_t user) {
-    (void)s; char p[MAX_PATH]; sprintf(p, "%s\\users\\%llu.invite", g_root, user);
-    FILE* f = fopen(p, "w"); if (!f) return 0; fprintf(f, "%llu %llu\n", g_me, lobby); fclose(f); return 1;
+    (void)s; char p[MAX_PATH], t[MAX_PATH]; sprintf(p, "%s\\users\\%llu.invite", g_root, user); sprintf(t, "%s.tmp%llu", p, g_me);
+    FILE* f = fopen(t, "w"); if (!f) return 0; fprintf(f, "%llu %llu\n", g_me, lobby); fclose(f);
+    return MoveFileExA(t, p, MOVEFILE_REPLACE_EXISTING) ? 1 : 0;   /* the reader sees the whole file or none */
 }
 __declspec(dllexport) int API SteamAPI_ISteamFriends_GetFriendPersonaState(void* s, uint64_t id) { (void)s; (void)id; return 1; }
 __declspec(dllexport) void API SteamAPI_ManualDispatch_RunFrame(int32_t p) { (void)p; Drain(); PollInvite(); }

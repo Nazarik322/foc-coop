@@ -40,6 +40,7 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | B29 lobby: the game's own CONTINUE / CHAPTER | lobby.inc solo -> session reopen, NoteTravel | `tools/lobbycontinue.ps1` (keys Up+Enter) and `-Keys "ENTER,ENTER,ENTER"` (chapter I); do not touch the windows during the run | - | 2026-10-21 PASS both (chapter: warning confirmed by hand once) |
 | B31 pause menu with a guest | `exechook` default 0 | `tools/pausetest.ps1 -Guest` (host A in L01 as a session, guest B joined, Esc twice: alive, no call to address 0) | `-Ini exechook=1`: FAIL (2 null calls) | 2026-10-21 PASS / twin FAIL |
 | B32/B33 Escalation names, death banner | `uniqueids`, names, UIController not shared in Escalation | `tools/esc4.ps1` (4 copies, IP join, names in the host state + TAB shot; no player actions) | - | 2026-10-21 PASS (4 names in TAB) |
+| Escalation through the game's menus, 4 players over Steam (mock) | steamnet.inc chat (member id by pointer, left flag, status replay, whisper 0 -> owner), invite.inc TickZeroRegistrant | `tools/esc4menu.ps1 -LobbyWait 80` (A hosts, B-D invited, Private Match > Create Game, 80 s in the game lobby, Start; host npc >= 4; `-Probe` dumps registrants) | without TickZeroRegistrant: members quit ~50 s after entering the game lobby | 2026-10-22 PASS 4/4 (`esc4_zero2`) |
 | Slot lease (team mode) | `Enter-FocSlot` etc. in dev.ps1 | `tools/slottest.ps1` (no game): 5/5 PASS | - | 2026-10-20: 5/5 PASS (lead rerun) |
 
 ## Known flaky

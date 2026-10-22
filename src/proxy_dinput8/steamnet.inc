@@ -70,22 +70,38 @@ static void ChatClear(int k, const DWORD* d) {
 CHAT_ADDCLEAR(CL_CREATE) CHAT_ADDCLEAR(CL_SUBSCRIBE) CHAT_ADDCLEAR(CL_UNSUBSCRIBE) CHAT_ADDCLEAR(CL_SENDDONE)
 CHAT_ADDCLEAR(CL_CHANGE) CHAT_ADDCLEAR(CL_MESSAGE)
 typedef void(__thiscall* ChatOkFn)(DWORD self, DWORD ok, const DWORD* channel);
-typedef void(__thiscall* ChatChangeFn)(DWORD self, const DWORD* channel, DWORD memberLo, DWORD memberHi, BYTE joined);
+// member is a pointer to the UniqueNetId (the beacon's member-joined code, ghidra 0xadf950, reads it through the
+// pointer; passing the id by value faulted there, 2026-10-22); the third argument is unused by the beacon handler.
+// The last argument is 1 for a member that LEFT (OnChatChange 0x8a2050: 1 -> delegate +0x38 -> 0xadf950, which adds
+// the id to PlayersThatHaveLeftTheChannel and drops its pending registrant), 0 for a member that joined.
+typedef void(__thiscall* ChatChangeFn)(DWORD self, const DWORD* channel, const DWORD* member, DWORD unk, BYTE left);
 typedef void(__thiscall* ChatMsgFn)(DWORD self, const DWORD* channel, const DWORD* sender, DWORD unk, const void* data, int size);
 // handlers may add or clear listeners while we call them: work on a copy
 static int ChatCopy(int k, ChatListener* out) { int n = g_chatN[k]; memcpy(out, g_chatL[k], sizeof(ChatListener) * n); return n; }
+// listener faults: log exception code, faulting address and the handler (ghidra VAs) so the cause can be found
+static int ChatFault(EXCEPTION_POINTERS* ep, const char* what, DWORD handler) {
+    static LONG n = 0;
+    if (InterlockedIncrement(&n) <= 40) {
+        DWORD* sp = (DWORD*)(UINT_PTR)ep->ContextRecord->Esp; DWORD r0 = 0, r1 = 0;
+        __try { r0 = sp[0]; r1 = sp[1]; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        Log("steamchat: %s listener fault %08lx at %lx (handler %lx, ecx %08lx, [esp] %lx %lx)", what, ep->ExceptionRecord->ExceptionCode,
+            ExeVa(ep->ExceptionRecord->ExceptionAddress), ExeVa((void*)(UINT_PTR)handler), ep->ContextRecord->Ecx, ExeVa((void*)(UINT_PTR)r0), ExeVa((void*)(UINT_PTR)r1));
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
 static void ChatFireOk(int k, bool ok, unsigned long long ch) {
     DWORD id[2] = { (DWORD)ch, (DWORD)(ch >> 32) }; ChatListener l[16]; int n = ChatCopy(k, l);
     for (int i = 0; i < n; i++) {
-        __try { ((ChatOkFn)(UINT_PTR)l[i].w[3])(l[i].w[2], ok ? 1 : 0, id); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("steamchat: listener %d fault", k); }
+        __try { ((ChatOkFn)(UINT_PTR)l[i].w[3])(l[i].w[2], ok ? 1 : 0, id); } __except (ChatFault(GetExceptionInformation(), "ok", l[i].w[3])) {}
     }
 }
 static void ChatFireChange(unsigned long long ch, unsigned long long member, bool joined) {
     DWORD id[2] = { (DWORD)ch, (DWORD)(ch >> 32) }; ChatListener l[16]; int n = ChatCopy(CL_CHANGE, l);
     Log("steamchat: %016llx member %llu %s", ch, member, joined ? "joined" : "left");
     for (int i = 0; i < n; i++) {
-        __try { ((ChatChangeFn)(UINT_PTR)l[i].w[3])(l[i].w[2], id, (DWORD)member, (DWORD)(member >> 32), joined ? 1 : 0); }
-        __except (EXCEPTION_EXECUTE_HANDLER) { Log("steamchat: change listener fault"); }
+        DWORD mid[2] = { (DWORD)member, (DWORD)(member >> 32) };
+        __try { ((ChatChangeFn)(UINT_PTR)l[i].w[3])(l[i].w[2], id, mid, 0, joined ? 0 : 1); }
+        __except (ChatFault(GetExceptionInformation(), "change", l[i].w[3])) {}
     }
 }
 static void ChatFireMsg(unsigned long long ch, unsigned long long from, const void* data, int size) {
@@ -93,7 +109,7 @@ static void ChatFireMsg(unsigned long long ch, unsigned long long from, const vo
     ChatListener l[16]; int n = ChatCopy(CL_MESSAGE, l);
     for (int i = 0; i < n; i++) {
         __try { ((ChatMsgFn)(UINT_PTR)l[i].w[3])(l[i].w[2], id, sid, 0, data, size); }
-        __except (EXCEPTION_EXECUTE_HANDLER) { Log("steamchat: message listener fault"); }
+        __except (ChatFault(GetExceptionInformation(), "message", l[i].w[3])) {}
     }
 }
 
@@ -101,7 +117,8 @@ static void ChatFireMsg(unsigned long long ch, unsigned long long from, const vo
 // id = the channel on the wire; local = the id the game uses for it (the same, except a game channel that reached a
 // member as 0: Demonware carried the game session's channel in its own session data, we do not; the owner announces
 // its newest channel to its members ('N' old new) and a subscribe to 0 goes there).
-struct SnChan { unsigned long long id, local, owner, mem[16]; int n; int state; DWORD asked; };   // state 1 subscribing, 2 in
+struct SnChan { unsigned long long id, local, owner, mem[16]; int n; int state; DWORD asked; BYTE st[64]; int stn; };   // state 1 subscribing, 2 in
+// st: the owner's last broadcast RMT_ConnectionStatus (0x16), replayed to members that subscribe later (see 'S')
 static unsigned long long g_announcedCh = 0;   // newest channel announced by the owner of a channel we are in
 static SnChan g_chans[8]; static int g_nchans; static unsigned g_chanSeq = 0;
 static int g_chatPendingCreate = 0; static DWORD g_chatCreateAt = 0;
@@ -156,23 +173,33 @@ static void ChatLogMsg(const char* what, unsigned long long ch, unsigned long lo
     char hex[64] = ""; const BYTE* b = (const BYTE*)data;
     for (int i = 0; i < size && i < 16; i++) _snprintf_s(hex + 2 * i, sizeof(hex) - 2 * i, _TRUNCATE, "%02x", b[i]);
     Log("steamchat: %s %016llx %llu %d bytes %s", what, ch, peer, size, hex);
+    if (size > 16 && (b[0] == 0x02 || b[0] == 0x04 || b[0] == 0x03)) {   // reservation replies / members / teams in full
+        char full[1300]; int m = size < 600 ? size : 600;
+        for (int i = 0; i < m; i++) _snprintf_s(full + 2 * i, sizeof(full) - 2 * i, _TRUNCATE, "%02x", b[i]);
+        Log("steamchat:   full %s", full);
+    }
 }
 static DWORD __fastcall ChatSend(void*, void*, const DWORD* chp, const void* data, int size) {
     unsigned long long ch = chp ? ((unsigned long long)chp[1] << 32 | chp[0]) : 0;
     ChatLogMsg("send", ch, 0, data, size);
-    // beacon message 0x17 = "migrate to the best host": the party host named a member as the better host and that
-    // member left with a fresh party of its own (2026-10-21). The host stays the host: not forwarded. (Clearing the
-    // AllowLobby*HostMigration settings flags instead crashed both lobbies on entry.)
-    if (size >= 1 && ((const BYTE*)data)[0] == 0x17) { Log("steamchat: host migration message not sent"); return 1; }
+    // beacon message 0x17 = RMT_LostConnection <member id> (EReservationMessageType, IpDrv ReservationBeacon.uc): the
+    // host saw no heartbeat from that member. It used to be held back here (misread as host migration, 2026-10-21);
+    // since member heartbeats arrive (whispers to id 0 -> owner, status replay) it is forwarded like any message.
+    if (size >= 1 && ((const BYTE*)data)[0] == 0x17) Log("steamchat: host reports a lost connection");
     SnChan* c = ChanFindLocal(ch); if (!c || c->state != 2) return 0;
+    if (c->owner == g_snMe && size >= 1 && size <= (int)sizeof(c->st) && ((const BYTE*)data)[0] == 0x16) { memcpy(c->st, data, size); c->stn = size; }
     if (c->owner == g_snMe) { for (int i = 0; i < c->n; i++) if (c->mem[i] != g_snMe) SnPkt(c->mem[i], 'C', c->id, &g_snMe, 1, data, size); }
     else SnPkt(c->owner, 'C', c->id, &g_snMe, 1, data, size);
     return 1;
 }
 static DWORD __fastcall ChatWhisper(void*, void*, const DWORD* chp, const DWORD* user, const void* data, int size) {
     unsigned long long ch = chp ? ((unsigned long long)chp[1] << 32 | chp[0]) : 0, to = user ? ((unsigned long long)user[1] << 32 | user[0]) : 0;
+    SnChan* c = ChanFindLocal(ch);
+    // a member's game session holds the host as a registrant with id 0 (2026-10-22 `sessions` dump): its heartbeats
+    // and status whispers go to 0 - deliver them to the channel owner
+    if (!to && c && c->owner != g_snMe) { to = c->owner; static LONG n0 = 0; if (InterlockedIncrement(&n0) <= 3) Log("steamchat: whisper to id 0 -> channel owner %llu", to); }
     if (!to || to == g_snMe) return 0;
-    if (SnChan* c = ChanFindLocal(ch)) ch = c->id;
+    if (c) ch = c->id;
     ChatLogMsg("whisper to", ch, to, data, size);
     SnPkt(to, 'W', ch, &g_snMe, 1, data, size);
     return 1;
@@ -267,7 +294,7 @@ static void SnSteamLobbyEvent(const char* e) {
 }
 
 // ---------------------------------------------------------------- incoming
-static void FriendsEvent(const char* e); static void TickFriends();   // invite.inc
+static void FriendsEvent(const char* e); static void TickFriends(); static void TickZeroRegistrant();   // invite.inc
 static void SnEvent(const char* e) {
     if (strncmp(e, "friend", 6)) Log("steamnet: event %s", e);
     FriendsEvent(e);
@@ -295,6 +322,10 @@ static void SnChatMsg(unsigned long long from, const char* d, int n) {
         memcpy(b + k, reply, 8 * nr); k += 8 * nr; SnSendTo(from, b, k, true);
         Log("steamchat: %llu subscribes to %016llx: %s", from, ch, ok ? "ok" : "refused");
         if (ok) { for (int i = 0; i < c->n; i++) if (c->mem[i] != g_snMe && c->mem[i] != from) SnPkt(c->mem[i], 'J', ch, &from, 1, nullptr, 0); ChatFireChange(c->local, from, true); }
+        // the host broadcasts its connection status (0x16, carries its address) when it creates the game channel,
+        // before anyone is in it; members that never got it keep the host at BeaconConnectionStatus 0 and send no
+        // heartbeats, so the host drops them with RMT_LostConnection (2026-10-22). Replay it to the new member.
+        if (ok && c->stn) { SnPkt(from, 'C', ch, &g_snMe, 1, c->st, c->stn); ChatLogMsg("replay status to", ch, from, c->st, c->stn); }
         break; }
     case 'A': {
         if (!c || c->state != 1 || n < 10) break;
@@ -334,6 +365,7 @@ static void SnPoll() {
 
 // ---------------------------------------------------------------- tick (game thread, via TickEscLogin)
 static void InstallInvitePatches();   // invite.inc
+static void SnInstallBandwidth();
 // The local player's PRI got its UniqueId at login in the front end, before the relay told us the Steam ID: 0. The
 // party then registered members with id 0 (host's Party session empty, 2026-10-21). Outside the story every local
 // PRI carries the Steam ID (PRI.UniqueId +0x230).
@@ -399,9 +431,11 @@ static void TickSteamChat(const TickObjs& t) {
     if (!g_escOnline) return;
     if (g_onlineCtx) TickSteamTravel(t);
     SnInstallUid();
+    SnInstallBandwidth();
     InstallInvitePatches();
     SnFixLocalIds(t);
     TickFriends();
+    if (g_onlineCtx) TickZeroRegistrant();
     SnHookAccountId();
     DWORD now = GetTickCount();
     if (g_sn == INVALID_SOCKET) {
@@ -435,4 +469,23 @@ static void TickSteamChat(const TickObjs& t) {
     }
     for (int i = g_nchans - 1; i >= 0; i--)   // owner did not answer the subscribe
         if (g_chans[i].state == 1 && (LONG)(now - g_chans[i].asked) > 10000) { unsigned long long ch = g_chans[i].id, local = g_chans[i].local; ChanRemove(ch); Log("steamchat: subscribe to %016llx timed out", ch); ChatFireOk(CL_SUBSCRIBE, false, local); }
+}
+
+// The lobby picks the "best host" from the members' registrant data (HostMigrator: bandwidth tier higher wins, then
+// NAT type, then hosting quality) and migrated the host away (3+ players lost the host, 2026-10-22). Registrants
+// carry SystemInterface.GetBandwidthTier (table 0x14c0d70 slot 40 = 0xb6ab70, no arguments): 4 while we own our
+// party (host or alone), 1 while we are a member of someone else's channel - the owner always stays the best host.
+typedef DWORD(__thiscall* BwFn)(void* self);
+static void* g_origBw = nullptr;
+static DWORD __fastcall SnBandwidthTier(void* self, void*) {
+    if (!g_onlineCtx) return ((BwFn)g_origBw)(self);
+    for (int i = 0; i < g_nchans; i++) if (g_chans[i].owner != g_snMe && g_chans[i].state >= 1) return 1;
+    return 4;
+}
+static void SnInstallBandwidth() {
+    static bool done = false; if (done) return; done = true;
+    void** slot = (void**)((BYTE*)GetModuleHandleW(nullptr) + (0x14c0d70 - 0x400000)) + 40;
+    if (ExeVa(*slot) != 0xb6ab70) { Log("steamnet: GetBandwidthTier slot holds %lx - not patched", ExeVa(*slot)); return; }
+    g_origBw = *slot; DWORD old = 0; VirtualProtect(slot, 4, PAGE_READWRITE, &old); *slot = (void*)SnBandwidthTier; VirtualProtect(slot, 4, old, &old);
+    Log("steamnet: System.GetBandwidthTier patched (party owner = best host)");
 }

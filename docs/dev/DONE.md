@@ -3,6 +3,14 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-22: Escalation through the game's own menus, 4 players (branch wip/escalation-menu, not released)
+- ESCALATION from the main menu over Steam (Spacewar relay): party lobby, Steam invites / Friends List join,
+  Private Match > Create Game, game lobby with all players on one team, Start Game, everybody loads the map.
+- Fixed on the way (details and dead ends in ESCALATION-MENU.md "Tried and result"): chat member-change call
+  (id by pointer, 1 = left), host connection status replayed to late subscribers, member whispers to id 0 go to the
+  host, the member's id-0 host registrant follows the host's receive time (members quit after ~50 s before).
+- Verified: `tools/esc4menu.ps1 -LobbyWait 80` PASS 4/4 (mock Steam, 4 copies on one machine).
+
 ## 2026-10-21: lobby without restarts (branch wip/lobby-b4, not released)
 - B4 fixed (fakelogin): host and join inside the running game; F10 Host/Join/Leave without a restart.
 - F10 lobby: Create lobby (friends / public / private, password), Join lobby from the main menu; the host starts the

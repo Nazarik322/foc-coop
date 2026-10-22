@@ -88,3 +88,61 @@ Steps (each tested with 2-4 copies through the real menus, no player actions):
   ("TRANSFORMERS: FoC server is not available") because the chat channel and the sessions still go to Demonware.
 - Next: ChatInterface over a Steam lobby (relay: CreateLobby/JoinLobby, lobby chat messages with a recipient header,
   member changes → OnChatChange), UniqueNetId = Steam ID, then GameInterface sessions (object + 0x28 interface table).
+
+## Tried and result (keep this log; read it before trying something new)
+Format: date - what was tried -> result. Wrong conclusions are struck out with the correction, not deleted.
+
+- 2026-10-21 - drop beacon message 0x17 in ChatSend, believing it was "migrate to best host" -> 2 players reached the
+  map. **Wrong reading**: 0x17 = 23 = `RMT_LostConnection <member id>` (enum `EReservationMessageType` in
+  IpDrvOnline/ReservationBeacon.uc; 0x07 is MigrateToBestHost, 0x14 Kick, 0x15 Heartbeat, 0x16 ConnectionStatus).
+  Dropping it only hides the symptom; with 3-4 players the members still fell back to their own party.
+- 2026-10-21 - clear `AllowLobbyBestHostDeterminationHostMigration` on all settings -> no change (private match never
+  migrates: `ShouldMigrateToBetterHost` is not the cause). Clearing the AllowLobby*HostMigration flags earlier also
+  crashed both lobbies on entry.
+- 2026-10-21 - patch HostMigrator.BeginHostMigration (0x1597c40 slot 25) to refuse -> never called; no change.
+- 2026-10-22 - System.GetBandwidthTier (slot 40) returns 4 for the party owner, 1 for members -> no change (same
+  reason: there is no migration).
+- 2026-10-22 - owner's idea "factions differ" checked in script: a private Escalation match calls
+  `TeamHandler.ForceToTeam` (TnLobbyGameBase.AssignTeams) - everyone is put on one team. Not the cause.
+- 2026-10-22 - **root cause 1**: our chat "member joined/left" call into the beacon (OnChatChange 0x8a2050) faulted
+  every time ("change listener fault"). Logged the fault: c0000005 at 0xadf957. The beacon handler takes the member
+  id **by pointer**, we passed it by value. Fixed (pointer).
+- 2026-10-22 - with the pointer fix, members left the party right after the reservation reply (165-byte reply without
+  the member). **Root cause 2**: the last argument means *left* (1 -> delegate +0x38 -> 0xadf950 = member-left: adds to
+  PlayersThatHaveLeftTheChannel, drops the pending registrant), 0 = joined. We sent 1 for joins. Fixed (inverted).
+  After both fixes: party join OK (200-byte reply), member reaches the game lobby.
+- 2026-10-22 - still: in the game lobby neither side sends heartbeats (0x15) any more (party channel did, every 5 s);
+  host sends RMT_LostConnection about 10 s after the members join -> members drop back to their own party at the
+  countdown. Probing the session registrants (`sessions` now prints BeaconConnectionStatus and the heartbeat
+  times at registrant +0x50/+0x58) with `tools/esc4menu.ps1 -Probe`.
+- 2026-10-22 - `-Probe` result (2 copies, PASS 2 of 2): in the game session the member keeps the host at
+  BeaconConnectionStatus 0 (party: 1) and its "sent" time never moves = it sends nothing; the host's "recv" for the
+  member is stuck. The host broadcasts its 0x16 ConnectionStatus when it creates the game channel, before anyone is
+  subscribed, so members never get it. Fix tried: the channel owner remembers its last broadcast 0x16 and replays it
+  to every member that subscribes later (steamnet.inc 'S'). Result: see next entry.
+  Also seen: host Game session lists the host twice (EnsureRegistrant duplicate?); member sessions have a registrant
+  with id 0. Not yet known if harmful.
+- 2026-10-22 - status replay (3 copies): **PASS 3 of 3** reached the map. But the host still tried 2x
+  RMT_LostConnection (dropped by us), and members' host registrant stays at status 0. The dump shows the member's
+  game session has a registrant with id **0** whose "sent" time moves: member heartbeats are whispered to id 0, and
+  ChatWhisper threw away whispers to 0. Fix tried: whisper to 0 -> channel owner. Result: see next entry.
+- 2026-10-22 - whisper to id 0 -> channel owner (4 copies, `esc4_w0`): **PASS 4 of 4**, all four at CHOOSE
+  CHARACTER on the map; no RMT_LostConnection at all, the host gets member heartbeats on the game channel (27).
+  Then the 0x17 hold-back was removed (forwarded again, only logged). Rerun: see next entry.
+- 2026-10-22 - rerun with 0x17 forwarded (`esc4_fwd`): FAIL 1 of 4, but no 0x17 at all. Heartbeats fine both ways.
+  B quit to its party ~50 s after entering the game lobby (C, D followed when B left). Same ~50 s in the very first
+  failing runs: **the PASS runs only passed because the countdown finished before 50 s.** Reading: the member's
+  session has the host twice (id 0 and real id); only the real entry's receive time (+0x50) moves, the beacon times
+  out entry 0 -> OnReservationError type 2 -> QuitToPartyLobby ("host quit"). Fix tried: TickZeroRegistrant
+  (invite.inc) copies the channel owner's receive time into entry 0. Test with `-LobbyWait 80` so the lobby lasts
+  longer than the timeout. Result: see next entry.
+- 2026-10-22 - TickZeroRegistrant with `-LobbyWait 80` (`esc4_zero`): B and C stayed 80 s in the game lobby and
+  reached the map (host sees 3) - **the 50 s quit is fixed**. D never joined: A's relay sent the invite, D's mock
+  never raised it. Probable cause (test environment only): mock InviteUserToLobby wrote users\<id>.invite in place
+  and the reader deleted it even when it read nothing. Mock fixed (temp file + rename, keep unreadable file).
+  Result: see next entry.
+- 2026-10-22 - all fixes + mock invite fix, `-LobbyWait 80` (`esc4_zero2`): **PASS 4 of 4**. All four in the game
+  lobby (team DECEPTICONS: Bumblebee, Ironhide, Optimus, Ratchet; map Oblivion), 80 s wait, all four at CHOOSE
+  CHARACTER on the map. Members still show "Ability: undefined" on the character card (open).
+- Test pitfall: copies started 25 s apart still sometimes die at D3D start (C had no log after 5 s, 2026-10-22);
+  check every copy has "event hello" before reading the result.

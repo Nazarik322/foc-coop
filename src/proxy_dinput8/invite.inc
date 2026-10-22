@@ -24,10 +24,10 @@ static DWORD* __fastcall InvResult(void* self, void*, DWORD* ret, DWORD num) {
     return g_origInvResult ? ((InvResultFn)g_origInvResult)(self, ret, num) : ret;
 }
 static void InstallGameSpy(); static void InstallPeerPatch();
-static void InstallFriendPatches();
+static void InstallFriendPatches(); static void InstallNoMigration();
 static void InstallInvitePatches() {
     static bool done = false; if (done || !g_escOnline) return; done = true;
-    InstallGameSpy(); InstallPeerPatch(); InstallFriendPatches();
+    InstallGameSpy(); InstallPeerPatch(); InstallFriendPatches(); InstallNoMigration();
     VtPatch list[] = {
         { "Game.AddGameInviteAccepted",   0x152ca18, 42, 0xa07f60, (void*)InvAdd, 0 },
         { "Game.ClearGameInviteAccepted", 0x152ca18, 43, 0x5d7550, (void*)InvClear, 0 },
@@ -223,6 +223,36 @@ static void InstallPeerPatch() {
     ApplyVtPatches(&p, 1);
 }
 
+// A member's sessions hold the host as a registrant with id 0 next to its real id (2026-10-22 `sessions` dump).
+// Messages from the host update only the real entry's MessageReceivedTime (registrant +0x50, double), so about 50 s
+// after joining the game lobby the member's beacon gave up on entry 0 and quit to its party ("host quit") unless
+// the countdown had already finished. Keep entry 0's receive time at the newest time of the channel owners we are
+// a member of.
+static void TickZeroRegistrant() {
+    BYTE* os = OnlineSubObject(); if (!os) return;
+    unsigned long long owners[8]; int no = 0;
+    for (int i = 0; i < g_nchans && no < 8; i++) if (g_chans[i].state == 2 && g_chans[i].owner != g_snMe) owners[no++] = g_chans[i].owner;
+    if (!no) return;
+    static LONG logged = 0;
+    __try {
+        BYTE* arr = *(BYTE**)(os + 0xec); int n = *(int*)(os + 0xf0);
+        for (int i = 0; i < n && i < 8; i++) {
+            BYTE* e = arr + 0x24 * i; BYTE* regs = *(BYTE**)(e + 0xc); int nr = *(int*)(e + 0x10);
+            if (!regs || nr <= 0 || nr > 32) continue;
+            double best = 0; BYTE* zero = nullptr;
+            for (int r = 0; r < nr; r++) {
+                BYTE* rg = regs + 0x60 * r; unsigned long long id = *(unsigned long long*)rg;
+                if (!id) { zero = rg; continue; }
+                for (int k = 0; k < no; k++) if (id == owners[k] && *(double*)(rg + 0x50) > best) best = *(double*)(rg + 0x50);
+            }
+            if (zero && best > *(double*)(zero + 0x50)) {
+                *(double*)(zero + 0x50) = best;
+                if (InterlockedIncrement(&logged) <= 3) Log("invite: session registrant 0 receive time follows the host (%.2f)", best);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
 // `sessions` (test command): the subsystem's named sessions (array at subsystem +0xec/+0xf0, 0x24 bytes each:
 // name, session info, settings, registrants data/num at +0xc/+0x10, 0x60 bytes each, PlayerNetId first).
 static void SessionsCommand() {
@@ -237,6 +267,11 @@ static void SessionsCommand() {
             char line[600]; size_t k = _snprintf_s(line, _TRUNCATE, "sessions: %s settings %s info %p, %d member(s):", nm, cn, *(void**)(e + 4), nr);
             for (int r = 0; r < nr && r < 8; r++) k += _snprintf_s(line + k, sizeof(line) - k, _TRUNCATE, " %llu", *(unsigned long long*)(regs + 0x60 * r));
             Log("%s", line);
+            for (int r = 0; r < nr && r < 8; r++) {   // registrant tail: HasHeadset/BeaconConnectionStatus, heartbeat times
+                const BYTE* rg = regs + 0x60 * r; char hx[2 * 0x30 + 1];
+                for (int j = 0; j < 0x30; j++) _snprintf_s(hx + 2 * j, sizeof(hx) - 2 * j, _TRUNCATE, "%02x", rg[0x30 + j]);
+                Log("sessions:   %llu +30: %s recv %.2f sent %.2f", *(const unsigned long long*)rg, hx, *(const double*)(rg + 0x50), *(const double*)(rg + 0x58));
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) { Log("sessions: fault"); }
     for (int i = 0; i < g_to.npc; i++) {
@@ -344,4 +379,24 @@ static void InstallFriendPatches() {
     if (ExeVa(t[51]) != 0x9ab810) { Log("invite: GetFriendsList slot holds %lx - not patched", ExeVa(t[51])); return; }
     DWORD old = 0; VirtualProtect(t + 51, 4, PAGE_READWRITE, &old); g_origGetFriends = t[51]; t[51] = (void*)SnGetFriendsList; VirtualProtect(t + 51, 4, old, &old);
     Log("invite: Player.GetFriendsList patched (Steam friends)");
+}
+
+// No host migration in our lobbies (2026-10-22): with 3+ players the game host picked a member as the "best host",
+// called HostMigrator.BeginHostMigration and stopped its beacon heartbeats while the migration was pending; every
+// member then lost the host at the countdown ("Your connection with the Host has been lost"). TnHostMigrator's
+// BeginHostMigration (state table ghidra 0x1597c40 slot 25 = 0x8f18f0, thiscall(name, type, delegate), RET 0xc)
+// answers false: the host stays the host. (The settings flag AllowLobbyBestHostDeterminationHostMigration did not
+// stop it.)
+typedef DWORD(__thiscall* BeginMigrFn)(void* self, DWORD a, DWORD b, DWORD c);
+static void* g_origBeginMigr = nullptr;
+static DWORD __fastcall SnNoHostMigration(void* self, void*, DWORD a, DWORD b, DWORD c) {
+    if (!g_onlineCtx) return ((BeginMigrFn)g_origBeginMigr)(self, a, b, c);
+    char nm[64]; SpyName(a, nm, sizeof(nm)); Log("invite: host migration for %s refused (the host stays the host)", nm);
+    return 0;
+}
+static void InstallNoMigration() {
+    VtPatch p = { "HostMigrator.BeginHostMigration (refused)", 0x1597c40, 25, 0x8f18f0, (void*)SnNoHostMigration, 0 };
+    void** slot = (void**)((BYTE*)GetModuleHandleW(nullptr) + (0x1597c40 - 0x400000)) + 25;
+    g_origBeginMigr = *slot;
+    ApplyVtPatches(&p, 1);
 }

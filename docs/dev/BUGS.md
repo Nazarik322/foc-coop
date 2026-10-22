@@ -292,6 +292,15 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   as a session; after that MapName returns the old "UI_FrontEnd_m" (many UWorld objects linger) and the relay never
   gets "port"/"go". Details and next steps: PLAN.md "Resume point 2026-10-20 late night". Test: tools/lobbycontinue.ps1.
 
+### B34. Escalation menu: with 3-4 players the members fell back to their own party at the countdown - fixed 2026-10-22
+- Members joined the party and the game lobby, then quit (~50 s after entering the game lobby, or after the host's
+  RMT_LostConnection). Four causes in our Steam chat layer, all fixed; the full trail with dead ends (host migration,
+  bandwidth tier, factions - none were the cause) is in ESCALATION-MENU.md "Tried and result".
+  Test: `tools/esc4menu.ps1 -LobbyWait 80` PASS 4/4.
+
+### B35. Escalation menu: members see "Ability: undefined" on the character card - open
+- Seen 2026-10-22 on every member at CHOOSE CHARACTER (host shows Flak Shield). Not investigated yet.
+
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
   every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all
