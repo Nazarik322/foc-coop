@@ -294,7 +294,7 @@ static void SnSteamLobbyEvent(const char* e) {
 }
 
 // ---------------------------------------------------------------- incoming
-static void FriendsEvent(const char* e); static void TickFriends(); static void TickZeroRegistrant();   // invite.inc
+static void FriendsEvent(const char* e); static void TickFriends(); static void TickZeroRegistrant(); static void TickTeamType(const TickObjs& t); static void TeamTypeRestore();   // invite.inc
 static void SnEvent(const char* e) {
     if (strncmp(e, "friend", 6)) Log("steamnet: event %s", e);
     FriendsEvent(e);
@@ -435,7 +435,7 @@ static void TickSteamChat(const TickObjs& t) {
     InstallInvitePatches();
     SnFixLocalIds(t);
     TickFriends();
-    if (g_onlineCtx) TickZeroRegistrant();
+    if (g_onlineCtx) { TickZeroRegistrant(); TickTeamType(t); } else TeamTypeRestore();
     SnHookAccountId();
     DWORD now = GetTickCount();
     if (g_sn == INVALID_SOCKET) {

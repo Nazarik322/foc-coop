@@ -298,8 +298,19 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   bandwidth tier, factions - none were the cause) is in ESCALATION-MENU.md "Tried and result".
   Test: `tools/esc4menu.ps1 -LobbyWait 80` PASS 4/4.
 
-### B35. Escalation menu: members see "Ability: undefined" on the character card - open
-- Seen 2026-10-22 on every member at CHOOSE CHARACTER (host shows Flak Shield). Not investigated yet.
+### B35. Escalation menu: members see "Ability: undefined" on the character card - fixed 2026-10-22 (4/4 in esc4_play3)
+- Seen on every member at CHOOSE CHARACTER (host: Flak Shield). Cause: the member's 'Game' settings are a plain
+  TnOnlineGameSettingsBase with TeamType 0, so TnCharacterScriptBinding.UseSurvivalCharacter() was false and the
+  abilities were looked up among custom characters. Fix: invite.inc TickTeamType copies the replicated GRI
+  GameTeamStatus into the joined game's settings and the class default (every tick; restored on story maps).
+  Test: `tools/esc4menu.ps1 -Copies A,B`, member screenshot 4_map_B shows Flak Shield.
+
+### B36. Escalation menu: host on AUTOBOTS, members on DECEPTICONS in the game lobby - fixed 2026-10-22
+- The host's Game session listed the host twice; the team assignment gave the second entry team 0. invite.inc
+  TickZeroRegistrant removes duplicate ids. esc4_play3: one DECEPTICONS list on all four.
+
+### B37. Escalation menu: members' party lobby list split into two groups (ring icons) - open
+- Host shows one plain list. See ESCALATION-MENU.md "Tried and result" 2026-10-22.
 
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:

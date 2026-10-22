@@ -255,7 +255,7 @@ static void PokeCommand(const char* args) {
     char on[96]; ObjLabel(obj, on, sizeof(on)); Log("poke: %s +0x%x %d -> %d", on, off, old, v);
 }
 
-// `call <target> <Function> [i:int f:float b:0|1 o:target ...]` (foc_cmd.txt, game thread): ProcessEvent on a script
+// `call <target> <Function> [i:int f:float b:0|1 o:target s:text ...]` (foc_cmd.txt, game thread): ProcessEvent on a script
 // function (sync.inc CallScript). Arguments are 4-byte slots in order (a vector = three f:); the parameter block
 // after the call is logged (return values and out parameters).
 static void CallCommand(const char* args) {
@@ -269,6 +269,12 @@ static void CallCommand(const char* args) {
         if (!*p) break;
         char tok[96]; int i = 0; while (p[i] && p[i] != ' ' && i < 95) { tok[i] = p[i]; i++; } tok[i] = 0; p += i;
         DWORD v = 0;
+        if (!strncmp(tok, "s:", 2) && k + 3 <= 120) {   // FString argument (3 slots: data, num, max); input only
+            static wchar_t sbuf[4][96]; static int si = 0; wchar_t* w = sbuf[si++ & 3];
+            int len = MultiByteToWideChar(CP_ACP, 0, tok + 2, -1, w, 96);   // includes the terminator
+            ((DWORD*)parms)[k++] = (DWORD)(UINT_PTR)w; ((DWORD*)parms)[k++] = len; ((DWORD*)parms)[k++] = len;
+            continue;
+        }
         if (!strncmp(tok, "f:", 2)) { float f = (float)atof(tok + 2); memcpy(&v, &f, 4); }
         else if (!strncmp(tok, "o:", 2)) v = (DWORD)(UINT_PTR)OexecTarget(tok + 2);
         else v = (DWORD)strtol(tok + 2, nullptr, 0);   // i: or b:
@@ -279,6 +285,13 @@ static void CallCommand(const char* args) {
     char line[300]; size_t l = _snprintf_s(line, _TRUNCATE, "call: %s.%s -> %s; parms:", on, fn, ok ? "done" : "failed");
     for (int i = 0; i < 12; i++) l += _snprintf_s(line + l, sizeof(line) - l, _TRUNCATE, " %08lx", ((DWORD*)parms)[i]);
     Log("%s", line);
+    for (int i = 0; i + 2 < 40; i++) {   // FStrings in the parameter block (arguments and returned strings)
+        DWORD* d = (DWORD*)parms + i; int num = (int)d[1];
+        if (num < 1 || num > 1024 || (int)d[2] < num || !Rd((void*)(UINT_PTR)d[0], num * 2)) continue;
+        const wchar_t* w = (const wchar_t*)(UINT_PTR)d[0]; if (w[num - 1]) continue;
+        char a[1100]; WideCharToMultiByte(CP_ACP, 0, w, -1, a, sizeof(a), nullptr, nullptr);
+        Log("call:   string at +0x%x: \"%s\"", i * 4, a); i += 2;
+    }
 }
 
 // `funcs <part> [part...]` (foc_cmd.txt): log the Function objects whose name contains one of the parts, with their

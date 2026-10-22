@@ -149,5 +149,75 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
   not move the menu cursor (input.inc `input click`), so tests use keys + Steam invites; Find Match, friend adding
   and Select Map are not done/checked yet. The background export of HostMigrator/TnHostMigrator (export_classes.ps1)
   finished; not needed any more (there is no host migration in a private match).
+- 2026-10-22 - B35 "Ability: undefined" analysed (exported TnCharacterScriptBinding etc. to
+  coop-anything/local/script/CharUI): GetCharacterAbilities uses the iconic Escalation character only when
+  `UseSurvivalCharacter()` = `TnGame.GetGameTypeAsGameTeamStatus() == 2`. That reads the 'Game' session settings
+  first; on a member they are a plain TnOnlineGameSettingsBase with TeamType 0, so the card looked among custom
+  characters (none) -> undefined. Host: TnOnlineGameSettingsSVPrivate, TeamType 2. Fix tried: TickTeamType
+  (invite.inc) copies the replicated GRI GameTeamStatus into the member's Game settings while TeamType is 0.
+  Result: see next entry.
+- 2026-10-22 - TickTeamType (once a second) result: member's TeamType became 2 and
+  `call obj:TnCharacterScriptBinding_N GetCharacterAbilities s:Megatron` (new `s:` string args in `call`) returns
+  "ShieldAbility,Sprint," on the member as on the host - but the card still said undefined, also after switching
+  to Shockwave. On the map the member gets a new settings object with TeamType 0 (second "0 -> 2" log line right
+  at the map load); the character movie reads its data at load, before the 1 s check. Also seen: the first version
+  changed the member's own party presence settings (TnOnlineGameSettingsPartyPresenceSV) - now own sessions
+  (OwningPlayerId = us) are skipped. Fix tried: check every tick and set the class default
+  Default__TnOnlineGameSettingsBase TeamType as well while we are a member of a joined game (restored on story
+  maps). Result: see next entry.
+- 2026-10-22 - every-tick check + class default (`esc2_ability3`): **B35 fixed** - the member's card shows
+  "Ability: Flak Shield" with its description like the host. Log: class default and the Game settings set to 2 at
+  once in the game lobby; no second fix needed at the map load any more.
+- 2026-10-22 - 4-copy regression with the B35 fix (`esc4_ability`, `-LobbyWait 80`): connection PASS 4/4, but only
+  B had the fix logged and a correct card; **C and D still showed "Ability: undefined"** and never logged a
+  TeamType change. Suspect the OwningPlayerId skip (members' joined settings may carry their own id). Changed: the
+  joined game is recognised by its class (exactly TnOnlineGameSettingsBase) instead; diagnostic log lines
+  "teamtype gri ... / teamtype check ..." (8 max, every 15 s). Result: see next entry.
+- 2026-10-22 - **wrong conclusion corrected**: C and D were not a code problem - that regression run used
+  `-NoBuild`, and the previous build had been deployed to A and B only (Build-Deploy deploys to the `-Copies` of
+  that run). Rerun with a build for all four (`esc4_ability2`): B, C and D all log "TeamType 0 -> 2"; joined
+  settings have OwningPlayerId 0. Rule: after a build for some copies, never run other copies with `-NoBuild`.
+- 2026-10-22 - owner: compare every player's screen, enter the game, check names. New `tools/shotgrid.py`
+  (2x2 grid per step, difference of each copy from the others, ODD flag) on `esc4_ability2`: members' game lobby
+  lacks the "ESCALATION / SURVIVE WAVES OF ATTACKS" title and the "DECEPTICONS" team list (they show the party-style
+  list); members' party lobby splits the list into groups with a chain icon and orders it differently than the
+  host. Reading: the member's Game settings are the plain TnOnlineGameSettingsBase (no mode defaults). Fix tried:
+  SpyJoin builds TnOnlineGameSettingsSVPrivate for a 'Game' join with plain base settings and copies the session
+  fields (ReservationChannel, OwningPlayerId, connection counts, LAN). Party-lobby grouping not addressed yet.
+  `esc4menu.ps1 -Play [-Rounds n]`: characters by RIGHT x index + ENTER, rounds of game and TAB screenshots, names
+  from foc_state.json of every copy, shotgrid at the end. Result: see next entry.
+- 2026-10-22 - `esc4_play1` (4 copies, `-Play -Rounds 3`): connection PASS 4/4; SVPrivate join settings work -
+  members' game lobby now has the ESCALATION title and the DECEPTICONS list. **TAB in the game: identical on all
+  four** (DECEPTICONS, Bumblebee, Ironhide, Optimus, Ratchet, 375 each). Idle players get killed in wave 1 ("WAVE 1
+  FAILED, RESTARTING WAVE") - normal, nobody plays. Remaining visual differences: (1) party lobby on members: the
+  list is split into groups, some with a chain icon, different per member; host: one plain list; (2) game lobby on
+  members: their own name in a separate block under the team list. `sessions` shows every member's Party and Game
+  sessions hold all four ids plus an id-0 entry -> the grouping is not about who is in the session; next: dump
+  TeamNumber/PartyId of the registrants (`sessions` now prints them; esc4menu calls `sessions` after steps 2 and 3).
+  Names from foc_state.json: clients only list themselves (state file limitation), the TAB shots are the check.
+- 2026-10-22 - registrant dump (`esc3_party1`): PartyId 255 and TeamNumber equal everywhere - **not** the grouping
+  cause. **Correction of an earlier reading**: the id-0 registrant is the member itself (bandwidth tier 1 = our member
+  value), not a second host entry; the joined game's OwningPlayerId was 0 as well, which is why member heartbeats
+  went to "0" and the beacon timed the 0 entry out after ~50 s. In the game lobby the 0 entry has team 255 -> the
+  own name in a separate block. Fix tried (replaces the receive-time copy): TickZeroRegistrant removes the 0 entry
+  when our real-id entry exists (else gives it our id); SpyJoin sets the joined game's OwningPlayerId to the owner of
+  the announced game channel. Result: see next entry.
+- 2026-10-22 - result `esc4_play2` (zero-registrant removal + real owner): the 70 s lobby wait held, but **FAIL at
+  the start**: with the real owner the members' GetResolvedConnectString returned 1 with '0.0.0.0:0', the travel
+  code took it as "the game resolved the host itself", the game sent its connect packets to 0.0.0.0 and the members
+  fell back to their own party after a minute. Fix: SpyResolve treats 0.0.0.0 / port 0 as a failure (the relay path
+  connects). Also **AUTOBOTS vs DECEPTICONS** in the game lobby (owner's "factions" remark): the host's
+  RMT_TeamAssignments (0x04) listed 5 entries for 4 players - the host twice; its second entry got team 0 (AUTOBOTS),
+  everybody else team 1. The duplicate comes from our creation fix (local 0 entry -> our id) plus the party
+  registration of every member. Fix: TickZeroRegistrant (host and members) removes a second entry of the same id.
+  Party lobby grouping on members: still open. Result: see next entry.
+- 2026-10-22 - result `esc4_play3` (4 copies, 70 s lobby, `-Play -Rounds 3`): **PASS 4/4**; members joined the match
+  through the relay after "empty host address"; host removed its second registrant. Game lobby: one DECEPTICONS
+  list with all four on every copy (each copy lists itself first - looks like the game's own order). Character
+  cards: Flak Shield on all. TAB in the game: identical on all four. Still different: party lobby on members - the
+  list is split, one group with ring icons: on each member that group is itself, the host and those who joined the
+  party after it; the plain group are members that were in the party before it joined. Ring icons also appear in the
+  game lobby on varying names. Registrant PartyId/TeamNumber equal; BeaconConnectionStatus of the host on members'
+  Party session 0. Open.
 - Test pitfall: copies started 25 s apart still sometimes die at D3D start (C had no log after 5 s, 2026-10-22);
   check every copy has "event hello" before reading the result.

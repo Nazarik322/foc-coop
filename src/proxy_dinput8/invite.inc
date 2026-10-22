@@ -117,6 +117,32 @@ static DWORD __fastcall SpyJoin(void* self, void*, DWORD num, DWORD name, DWORD*
         char c[64] = ""; BYTE* o = (BYTE*)(UINT_PTR)result[0]; if (IsObjFast(o)) ClassNameOf(o, c, sizeof(c));
         if (!strstr(c, "PartyPersistent")) { result[0] = g_invSettings; Log("invite: party join uses the invite settings %08lx instead of %s", g_invSettings, c); }
     }
+    // Joining the host's game: the result has the plain TnOnlineGameSettingsBase too. Its defaults lack everything of
+    // the mode (TeamType 0 -> character card "Ability: undefined" B35; no ESCALATION title or DECEPTICONS team list in
+    // the members' game lobby, 2026-10-22 screenshot grid). The SV classes add no variables, only defaults: build a
+    // TnOnlineGameSettingsSVPrivate and carry the session fields over. (Escalation only for now; versus later needs
+    // the host's class.)
+    if (result && g_onlineCtx && !strcmp(nm, "Game")) {
+        BYTE* o = (BYTE*)(UINT_PTR)result[0]; char c[64] = ""; if (IsObjFast(o)) ClassNameOf(o, c, sizeof(c));
+        if (!strcmp(c, "TnOnlineGameSettingsBase")) {
+            if (BYTE* sv = ConstructByClassName("TnOnlineGameSettingsSVPrivate")) {
+                MirrorProp* mp[] = { &g_mpResChan, &g_mpOwnerId };
+                const char* mn[] = { "ReservationChannel", "OwningPlayerId" };
+                for (int i = 0; i < 2; i++) if (MirrorPropFind("OnlineGameSettings", mn[i], *mp[i])) *(unsigned long long*)(sv + mp[i]->off) = *(unsigned long long*)(o + mp[i]->off);
+                // the joined game's owner came as 0 (2026-10-22 dump): the owner of the game channel the host announced
+                if (g_mpOwnerId.off > 0 && !*(unsigned long long*)(sv + g_mpOwnerId.off) && g_announcedCh) {
+                    *(unsigned long long*)(sv + g_mpOwnerId.off) = ChanOwner(g_announcedCh);
+                    Log("invite: game join owner 0 -> %llu", ChanOwner(g_announcedCh));
+                }
+                MirrorProp* ip[] = { &g_mpNumPub, &g_mpNumPriv, &g_mpOpenPub, &g_mpOpenPriv };
+                const char* in[] = { "NumPublicConnections", "NumPrivateConnections", "NumOpenPublicConnections", "NumOpenPrivateConnections" };
+                for (int i = 0; i < 4; i++) if (MirrorPropFind("OnlineGameSettings", in[i], *ip[i])) *(int*)(sv + ip[i]->off) = *(int*)(o + ip[i]->off);
+                if (g_mpLan.off && g_mpLan.mask) *(DWORD*)(sv + g_mpLan.off) |= g_mpLan.mask;
+                result[0] = (DWORD)(UINT_PTR)sv;
+                Log("invite: game join uses TnOnlineGameSettingsSVPrivate %p instead of the plain base settings", sv);
+            }
+        }
+    }
     DWORD r = ((JoinFn)g_origJoin)(self, num, name, result);
     Log("gamespy: JoinOnlineGame -> %lu", r);
     return r;
@@ -188,9 +214,20 @@ typedef DWORD(__thiscall* ResolveFn)(void* self, DWORD name, FStr* out);
 static void* g_origResolve = nullptr;
 static DWORD __fastcall SpyResolve(void* self, void*, DWORD name, FStr* out) {
     DWORD r = ((ResolveFn)g_origResolve)(self, name, out);
-    g_resolvedAt = GetTickCount();
     char nm[64]; SpyName(name, nm, sizeof(nm));
     Log("gamespy: GetResolvedConnectString(%s) -> %lu '%ls'", nm, r, (out && out->Num > 0 && out->Data) ? out->Data : L"");
+    // With the real host as the joined game's owner (2026-10-22) the game "resolves" '0.0.0.0:0' and sends its
+    // connect packets nowhere; the members fell back to their own party after a minute. An empty address is a
+    // failure: the Steam relay path (TickSteamTravel) connects instead.
+    bool empty = false;
+    if (r && out && out->Data && out->Num > 0) {
+        const wchar_t* a = out->Data; size_t n = wcslen(a);
+        empty = !wcsncmp(a, L"0.0.0.0", 7) || (n >= 2 && a[n - 2] == L':' && a[n - 1] == L'0');
+    }
+    if (empty && g_onlineCtx) {
+        Log("gamespy: empty host address - left to the Steam relay"); return 0;
+    }
+    if (r) g_resolvedAt = GetTickCount();
     return r;
 }
 static void InstallGameSpy() {
@@ -223,32 +260,98 @@ static void InstallPeerPatch() {
     ApplyVtPatches(&p, 1);
 }
 
-// A member's sessions hold the host as a registrant with id 0 next to its real id (2026-10-22 `sessions` dump).
-// Messages from the host update only the real entry's MessageReceivedTime (registrant +0x50, double), so about 50 s
-// after joining the game lobby the member's beacon gave up on entry 0 and quit to its party ("host quit") unless
-// the countdown had already finished. Keep entry 0's receive time at the newest time of the channel owners we are
-// a member of.
+// A member's joined sessions hold an extra registrant with id 0: the member itself, added by the join before its id
+// was known (bandwidth tier 1 = our member value; its real-id entry comes from the host's member list). Effects seen
+// 2026-10-22: the joined game's OwningPlayerId was 0 too, so the member sent heartbeats to "0" and its beacon timed
+// that entry out ~50 s after entering the game lobby (quit to party); in the game lobby the 0 entry has no team and
+// the member saw its own name in a separate block; the party list was split into groups. Fix: drop the 0 entry when
+// our real-id entry exists, otherwise give it our id. (Before: its receive time was copied from the host - a
+// symptom fix, replaced.) Every tick outside the story.
 static void TickZeroRegistrant() {
-    BYTE* os = OnlineSubObject(); if (!os) return;
-    unsigned long long owners[8]; int no = 0;
-    for (int i = 0; i < g_nchans && no < 8; i++) if (g_chans[i].state == 2 && g_chans[i].owner != g_snMe) owners[no++] = g_chans[i].owner;
-    if (!no) return;
+    BYTE* os = OnlineSubObject(); if (!os || !g_snMe) return;
     static LONG logged = 0;
     __try {
         BYTE* arr = *(BYTE**)(os + 0xec); int n = *(int*)(os + 0xf0);
         for (int i = 0; i < n && i < 8; i++) {
-            BYTE* e = arr + 0x24 * i; BYTE* regs = *(BYTE**)(e + 0xc); int nr = *(int*)(e + 0x10);
+            BYTE* e = arr + 0x24 * i; BYTE* regs = *(BYTE**)(e + 0xc); int* pnr = (int*)(e + 0x10); int nr = *pnr;
             if (!regs || nr <= 0 || nr > 32) continue;
-            double best = 0; BYTE* zero = nullptr;
-            for (int r = 0; r < nr; r++) {
-                BYTE* rg = regs + 0x60 * r; unsigned long long id = *(unsigned long long*)rg;
-                if (!id) { zero = rg; continue; }
-                for (int k = 0; k < no; k++) if (id == owners[k] && *(double*)(rg + 0x50) > best) best = *(double*)(rg + 0x50);
+            char nm[64]; SpyName(*(DWORD*)e, nm, sizeof(nm));
+            // the same id twice (host's Game session: its own 0 entry renamed at creation + the party registration of
+            // every member, 2026-10-22): the team assignment then gave the host's second entry team 0 (AUTOBOTS) and
+            // the rest team 1 (DECEPTICONS) in the game lobby. Keep the first entry of each id.
+            for (int r = 1; r < nr; r++) {
+                unsigned long long id = *(unsigned long long*)(regs + 0x60 * r); if (!id) continue;
+                bool dup = false; for (int q = 0; q < r && !dup; q++) dup = *(unsigned long long*)(regs + 0x60 * q) == id;
+                if (!dup) continue;
+                memmove(regs + 0x60 * r, regs + 0x60 * (r + 1), 0x60 * (nr - r - 1)); *pnr = --nr; r--;
+                if (InterlockedIncrement(&logged) <= 12) Log("invite: session %s: second registrant %llu removed", nm, id);
             }
-            if (zero && best > *(double*)(zero + 0x50)) {
-                *(double*)(zero + 0x50) = best;
-                if (InterlockedIncrement(&logged) <= 3) Log("invite: session registrant 0 receive time follows the host (%.2f)", best);
+            int zero = -1; bool me = false;
+            for (int r = 0; r < nr; r++) { unsigned long long id = *(unsigned long long*)(regs + 0x60 * r); if (!id && zero < 0) zero = r; if (id == g_snMe) me = true; }
+            if (zero < 0) continue;
+            if (me) {   // remove (its name string and peer-info array are left behind: a few bytes)
+                memmove(regs + 0x60 * zero, regs + 0x60 * (zero + 1), 0x60 * (nr - zero - 1)); *pnr = nr - 1;
+                if (InterlockedIncrement(&logged) <= 12) Log("invite: session %s: registrant 0 removed (we are in it as %llu)", nm, g_snMe);
+            } else {
+                *(unsigned long long*)(regs + 0x60 * zero) = g_snMe;
+                if (InterlockedIncrement(&logged) <= 12) Log("invite: session %s: registrant 0 -> %llu", nm, g_snMe);
             }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+// B35 (2026-10-22): a member's 'Game' session settings are a plain TnOnlineGameSettingsBase with TeamType 0 (the host
+// has TnOnlineGameSettingsSVPrivate, TeamType 2 = GTS_SingleTeamGame). TnGame.GetGameTypeAsGameTeamStatus reads the
+// settings first, so on the member TnCharacterScriptBinding.UseSurvivalCharacter() was false: the character card
+// looked the ability up among custom characters and showed "Ability: undefined". The replicated GRI has the right
+// GameTeamStatus; copy it into the member's Game settings while their TeamType is still 0. Checked once a second.
+static MirrorProp g_mpWorldInfo = {}, g_mpGri = {}, g_mpGts = {}, g_mpTeamType = {};
+// Every tick, and the class default too: at the map load the member gets a new settings object (TeamType 0 again) and
+// the character screen read it before a once-a-second check had fixed it (2026-10-22: card still "undefined").
+static BYTE* g_ogsBaseCdo = nullptr; static BYTE g_ogsCdoOrig = 0; static bool g_ogsCdoSaved = false;
+static void TeamTypeRestore() {   // story maps: the class default back to its own value
+    if (!g_ogsCdoSaved || !IsObjFast(g_ogsBaseCdo) || g_mpTeamType.off <= 0) return;
+    g_ogsBaseCdo[g_mpTeamType.off] = g_ogsCdoOrig; g_ogsCdoSaved = false;
+    Log("invite: Default__TnOnlineGameSettingsBase TeamType restored to %d", (int)g_ogsCdoOrig);
+}
+static void TickTeamType(const TickObjs& t) {
+    if (!MirrorPropFind("Actor", "WorldInfo", g_mpWorldInfo) || !MirrorPropFind("WorldInfo", "GRI", g_mpGri) ||
+        !MirrorPropFind("TnGameReplicationInfo", "GameTeamStatus", g_mpGts) || !MirrorPropFind("TnOnlineGameSettingsBase", "TeamType", g_mpTeamType)) return;
+    BYTE* pc = nullptr;
+    for (int i = 0; i < t.npc && !pc; i++) if (IsObjFast(t.pc[i]) && IsLocalPC(t.pc[i])) pc = t.pc[i];
+    if (!pc) return;
+    BYTE* os = OnlineSubObject(); if (!os) return;
+    __try {
+        BYTE* wi = *(BYTE**)(pc + g_mpWorldInfo.off); if (!IsObjFast(wi)) return;
+        BYTE* gri = *(BYTE**)(wi + g_mpGri.off); if (!IsObjFast(gri)) return;
+        BYTE gts = *(gri + g_mpGts.off);
+        { static DWORD at = 0; static int k = 0; char gn[64] = ""; ClassNameOf(gri, gn, sizeof(gn));
+          if (k < 8 && (LONG)(GetTickCount() - at) >= 0) { at = GetTickCount() + 15000; k++; Log("invite: teamtype gri %s status %d", gn, (int)gts); } }
+        if (!gts || gts > 4) return;
+
+        BYTE* arr = *(BYTE**)(os + 0xec); int n = *(int*)(os + 0xf0);
+        for (int i = 0; i < n && i < 8; i++) {
+            BYTE* e = arr + 0x24 * i; char nm[64]; SpyName(*(DWORD*)e, nm, sizeof(nm));
+            if (strcmp(nm, "Game")) continue;
+            BYTE* gs = *(BYTE**)(e + 8); if (!IsObjFast(gs)) continue;
+            // only a game we joined: its settings are the plain base class (our own sessions use SV/Party classes, and
+            // our party presence settings also sit under 'Game'). An OwningPlayerId check missed members C and D in a
+            // 4-copy run (2026-10-22), so the class decides.
+            char cn0[64] = ""; ClassNameOf(gs, cn0, sizeof(cn0));
+            static DWORD diagAt = 0; static int diagN = 0;
+            if (diagN < 8 && (LONG)(GetTickCount() - diagAt) >= 0) { diagAt = GetTickCount() + 15000; diagN++;
+                Log("invite: teamtype check: gri status %d, Game settings %s TeamType %d, owner %llu", (int)gts, cn0, (int)gs[g_mpTeamType.off],
+                    MirrorPropFind("OnlineGameSettings", "OwningPlayerId", g_mpOwnerId) ? *(unsigned long long*)(gs + g_mpOwnerId.off) : 0ull); }
+            if (strcmp(cn0, "TnOnlineGameSettingsBase")) continue;
+            if (!g_ogsBaseCdo) g_ogsBaseCdo = FindObjByLabel("Default__TnOnlineGameSettingsBase");
+            if (IsObjFast(g_ogsBaseCdo) && g_ogsBaseCdo[g_mpTeamType.off] != gts) {
+                if (!g_ogsCdoSaved) { g_ogsCdoOrig = g_ogsBaseCdo[g_mpTeamType.off]; g_ogsCdoSaved = true; }
+                Log("invite: Default__TnOnlineGameSettingsBase TeamType %d -> %d (member of a joined game)", (int)g_ogsBaseCdo[g_mpTeamType.off], (int)gts);
+                g_ogsBaseCdo[g_mpTeamType.off] = gts;
+            }
+            BYTE* tt = gs + g_mpTeamType.off; if (*tt) continue;
+            *tt = gts;
+            Log("invite: Game settings %s TeamType 0 -> %d (from the GRI)", cn0, (int)gts);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
@@ -270,7 +373,8 @@ static void SessionsCommand() {
             for (int r = 0; r < nr && r < 8; r++) {   // registrant tail: HasHeadset/BeaconConnectionStatus, heartbeat times
                 const BYTE* rg = regs + 0x60 * r; char hx[2 * 0x30 + 1];
                 for (int j = 0; j < 0x30; j++) _snprintf_s(hx + 2 * j, sizeof(hx) - 2 * j, _TRUNCATE, "%02x", rg[0x30 + j]);
-                Log("sessions:   %llu +30: %s recv %.2f sent %.2f", *(const unsigned long long*)rg, hx, *(const double*)(rg + 0x50), *(const double*)(rg + 0x58));
+                Log("sessions:   %llu skill %d hosting %d bw %d nat %d team %d party %d | +30: %s recv %.2f sent %.2f", *(const unsigned long long*)rg,
+                    *(const int*)(rg + 0x14), rg[0x18], rg[0x19], rg[0x1a], rg[0x1b], rg[0x1c], hx, *(const double*)(rg + 0x50), *(const double*)(rg + 0x58));
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) { Log("sessions: fault"); }
