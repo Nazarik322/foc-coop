@@ -3,7 +3,7 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
-## 2026-10-22: Escalation through the game's own menus, 4 players (branch wip/escalation-menu, not released)
+## 2026-10-22: Escalation through the game's own menus, 4 players (released as v0.8.0-dev, commit b51f5f5)
 - ESCALATION from the main menu over Steam (Spacewar relay): party lobby, Steam invites / Friends List join,
   Private Match > Create Game, game lobby with all players on one team, Start Game, everybody loads the map.
 - Fixed on the way (details and dead ends in ESCALATION-MENU.md "Tried and result"): chat member-change call
