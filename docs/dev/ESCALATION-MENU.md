@@ -144,5 +144,10 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
 - 2026-10-22 - all fixes + mock invite fix, `-LobbyWait 80` (`esc4_zero2`): **PASS 4 of 4**. All four in the game
   lobby (team DECEPTICONS: Bumblebee, Ironhide, Optimus, Ratchet; map Oblivion), 80 s wait, all four at CHOOSE
   CHARACTER on the map. Members still show "Ability: undefined" on the character card (open).
+- 2026-10-22 - observations still open after PASS 4/4: members show "Ability: undefined" on CHOOSE CHARACTER
+  (host: Flak Shield) - B35; in-game Send Invite button reacts to mouse/gamepad only, and injected mouse clicks do
+  not move the menu cursor (input.inc `input click`), so tests use keys + Steam invites; Find Match, friend adding
+  and Select Map are not done/checked yet. The background export of HostMigrator/TnHostMigrator (export_classes.ps1)
+  finished; not needed any more (there is no host migration in a private match).
 - Test pitfall: copies started 25 s apart still sometimes die at D3D start (C had no log after 5 s, 2026-10-22);
   check every copy has "event hello" before reading the result.
