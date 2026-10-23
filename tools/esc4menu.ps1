@@ -3,7 +3,7 @@
 # once, ini escautoaccept=1 in B/C/D); A: Private Match -> Create Game (everyone in the game lobby) -> Start Game
 # (everyone loads the map through the Steam relay). No player actions. Windows 800x450 in a 2x2 grid; screenshots of
 # all copies after each step in $Out. Invented names (ini playername) so the lobby lists are readable.
-param([string[]]$Copies = @("A", "B", "C", "D"), [string]$Out = "E:\FoC-coop\sessions\esc4menu", [switch]$NoBuild, [switch]$Keep, [switch]$Probe, [int]$LobbyWait = 0, [switch]$Play, [int]$Rounds = 3, [int]$MapSteps = 0, [switch]$MenuInvite)
+param([string[]]$Copies = @("A", "B", "C", "D"), [string]$Out = "E:\FoC-coop\sessions\esc4menu", [switch]$NoBuild, [switch]$Keep, [switch]$Probe, [int]$LobbyWait = 0, [switch]$Play, [int]$Rounds = 3, [int]$MapSteps = 0, [switch]$MenuInvite, [switch]$Dump, [string]$MemberCmd = "")
 . "$PSScriptRoot\dev.ps1"
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -45,12 +45,15 @@ try {
     Start-Sleep 20
   }
   Start-Sleep 15
+  if ($MemberCmd) { foreach ($c in $Copies | Where-Object { $_ -ne "A" }) { Send-Cmd $c $MemberCmd }; Start-Sleep 3 }   # experiments (B37)
   foreach ($c in $Copies) { Say "after invites: $c state $(State $c)"; Shot $c "2_party_together"; Send-Cmd $c "sessions" }
+  if ($Dump) { foreach ($c in $Copies) { Send-Cmd $c "dump TnPlayerReplicationInfoLobby $Out\pri2_$c.txt 0x600" }; Start-Sleep 3 }   # B37 lobby list icons
   if ($Probe) {   # registrant dumps (heartbeat times) every 3 s while the game lobby forms
     Keys "A" @("DOWN", "ENTER", "WAIT6", "ENTER")
     for ($i = 0; $i -lt 10; $i++) { foreach ($c in $Copies) { Send-Cmd $c "sessions" }; Start-Sleep 3 }
   } else { Keys "A" @("DOWN", "ENTER", "WAIT6", "ENTER", "WAIT35") }
   foreach ($c in $Copies) { Say "after Create Game: $c state $(State $c)"; Shot $c "3_game_lobby"; Send-Cmd $c "sessions" }
+  if ($Dump) { foreach ($c in $Copies) { Send-Cmd $c "dump TnPlayerReplicationInfoLobby $Out\pri3_$c.txt 0x600" }; Start-Sleep 3 }
   if ($LobbyWait -gt 0) { Say "waiting $LobbyWait s in the game lobby"; Start-Sleep $LobbyWait; foreach ($c in $Copies) { Say "after lobby wait: $c state $(State $c)" } }
   if ($MapSteps -gt 0) {   # 2026-10-23: Select Map (second item) RIGHT x n, back UP to Start Game; covers every ESC map
     $k = @("DOWN"); for ($j = 0; $j -lt $MapSteps; $j++) { $k += "RIGHT"; $k += "WAIT2" }; $k += "UP"; Keys "A" $k; Shot "A" "3b_map_selected"

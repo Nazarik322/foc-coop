@@ -240,3 +240,14 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
   again 3 s after subscribing, hoping to clear the members' icons (B37) -> **no change**: those icons are chain
   links (party grouping), not spinners. Reverted.
 - 2026-10-23 - `esc4_final` (4 copies, -LobbyWait 80 -MenuInvite -MapSteps 3, Iacon): PASS 4/4, no host spinner.
+- 2026-10-23 - owner: "the others still have it" (spinners, colours) -> screenshots of every copy at each lobby step.
+  The members' "chain/ring" icons are the same spinner in other rotation frames (**earlier reading "chain links,
+  party grouping" was wrong**). Steps: (a) status 0 whispers replaced by our broadcast -> Party statuses 1 everywhere,
+  Game: members still 0 for each other; (b) owner forwards whispered member statuses + gives a new subscriber all of
+  them -> all 1 (`esc4_spin5`); (c) `-Dump` (PRI bytes, tools/esc4menu.ps1) showed one extra PRI with id 0 and the
+  member's own name on every member -> destroyed (Actor.Destroy has no Function object; DestroyActor works) -> the
+  party lobby list no longer splits (`esc4_phantom2`), but a spinner stayed at the host: the party host had never
+  broadcast a status (no 0x16 before its party beacon existed) -> "16 01 00000000" fallback -> `esc4_phantom4`: party
+  lobby identical on all four, game lobby without spinners. Remaining: B41.
+- Tried, did not work: `call game SyncPlaceholderPRIsWithSessions` (no Function object in this build).
+- Test pitfall: B once never got "event hello" (state TnFrontendStatisticsCollection) - start flake, rerun.

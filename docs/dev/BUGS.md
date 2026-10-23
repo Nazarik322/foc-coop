@@ -309,8 +309,13 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - The host's Game session listed the host twice; the team assignment gave the second entry team 0. invite.inc
   TickZeroRegistrant removes duplicate ids. esc4_play3: one DECEPTICONS list on all four.
 
-### B37. Escalation menu: members' party lobby list split into two groups (ring icons) - open
-- Host shows one plain list. See ESCALATION-MENU.md "Tried and result" 2026-10-22.
+### B37. Escalation menu: members' party lobby list split into two groups (ring icons) - fixed 2026-10-23
+- Host shows one plain list. See ESCALATION-MENU.md "Tried and result" 2026-10-22/23.
+- Two causes. (1) The "rings" were the lobby's connecting spinner (TnPlayerReplicationInfo.IsConnecting, captured in
+  different rotation frames), see B40. (2) The split list: every member had a fifth lobby PRI - UniqueId 0, its own
+  name - the placeholder made from the id-0 registrant before TickZeroRegistrant replaced it. invite.inc
+  TickPhantomPri destroys it (DestroyActor) once our real PRI is in GRI.PRIArray. `esc4_phantom4`: the party lobby
+  list is the same on all four copies (one list, same order, no icons).
 
 ### B38. Escalation over real Steam (2 PCs): the friend never loads the map - fixed 2026-10-23 (mock, all 4 maps; real 2-PC retest pending)
 - First real test (owner + a friend, 2026-10-23, logs: owner foc_coop.log in the Steam folder, friend's copy on the
@@ -344,6 +349,23 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   status 0 ("1600") and nothing else. Fix: steamnet.inc NoteMyStatus/TickStatusReplay - a status 0 sent within 3 s
   of subscribing is followed by our last non-zero status 3 s after the subscription. esc3_spin1, esc4_final: no
   spinner on the host. Not the same as B37 (members' chain icons, static) - those stay.
+- **Correction** (same day): the members' icons were spinners as well. Statuses in `sessions` (registrant +0x4d):
+  the host and every member whispered "16 00" (status 0) to each new channel member - a beacon created after the
+  status broadcast answers with 0; the party host never broadcast at all (its status 1 went out before its beacon
+  existed). Final fix (steamnet.inc): a whispered "16 00" is sent as our last broadcast status (or "16 01 00000000"
+  if there was none); the channel owner keeps each member's last status, passes whispered ones on to the other
+  members and gives a new subscriber everybody's; statuses received on a channel are fired again 3 and 8 s later
+  (they arrive before the joined session has the registrants). The earlier "replay 3 s after subscribing" is
+  replaced. `esc4_spin5`/`esc4_phantom4`: every registrant status 1 on every copy (self entries aside), no spinner
+  in the party or game lobby on any copy.
+- Found on the way: copies on one PC picked the same local relay port (7790 + pid % 40: B and C on 7822, FAIL 3/4
+  in `esc4_spin5`); TickSteamTravel now takes the first free port from there.
+
+### B41. Escalation game lobby: small differences between copies - open
+- `esc4_phantom4` game lobby: the host and B show grey ping bars, C and D green; B draws the team list and title in
+  blue (others purple - B's profile colour setting? not checked); members show Difficulty EASY while the host has
+  HARD (the member builds its own SVPrivate settings, the host's settings are not sent; display only - the host runs
+  the match). Map picture says OBLIVION after Select Map on every copy.
 - Also seen (open, minor): members show Difficulty EASY while the host shows HARD; the map picture says OBLIVION
   after Select Map on every copy (the loaded map was the selected one).
 

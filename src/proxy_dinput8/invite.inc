@@ -300,12 +300,48 @@ static void TickZeroRegistrant() {
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
 }
 
+// B37 (2026-10-23): every member had one more lobby PRI than the host - a PlayerReplicationInfo with UniqueId 0 and
+// the member's own name (the placeholder made from the id-0 registrant before TickZeroRegistrant replaced it). The
+// party lobby then split the member's list into two groups with a link icon. Once a second in a lobby: such a PRI
+// next to our real one is destroyed (TnActor DestroyActor, as the GRI does with its invite PRI; Actor.Destroy has no
+// Function object in this build), or else taken out of GRI.PRIArray, the list the lobby screen shows.
+static MirrorProp g_mpWorldInfo = {}, g_mpGri = {}, g_mpGts = {}, g_mpTeamType = {};
+static MirrorProp g_mpPriArray = {};
+static void TickPhantomPri(const TickObjs& t) {
+    static DWORD next = 0; DWORD now = GetTickCount(); if ((LONG)(now - next) < 0) return; next = now + 1000;
+    if (!g_snMe || !MirrorPropFind("Actor", "WorldInfo", g_mpWorldInfo) || !MirrorPropFind("WorldInfo", "GRI", g_mpGri) ||
+        !MirrorPropFind("GameReplicationInfo", "PRIArray", g_mpPriArray)) return;
+    BYTE* pc = nullptr;
+    for (int i = 0; i < t.npc && !pc; i++) if (IsObjFast(t.pc[i]) && IsLocalPC(t.pc[i])) pc = t.pc[i];
+    if (!pc) return;
+    BYTE* victim = nullptr; bool mine = false; BYTE* gri = nullptr; int vi = -1;
+    __try {
+        BYTE* wi = *(BYTE**)(pc + g_mpWorldInfo.off); if (!IsObjFast(wi)) return;
+        gri = *(BYTE**)(wi + g_mpGri.off); if (!IsObjFast(gri)) return;
+        char gn[64] = ""; ClassNameOf(gri, gn, sizeof(gn)); if (strcmp(gn, "TnGameReplicationInfoLobby")) return;
+        BYTE** pri = *(BYTE***)(gri + g_mpPriArray.off); int n = *(int*)(gri + g_mpPriArray.off + 4);
+        for (int i = 0; i < n && i < 32; i++) {
+            BYTE* p = pri[i]; if (!IsObjFast(p)) continue;
+            unsigned long long id = *(unsigned long long*)(p + 0x230);
+            if (id == g_snMe) mine = true; else if (!id && !victim) { victim = p; vi = i; }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return; }
+    if (!victim || !mine) return;
+    char on[96]; ObjLabel(victim, on, sizeof(on));
+    static bool noDestroy = false; bool ok = false;
+    if (!noDestroy) { BYTE parms[16] = {}; ok = CallScript(victim, "DestroyActor", parms, sizeof(parms)); if (!ok) noDestroy = true; }
+    if (!ok) __try {
+        BYTE** pri = *(BYTE***)(gri + g_mpPriArray.off); int* pn = (int*)(gri + g_mpPriArray.off + 4);
+        if (vi >= 0 && vi < *pn && pri[vi] == victim) { memmove(pri + vi, pri + vi + 1, sizeof(BYTE*) * (*pn - vi - 1)); --*pn; }
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return; }
+    static int nlog = 0; if (nlog++ < 8) Log("invite: lobby PRI %s with id 0 next to ours %s", on, ok ? "destroyed" : "taken out of GRI.PRIArray");
+}
+
 // B35 (2026-10-22): a member's 'Game' session settings are a plain TnOnlineGameSettingsBase with TeamType 0 (the host
 // has TnOnlineGameSettingsSVPrivate, TeamType 2 = GTS_SingleTeamGame). TnGame.GetGameTypeAsGameTeamStatus reads the
 // settings first, so on the member TnCharacterScriptBinding.UseSurvivalCharacter() was false: the character card
 // looked the ability up among custom characters and showed "Ability: undefined". The replicated GRI has the right
 // GameTeamStatus; copy it into the member's Game settings while their TeamType is still 0. Checked once a second.
-static MirrorProp g_mpWorldInfo = {}, g_mpGri = {}, g_mpGts = {}, g_mpTeamType = {};
 // Every tick, and the class default too: at the map load the member gets a new settings object (TeamType 0 again) and
 // the character screen read it before a once-a-second check had fixed it (2026-10-22: card still "undefined").
 static BYTE* g_ogsBaseCdo = nullptr; static BYTE g_ogsCdoOrig = 0; static bool g_ogsCdoSaved = false;
