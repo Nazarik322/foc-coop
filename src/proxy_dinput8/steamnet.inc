@@ -117,8 +117,15 @@ static void ChatFireMsg(unsigned long long ch, unsigned long long from, const vo
 // id = the channel on the wire; local = the id the game uses for it (the same, except a game channel that reached a
 // member as 0: Demonware carried the game session's channel in its own session data, we do not; the owner announces
 // its newest channel to its members ('N' old new) and a subscribe to 0 goes there).
-struct SnChan { unsigned long long id, local, owner, mem[16]; int n; int state; DWORD asked; BYTE st[64]; int stn; };   // state 1 subscribing, 2 in
+struct SnChan { unsigned long long id, local, owner, mem[16]; int n; int state; DWORD asked; BYTE st[64]; int stn; DWORD subAt; bool zeroAfterSub; };   // state 1 subscribing, 2 in
 // st: the owner's last broadcast RMT_ConnectionStatus (0x16), replayed to members that subscribe later (see 'S')
+// Member side (2026-10-23, host showed a friend "connecting" forever in the game lobby - spinner at the name): the
+// member broadcasts status 1 (ConnectedToLobby) before it is in the game channel; right after subscribing, the new
+// beacon whispers status 0 to the owner and nothing else, so the owner keeps that member at EBCS_Traveling ->
+// TnPlayerReplicationInfo.IsConnecting. g_myStatus = our last non-zero 0x16; a 0 sent within 3 s of subscribing
+// (zeroAfterSub) is followed by g_myStatus 3 s after the subscription (TickStatusReplay), as a channel message so the
+// owner forwards it to the other members.
+static BYTE g_myStatus[64]; static int g_myStatusN = 0;
 static unsigned long long g_announcedCh = 0;   // newest channel announced by the owner of a channel we are in
 static SnChan g_chans[8]; static int g_nchans; static unsigned g_chanSeq = 0;
 static int g_chatPendingCreate = 0; static DWORD g_chatCreateAt = 0;
@@ -179,6 +186,23 @@ static void ChatLogMsg(const char* what, unsigned long long ch, unsigned long lo
         Log("steamchat:   full %s", full);
     }
 }
+static void NoteMyStatus(SnChan* c, const void* data, int size) {
+    const BYTE* b = (const BYTE*)data;
+    if (size < 2 || b[0] != 0x16 || size > (int)sizeof(g_myStatus)) return;
+    if (b[1] != 0) { memcpy(g_myStatus, b, size); g_myStatusN = size; if (c) c->zeroAfterSub = false; }
+    else if (c && c->owner != g_snMe && (LONG)(GetTickCount() - c->subAt) < 3000) c->zeroAfterSub = true;
+}
+static void TickStatusReplay() {
+    DWORD now = GetTickCount();
+    for (int i = 0; i < g_nchans; i++) {
+        SnChan* c = &g_chans[i];
+        if (c->state != 2 || c->owner == g_snMe || !c->zeroAfterSub || !g_myStatusN || (LONG)(now - c->subAt) < 3000) continue;
+        c->zeroAfterSub = false;
+        SnPkt(c->owner, 'C', c->id, &g_snMe, 1, g_myStatus, g_myStatusN);
+        ChatLogMsg("status replay to owner", c->id, c->owner, g_myStatus, g_myStatusN);
+    }
+
+}
 static DWORD __fastcall ChatSend(void*, void*, const DWORD* chp, const void* data, int size) {
     unsigned long long ch = chp ? ((unsigned long long)chp[1] << 32 | chp[0]) : 0;
     ChatLogMsg("send", ch, 0, data, size);
@@ -187,6 +211,7 @@ static DWORD __fastcall ChatSend(void*, void*, const DWORD* chp, const void* dat
     // since member heartbeats arrive (whispers to id 0 -> owner, status replay) it is forwarded like any message.
     if (size >= 1 && ((const BYTE*)data)[0] == 0x17) Log("steamchat: host reports a lost connection");
     SnChan* c = ChanFindLocal(ch); if (!c || c->state != 2) return 0;
+    NoteMyStatus(c, data, size);
     if (c->owner == g_snMe && size >= 1 && size <= (int)sizeof(c->st) && ((const BYTE*)data)[0] == 0x16) { memcpy(c->st, data, size); c->stn = size; }
     if (c->owner == g_snMe) { for (int i = 0; i < c->n; i++) if (c->mem[i] != g_snMe) SnPkt(c->mem[i], 'C', c->id, &g_snMe, 1, data, size); }
     else SnPkt(c->owner, 'C', c->id, &g_snMe, 1, data, size);
@@ -199,7 +224,7 @@ static DWORD __fastcall ChatWhisper(void*, void*, const DWORD* chp, const DWORD*
     // and status whispers go to 0 - deliver them to the channel owner
     if (!to && c && c->owner != g_snMe) { to = c->owner; static LONG n0 = 0; if (InterlockedIncrement(&n0) <= 3) Log("steamchat: whisper to id 0 -> channel owner %llu", to); }
     if (!to || to == g_snMe) return 0;
-    if (c) ch = c->id;
+    if (c) { ch = c->id; if (to == c->owner) NoteMyStatus(c, data, size); }
     ChatLogMsg("whisper to", ch, to, data, size);
     SnPkt(to, 'W', ch, &g_snMe, 1, data, size);
     return 1;
@@ -330,7 +355,7 @@ static void SnChatMsg(unsigned long long from, const char* d, int n) {
     case 'A': {
         if (!c || c->state != 1 || n < 10) break;
         bool ok = d[9] != 0; unsigned long long local = c->local;
-        if (ok) { c->state = 2; c->n = 0; for (int k = 10; k + 8 <= n; k += 8) ChanAddMember(c, Rd64(d + k)); ChanAddMember(c, g_snMe); }
+        if (ok) { c->state = 2; c->n = 0; c->subAt = GetTickCount(); c->zeroAfterSub = false; for (int k = 10; k + 8 <= n; k += 8) ChanAddMember(c, Rd64(d + k)); ChanAddMember(c, g_snMe); }
         else ChanRemove(ch);
         Log("steamchat: subscribed to %016llx: %s", ch, ok ? "ok" : "refused");
         ChatFireOk(CL_SUBSCRIBE, ok, local);
@@ -411,10 +436,21 @@ static void TickSteamTravel(const TickObjs& t) {
     // host: our relay forwards game traffic to the port the match listens on
     static LONG sentPort = 0;
     bool hosting = false;
-    for (int g = 0; g < t.ngame; g++) { char cn[80] = ""; if (IsObjFast(t.game[g]) && ClassNameOf(t.game[g], cn, sizeof(cn)) && !strcmp(cn, "TnSurvivalGame")) hosting = true; }
+    // Second sign for every Escalation map (owner 2026-10-23 "all maps like Ark"): we were the game lobby host
+    // (TnLobbyGame GameHost) and an ESC_ map is loaded. The class check alone missed TnSurvivalGame on ESC_Gladiator in
+    // the first real 2-PC test (stale class table), the friend's packets went nowhere.
+    static bool wasGameHost = false;
+    for (int g = 0; g < t.ngame; g++) {
+        char cn[80] = ""; if (!IsObjFast(t.game[g]) || !ClassNameOf(t.game[g], cn, sizeof(cn))) continue;
+        if (!strcmp(cn, "TnSurvivalGame")) hosting = true;
+        char st[80]; if (!strcmp(cn, "TnLobbyGame") && CurrentStateName(t.game[g], st, sizeof(st))) wasGameHost = !strcmp(st, "GameHost");
+    }
+    char map[96]; MapName(t, map, sizeof(map));
+    const char* why = hosting ? "TnSurvivalGame" : "game lobby host on an ESC_ map";
+    if (!hosting && wasGameHost && !_strnicmp(map, "ESC_", 4)) hosting = true;
     if (hosting && g_lastGameBind && g_lastGameBind != sentPort && g_snPort) {
         sentPort = g_lastGameBind; char c[32]; _snprintf_s(c, _TRUNCATE, "gameport %ld", sentPort); SnCmd(c);
-        Log("steamnet: hosting the match on port %ld (relay forwards it)", sentPort);
+        Log("steamnet: hosting the match on port %ld (relay forwards it; %s, map %s)", sentPort, why, map);
     }
     // member: the host started the match and the game did not connect by itself
     if (g_travelHost && (LONG)(now - g_travelAt) > 1500) {
@@ -429,7 +465,7 @@ static void TickSteamTravel(const TickObjs& t) {
 }
 static void TickSteamChat(const TickObjs& t) {
     if (!g_escOnline) return;
-    if (g_onlineCtx) TickSteamTravel(t);
+    if (g_onlineCtx) { TickSteamTravel(t); TickStatusReplay(); }
     SnInstallUid();
     SnInstallBandwidth();
     InstallInvitePatches();

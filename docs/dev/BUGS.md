@@ -312,6 +312,41 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 ### B37. Escalation menu: members' party lobby list split into two groups (ring icons) - open
 - Host shows one plain list. See ESCALATION-MENU.md "Tried and result" 2026-10-22.
 
+### B38. Escalation over real Steam (2 PCs): the friend never loads the map - fixed 2026-10-23 (mock, all 4 maps; real 2-PC retest pending)
+- First real test (owner + a friend, 2026-10-23, logs: owner foc_coop.log in the Steam folder, friend's copy on the
+  desktop). Party, game lobby and travel work; the friend's game sends its connect packets to 127.0.0.1:7802 (its
+  relay) and gets no answer for minutes. The host log has no "steamnet: hosting the match on port" line, the host
+  relay never got "gameport", so it had nowhere to forward the friend's packets.
+- Cause: on ESC_Gladiator the host's tick list held TnObjectiveMarkerTypeTransformerSurvival as "the game" and never
+  TnSurvivalGame (games=0 during the load, then the marker object). The class table kept a stale kind: after map
+  changes (the host went front end <-> lobby three times) a freed class's pointer and id were reused by another class,
+  and RegisterClassObj returned early on the same pointer. Also seen: host bind 7777 failed with 10013 (port reserved
+  on the owner's PC), the game used 7778 - handled, the relay takes the real port.
+- Fix: RegisterClassObj also compares the class name index; TickSteamTravel also treats "was TnLobbyGame GameHost and
+  an ESC_ map is loaded" as hosting. Test: `esc4menu.ps1 -Copies A,B -MapSteps n` for every map. Ark (0), Gladiator (1),
+  Temple (2), Iacon (3) PASS, each host logs "hosting the match on port"; 4 copies `esc4_final` (Iacon) PASS 4/4.
+
+### B39. Escalation: in-game invite gives the friend no Steam notification - fixed 2026-10-23 (mock; real Steam accept pending)
+- Real test 2026-10-23: the friend saw the host in ONLINE FRIENDS, the invite never arrived; the friend joined
+  through Friends List instead (that works). The in-game invite (SendGameInviteToFriend / ShowInviteUI) is not
+  routed to the relay's Steam lobby invite yet; only the test command `escinvite <id>` sends one.
+- Fix: invite.inc patches PlayerInterface slot 66 SendGameInviteToFriend (0x55a020, verified by decompiling
+  0x8d8d50: one-id array -> SendGameInviteToFriends 0x816640) -> relay "invite <id>" = InviteUserToLobby to our
+  party lobby. The friend's Steam shows the invite; its accept button raises GameLobbyJoinRequested in the friend's
+  running relay (svc) -> "joinrequest" -> join (steamnet.inc). The friend must have the game running (the invite is
+  for app 480; with the game closed Steam would try to start Spacewar). Test: `esc4menu.ps1 -MenuInvite` calls the
+  game's own TnOnlineActionScriptBinding.SendGameInvite (`call cls:<Class> ...`, new target) - PASS 2/2, 3/3, 4/4.
+
+### B40. Escalation: host sees a loading spinner at a member's name in the game lobby - fixed 2026-10-23
+- Owner's report after the real test; also on the mock (spinner at Bumblebee in esc2_port1 3_game_lobby_A). The icon
+  is TnPlayerReplicationInfo.IsConnecting = the member's registrant BeaconConnectionStatus 0 (EBCS_Traveling). The
+  member broadcast status 1 before it was in the game channel; right after subscribing its new beacon whispered
+  status 0 ("1600") and nothing else. Fix: steamnet.inc NoteMyStatus/TickStatusReplay - a status 0 sent within 3 s
+  of subscribing is followed by our last non-zero status 3 s after the subscription. esc3_spin1, esc4_final: no
+  spinner on the host. Not the same as B37 (members' chain icons, static) - those stay.
+- Also seen (open, minor): members show Difficulty EASY while the host shows HARD; the map picture says OBLIVION
+  after Select Map on every copy (the loaded map was the selected one).
+
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
   every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all

@@ -471,6 +471,20 @@ static DWORD __fastcall SnJoinFriendGame(void* self, void*, DWORD num, const uns
     Log("invite: JoinFriendGame: %llu is not in the friends list", *id);
     return 0;
 }
+// PlayerInterface slot 66 SendGameInviteToFriend(byte, UniqueNetId* friend, FString* title, FString* text) ->
+// EOnlineServiceInviteErrorCode (0 ok, 2 error; 0x55a020 -> 0x8d8d50 builds a one-id array for the Demonware
+// SendGameInviteToFriends 0x816640). The ONLINE FRIENDS "Send Invite" ends here (TnOnlineActionScriptBinding
+// SendGameInviteConfirmed). Real 2-PC test 2026-10-23: the friend got no Steam notification (B39) - now a Steam
+// lobby invite to our party lobby through the relay, like the test command `escinvite`.
+typedef DWORD(__thiscall* SendInviteFn)(void* self, DWORD num, const unsigned long long* id, void* title, void* text);
+static void* g_origSendInvite = nullptr;
+static DWORD __fastcall SnSendGameInvite(void* self, void*, DWORD num, const unsigned long long* id, void* title, void* text) {
+    if (!g_onlineCtx || !id) return ((SendInviteFn)g_origSendInvite)(self, num, id, title, text);
+    if (!g_steamLobby) { Log("invite: Send Invite to %llu but we have no Steam party lobby", *id); return 2; }
+    char c[64]; _snprintf_s(c, _TRUNCATE, "invite %llu", *id); SnCmd(c);
+    Log("invite: Send Invite -> Steam lobby invite %llu to lobby %llu", *id, g_steamLobby);
+    return 0;
+}
 static void InstallFriendPatches() {
     {
         void** t = (void**)((BYTE*)GetModuleHandleW(nullptr) + (0x168ec38 - 0x400000));
@@ -478,6 +492,10 @@ static void InstallFriendPatches() {
             DWORD o = 0; VirtualProtect(t + 70, 4, PAGE_READWRITE, &o); g_origJoinFriend = t[70]; t[70] = (void*)SnJoinFriendGame; VirtualProtect(t + 70, 4, o, &o);
             Log("invite: Player.JoinFriendGame patched (Steam lobby)");
         }
+        if (ExeVa(t[66]) == 0x55a020) {
+            DWORD o = 0; VirtualProtect(t + 66, 4, PAGE_READWRITE, &o); g_origSendInvite = t[66]; t[66] = (void*)SnSendGameInvite; VirtualProtect(t + 66, 4, o, &o);
+            Log("invite: Player.SendGameInviteToFriend patched (Steam lobby invite)");
+        } else Log("invite: SendGameInviteToFriend slot holds %lx - not patched", ExeVa(t[66]));
     }
     void** t = (void**)((BYTE*)GetModuleHandleW(nullptr) + (0x168ec38 - 0x400000));
     if (ExeVa(t[51]) != 0x9ab810) { Log("invite: GetFriendsList slot holds %lx - not patched", ExeVa(t[51])); return; }

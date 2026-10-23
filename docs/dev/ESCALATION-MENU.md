@@ -221,3 +221,22 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
   Party session 0. Open.
 - Test pitfall: copies started 25 s apart still sometimes die at D3D start (C had no log after 5 s, 2026-10-22);
   check every copy has "event hello" before reading the result.
+- 2026-10-23 - **first real test on two PCs** (owner hosts, friend joins through Friends List; Steam invite never
+  arrived - B39). Friend reached party and game lobby, got "travel to game", opened 127.0.0.1:7802 and sent connect
+  packets for minutes without an answer. Host log: no "hosting the match" line, host relay log: no "game port".
+  Reading: the class table gave a stale "Game" kind to TnObjectiveMarkerTypeTransformerSurvival on ESC_Gladiator and
+  never recognised TnSurvivalGame (pointer + id reuse after three front end <-> lobby trips) - B38. All mock tests ran
+  on Ark (the default map) with one lobby trip, so this never showed. Fix: class registration checks the name index;
+  hosting also = "was GameHost + ESC_ map". New `esc4menu.ps1 -MapSteps n` (Select Map RIGHT x n) to test every
+  map. Result: Ark (`esc2_port1`) PASS, Gladiator (`esc2_map1`) PASS; others: see next entry.
+- 2026-10-23 - map runs `esc2_map2/3/4`: Temple, Iacon, Iacon (RIGHT x4 wraps or stops at Iacon) - all PASS with the
+  "hosting the match" line. So all four maps (Ark, Gladiator, Temple, Iacon) work on the mock.
+- 2026-10-23 - B39 in-game Send Invite: PlayerInterface slot 66 (0x55a020) = SendGameInviteToFriend, found by slot
+  order (63 OnFriendInviteReceived, 64/65 add/clear, 66 send, 67 OnReceivedGameInvite, 68/69 add/clear, 70
+  JoinFriendGame) and decompiling 0x8d8d50. Slot 65 (0x9ba6b0) was a wrong first guess (a clear-delegate body).
+  Patched -> Steam lobby invite. `-MenuInvite` (game's SendGameInvite through `call cls:`) PASS.
+- 2026-10-23 - B40 host spinner = member status 0 on the game channel (see BUGS). Member replays its last non-zero
+  status 3 s after subscribing -> spinner gone (esc3_spin1). Tried also: members fire the statuses they received
+  again 3 s after subscribing, hoping to clear the members' icons (B37) -> **no change**: those icons are chain
+  links (party grouping), not spinners. Reverted.
+- 2026-10-23 - `esc4_final` (4 copies, -LobbyWait 80 -MenuInvite -MapSteps 3, Iacon): PASS 4/4, no host spinner.

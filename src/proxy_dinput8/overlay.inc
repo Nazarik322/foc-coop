@@ -225,6 +225,7 @@ static BYTE* OexecTarget(const char* t) {
     if (!strcmp(t, "rpri")) return rpc ? *(BYTE**)(rpc + 0x1d4) : nullptr;
     if (!strcmp(t, "hud")) return lpc && IsObjFast(*(BYTE**)(lpc + 0x3b4)) ? *(BYTE**)(lpc + 0x3b4) : nullptr;   // PlayerController.myHUD
     if (!strncmp(t, "obj:", 4)) return FindObjByLabel(t + 4);
+    if (!strncmp(t, "cls:", 4)) { BYTE* c = nullptr; return FindInstanceOfClass(t + 4, &c); }   // first live instance
     return nullptr;
 }
 static void OexecCommand(const char* args) {

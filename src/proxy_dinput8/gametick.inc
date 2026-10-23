@@ -52,10 +52,13 @@ static BYTE ClassKind(const char* n) {
 static void RegisterClassObj(BYTE* cls) {
     if (*(unsigned*)(cls + 4) & 0x3fff) return;   // class objects carry name number 0
     unsigned own = *(unsigned*)(cls + 0x84);
-    if (own == 0 || own >= 8191 || g_classObjById[own + 1] == cls) return;
+    // same pointer is not enough: after map changes a freed class's memory and id get reused by another class
+    // (real 2-PC test 2026-10-23: TnObjectiveMarkerTypeTransformerSurvival kept a stale "Game" kind on ESC_Gladiator,
+    // TnSurvivalGame was never seen, the host never told its relay the match port)
+    if (own == 0 || own >= 8191 || (g_classObjById[own + 1] == cls && g_classNameById[own + 1] == NameIdxOf(cls))) return;
     char nm[80];
     if (!ObjNameStr(cls, nm, sizeof(nm))) return;
-    g_classObjById[own + 1] = cls;
+    g_classObjById[own + 1] = cls; g_classNameById[own + 1] = NameIdxOf(cls);
     g_kindById[own + 1] = ClassKind(nm);
 }
 

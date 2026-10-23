@@ -1391,6 +1391,7 @@ static bool ObjNameStr(BYTE* obj, char* out, size_t n, unsigned* number) {
 // Filled by the game-thread tick (gametick.inc): instance class id -> class object, and the kind of object it is.
 static BYTE* g_classObjById[8192];
 static BYTE g_kindById[8192];
+static int g_classNameById[8192];   // name index of the registered class (a reused class pointer gets a new name)
 
 static bool ClassNameOf(BYTE* obj, char* out, size_t n) {
     out[0] = 0;
