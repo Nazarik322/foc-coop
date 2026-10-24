@@ -47,10 +47,28 @@ static bool TpGuestNear(BYTE* host, BYTE* guest, const float* off, const char* w
         LocOf(guest)[0], LocOf(guest)[1], LocOf(guest)[2], host, h[0], h[1], h[2], TpDist(LocOf(guest), h), ok ? "OK" : "FAILED");
     return ok;
 }
-// Host: distance between the guest pawn on the server and where the guest sees it (FOCP1, sync.inc); -1 = unknown.
+// Host: the newest report (FOCP1, sync.inc) of the guest that owns pawn `gp`, matched by PlayerID; a report without
+// a PlayerID (older guest build) only counts while there is one guest. false = nothing recent.
+static bool TpGuestReport(BYTE* gp, GuestPos* out) {
+    if (!IsObjFast(gp)) return false;
+    BYTE* pc = nullptr; int remotes = 0;
+    for (int a = 0; a < g_to.npc; a++) { BYTE* c = g_to.pc[a]; if (!IsObjFast(c) || IsLocalPC(c)) continue; remotes++; if (PawnOf(c) == gp) pc = c; }
+    int pid = pc ? PriPlayerId(pc) : -1;
+    DWORD now = GetTickCount(); bool found = false;
+    if (pid >= 0 && g_gpCsInit) {
+        EnterCriticalSection(&g_gpCs);
+        for (int i = 0; i < 8; i++) if (g_gp[i].at && g_gp[i].pid == pid && now - g_gp[i].at <= 2000) { *out = g_gp[i]; found = true; }
+        LeaveCriticalSection(&g_gpCs);
+    }
+    if (!found && remotes == 1 && g_gposAt && now - g_gposAt <= 2000) {
+        out->pid = -1; memcpy(out->p, g_gpos, 12); strncpy_s(out->st, g_gposState, _TRUNCATE); out->cine = g_gposCine; out->at = g_gposAt; found = true;
+    }
+    return found;
+}
+// Host: distance between the guest pawn on the server and where the guest sees it; -1 = unknown.
 static float TpGuestDesync(BYTE* gp) {
-    if (!IsObjFast(gp) || !g_gposAt || GetTickCount() - g_gposAt > 2000) return -1.0f;
-    return TpDist(LocOf(gp), g_gpos);
+    GuestPos r; if (!TpGuestReport(gp, &r)) return -1.0f;
+    return TpDist(LocOf(gp), r.p);
 }
 // Teleports of a guest only while server and guest agree on where it is: moving a pawn the guest sees 40000 uu away
 // dropped the guest to the main menu (owner 2026-10-20). reconcile fixes the disagreement first.
@@ -154,22 +172,30 @@ static void TickLeash(const TickObjs& t) {
 
 // reconcile (ini, default on, host): when the guest sees its pawn more than 1500 uu from the server copy for 2 s and
 // neither side is in a scene (the guest played a matinee only locally), the server copy is put where the guest is.
-static void TickReconcile(const TickObjs& t) {
-    static DWORD since = 0;
-    if (!g_reconcile || t.npc < 2) return;
-    BYTE* gp = nullptr; BYTE* hostPc = nullptr;
-    for (int a = 0; a < t.npc; a++) { BYTE* pc = t.pc[a]; if (!IsObjFast(pc)) continue; if (IsLocalPC(pc)) hostPc = pc; else if (!gp) gp = PawnOf(pc); }
-    float d = TpGuestDesync(gp);
-    bool scene = g_gposCine || !strcmp(g_gposState, "AnimControl") || (hostPc && (*(unsigned*)(hostPc + 0x360) & 0x20000));
-    if (d < 1500.0f || scene) { since = 0; return; }
+static volatile DWORD g_reconcileHold = 0;   // scene.inc: no reconcile until then (a gathered guest still reports its old spot)
+static void TickReconcile(const TickObjs& t) {   // every guest separately (2026-10-24: it only looked at the first one)
+    static BYTE* sincePawn[8]; static DWORD since[8];
+    if (!g_reconcile || t.npc < 2 || (LONG)(g_reconcileHold - GetTickCount()) > 0) return;
+    BYTE* hostPc = nullptr;
+    for (int a = 0; a < t.npc; a++) if (IsObjFast(t.pc[a]) && IsLocalPC(t.pc[a])) hostPc = t.pc[a];
+    bool hostScene = hostPc && (*(unsigned*)(hostPc + 0x360) & 0x20000);
     DWORD now = GetTickCount();
-    if (!since) { since = now; return; }
-    if (now - since < 2000) return;
-    since = 0;
-    float dest[3] = {g_gpos[0], g_gpos[1], g_gpos[2] + 20.0f};
-    bool ok = TpNativeSetLocation(gp, dest);
-    Log("reconcile: guest pawn %p server (%.0f,%.0f,%.0f) vs guest view (%.0f,%.0f,%.0f), %.0f uu -> server copy moved %s", gp,
-        LocOf(gp)[0], LocOf(gp)[1], LocOf(gp)[2], g_gpos[0], g_gpos[1], g_gpos[2], d, ok ? "ok" : "FAILED");
+    for (int a = 0, slot = 0; a < t.npc && slot < 8; a++) {
+        BYTE* pc = t.pc[a]; if (!IsObjFast(pc) || IsLocalPC(pc)) continue;
+        int k = slot++; BYTE* gp = PawnOf(pc);
+        if (sincePawn[k] != gp) { sincePawn[k] = gp; since[k] = 0; }
+        GuestPos r; if (!gp || !TpGuestReport(gp, &r)) { since[k] = 0; continue; }
+        float d = TpDist(LocOf(gp), r.p);
+        bool scene = r.cine || !strcmp(r.st, "AnimControl") || hostScene;
+        if (d < 1500.0f || scene) { since[k] = 0; continue; }
+        if (!since[k]) { since[k] = now; continue; }
+        if (now - since[k] < 2000) continue;
+        since[k] = 0;
+        float dest[3] = {r.p[0], r.p[1], r.p[2] + 20.0f};
+        bool ok = TpNativeSetLocation(gp, dest);
+        Log("reconcile: guest pawn %p (player %d) server (%.0f,%.0f,%.0f) vs guest view (%.0f,%.0f,%.0f), %.0f uu -> server copy moved %s", gp, r.pid,
+            LocOf(gp)[0], LocOf(gp)[1], LocOf(gp)[2], r.p[0], r.p[1], r.p[2], d, ok ? "ok" : "FAILED");
+    }
 }
 
 // streamguard (ini, default on, host): when the level script changes the streamed sublevels while the players are far

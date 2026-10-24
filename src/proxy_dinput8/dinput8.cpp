@@ -232,6 +232,7 @@ static bool g_inputInject = true;   // ini inputinject: test input injection (in
 static int g_inputMode = 6;         // ini inputmode: 1 DirectInput, 2 key messages, 4 GetAsyncKeyState/GetKeyState, 8 focus spoof
 static bool g_chapterSync = true; // B16: guest shows the chapter title the host shows (story_title.inc), ini chaptersync
 static bool g_cineSync = true;    // B14: the guest follows the host's cinematic mode (sync.inc TickCinematic), ini cinesync
+static bool g_sceneTp = true;   // ini scenetp: after a cutscene everybody is moved to the player who triggered it (scene.inc)
 static void SyncNoteOut(SOCKET s);
 static bool SyncFilterIn(const char* buf, int len, const sockaddr* from);
 static int WSAAPI h_sendto(SOCKET s, const char* buf, int len, int flags, const sockaddr* to, int tolen) {
@@ -1980,6 +1981,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_inputMode = GetPrivateProfileIntW(L"foc_coop", L"inputmode", 6, ini2);
         g_chapterSync = GetPrivateProfileIntW(L"foc_coop", L"chaptersync", 1, ini2) != 0;
         g_cineSync = GetPrivateProfileIntW(L"foc_coop", L"cinesync", 1, ini2) != 0;
+        g_sceneTp = GetPrivateProfileIntW(L"foc_coop", L"scenetp", 1, ini2) != 0;
         g_autoRestart = GetPrivateProfileIntW(L"foc_coop", L"autorestart", 1, ini2) != 0;
         g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
         g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);
@@ -2001,6 +2003,7 @@ static void LoadConfig(const wchar_t* dir) {
 #include "overlay.inc"
 #include "steamnet.inc"
 #include "invite.inc"
+#include "scene.inc"
 #include "trace.inc"
 #include "gfxsync.inc"
 #include "kmirror.inc"

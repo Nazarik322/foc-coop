@@ -21,8 +21,14 @@ static void KMirrorQueue(const char* buf, int len);   // kmirror.inc
 // host: where the guest sees its own pawn (FOCP1 datagram, 4 per second): owner 2026-10-20, the guest's pawn on the
 // server and on the guest drifted 40000 uu apart after a scene the guest played only locally.
 static volatile DWORD g_gposAt = 0; static float g_gpos[3]; static char g_gposState[48] = ""; static int g_gposCine = 0;
+// 2026-10-24, 4 players: one g_gpos for every guest compared guest 1's server pawn with whichever guest reported last
+// ("the guest sees its pawn 8707 uu from the server copy", reconcile could move a pawn to another guest's spot). Each
+// report now carries the guest's PlayerReplicationInfo.PlayerID; the host keeps one entry per guest (tp.inc TpGuestReport).
+struct GuestPos { int pid; float p[3]; char st[48]; int cine; DWORD at; };
+static GuestPos g_gp[8]; static CRITICAL_SECTION g_gpCs; static bool g_gpCsInit = false;
+static int PriPlayerId(BYTE* pc);   // scene.inc
 
-static void SyncInit() { InitializeCriticalSection(&g_syncCs); }
+static void SyncInit() { InitializeCriticalSection(&g_syncCs); InitializeCriticalSection(&g_gpCs); g_gpCsInit = true; }
 
 // sendto hook: remember the game's socket
 static void SyncNoteOut(SOCKET s) { if (g_syncOn) g_syncSock = s; }
@@ -35,9 +41,18 @@ static bool SyncFilterIn(const char* buf, int len, const sockaddr* from) {
     if (len >= 6 && !memcmp(buf, "FOCT1\n", 6)) { TexSyncQueue(buf, len); return true; }   // host -> guest: forced texture names (gfxsync.inc)
     if (len >= 6 && !memcmp(buf, "FOCK1\n", 6)) { KMirrorQueue(buf, len); return true; }   // host -> guest: Kismet op to run (kmirror.inc)
     if (len >= 6 && len < 200 && !memcmp(buf, "FOCP1\n", 6)) {   // guest -> host: its own pawn position
-        char tmp[200]; memcpy(tmp, buf, len); tmp[len] = 0; float x, y, z; char st[48] = ""; int c = 0;
-        if (sscanf_s(tmp + 6, "%f %f %f %47s %d", &x, &y, &z, st, (unsigned)sizeof(st), &c) >= 4) {
-            g_gpos[0] = x; g_gpos[1] = y; g_gpos[2] = z; strncpy_s(g_gposState, st, _TRUNCATE); g_gposCine = c; g_gposAt = GetTickCount(); }
+        char tmp[200]; memcpy(tmp, buf, len); tmp[len] = 0; float x, y, z; char st[48] = ""; int c = 0, pid = -1;
+        int got = sscanf_s(tmp + 6, "%f %f %f %47s %d %d", &x, &y, &z, st, (unsigned)sizeof(st), &c, &pid);
+        if (got >= 4) {
+            g_gpos[0] = x; g_gpos[1] = y; g_gpos[2] = z; strncpy_s(g_gposState, st, _TRUNCATE); g_gposCine = c; g_gposAt = GetTickCount();
+            if (got >= 6 && pid >= 0 && g_gpCsInit) {
+                EnterCriticalSection(&g_gpCs);
+                int k = -1, old = 0; for (int i = 0; i < 8; i++) { if (g_gp[i].at && g_gp[i].pid == pid) k = i; if (g_gp[i].at < g_gp[old].at) old = i; }
+                if (k < 0) k = old;
+                GuestPos& e = g_gp[k]; e.pid = pid; e.p[0] = x; e.p[1] = y; e.p[2] = z; strncpy_s(e.st, st, _TRUNCATE); e.cine = c; e.at = GetTickCount();
+                LeaveCriticalSection(&g_gpCs);
+            }
+        }
         return true;
     }
     if (len >= (int)sizeof(kSyncMagic) - 1 && !memcmp(buf, kSyncMagic, sizeof(kSyncMagic) - 1)) {
@@ -276,7 +291,7 @@ static void SendPos(const TickObjs& t) {
     last = GetTickCount();
     char st[48] = "-"; StateName(pc, st, sizeof(st)); if (!st[0]) strcpy_s(st, "-");
     float* l = LocOf(pw); char msg[160];
-    int n = _snprintf_s(msg, _TRUNCATE, "FOCP1\n%.0f %.0f %.0f %s %d\n", l[0], l[1], l[2], st, (*(unsigned*)(pc + 0x360) & 0x20000) ? 1 : 0);
+    int n = _snprintf_s(msg, _TRUNCATE, "FOCP1\n%.0f %.0f %.0f %s %d %d\n", l[0], l[1], l[2], st, (*(unsigned*)(pc + 0x360) & 0x20000) ? 1 : 0, PriPlayerId(pc));
     EnterCriticalSection(&g_syncCs);
     for (int i = 0; i < g_syncNPeers; i++) if (GetTickCount() - g_syncPeers[i].seen < 10000) o_sendto(g_syncSock, msg, n, 0, (const sockaddr*)&g_syncPeers[i].addr, sizeof(sockaddr_in));
     LeaveCriticalSection(&g_syncCs);

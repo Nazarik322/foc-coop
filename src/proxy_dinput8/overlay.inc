@@ -18,6 +18,7 @@ static void* g_outVtbl[32];
 static void* g_outDev[2] = {g_outVtbl, nullptr};
 static volatile LONG g_gfxDiagReq = 0;   // `gfxdiag` command -> trace.inc GfxDiagWrite on the next tick
 static void KImpulseCommand(const char* args);   // kmirror.inc
+static void SceneCommand(const TickObjs& t, const char* verb, const char* args);   // scene.inc
 static void LobbyCommand(const char* args);      // lobby.inc
 static void PcProbeCommand();                     // lobby.inc
 static PFN_Exec g_exec = nullptr;
@@ -367,6 +368,9 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("tph ", 0) == 0) { TpHostCommand(cmd.c_str() + 4); return; }
     if (cmd.rfind("hdrprobe ", 0) == 0) { HdrProbeCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("kimpulse ", 0) == 0) { KImpulseCommand(cmd.c_str() + 9); return; }
+    if (cmd.rfind("sceneact ", 0) == 0) { SceneCommand(g_to, "sceneact", cmd.c_str() + 9); return; }
+    if (cmd.rfind("scenemove ", 0) == 0) { SceneCommand(g_to, "scenemove", cmd.c_str() + 10); return; }
+    if (cmd.rfind("scenegather", 0) == 0) { SceneCommand(g_to, "scenegather", cmd.size() > 12 ? cmd.c_str() + 12 : ""); return; }
     if (cmd.rfind("fnprobe ", 0) == 0) { FnProbeCommand(cmd.c_str() + 8); return; }
     if (cmd.rfind("osprobe", 0) == 0) { OsProbeCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("peek ", 0) == 0) { PeekCommand(cmd.c_str() + 5); return; }
@@ -642,7 +646,8 @@ static void RunSessionCommand(const char* url, const char* openCmd) {
 // Friends join through Steam (AppID 480 "Spacewar") without IPs: the host runs `FoCRelay host <gamePort>`, the guest runs
 // `FoCRelay join <lobby|auto> 7790` and its game connects to 127.0.0.1:7790. The relay's own steam_api.dll lives in
 // foc_relay so it never replaces the game's Steam_api.dll.
-static const int kRelayLocalPort = 7790;
+// the guest relay's local port: 7790; test copies on one PC (instance B, C, D) get 7791.. so four copies do not collide
+static int RelayLocalPort() { char c = g_suffix[0]; return 7790 + ((c >= 'A' && c <= 'J') ? c - 'A' : (c >= 'a' && c <= 'j') ? c - 'a' : 0); }
 static bool g_useSteam = true;            // Host page checkbox
 static char g_joinLobby[32] = ""; static char g_joinPw[32] = "";         // Join page: lobby id, empty = first friend who hosts
 static char g_relayState[160] = "";
@@ -723,7 +728,7 @@ static DWORD WINAPI HostRelayThread(LPVOID) {
 static void ListRelayStop();
 static DWORD WINAPI JoinSteamThread(LPVOID) {
     ListRelayStop();
-    char a[96]; _snprintf_s(a, _TRUNCATE, "join %s %d", g_joinLobby[0] ? g_joinLobby : "auto", kRelayLocalPort);
+    char a[96]; _snprintf_s(a, _TRUNCATE, "join %s %d", g_joinLobby[0] ? g_joinLobby : "auto", RelayLocalPort());
     g_relayState[0] = 0;
     if (!StartRelay(a)) return 0;
     for (int i = 0; i < 120; i++) {
@@ -732,7 +737,7 @@ static DWORD WINAPI JoinSteamThread(LPVOID) {
             // ?Name=: without it the guest's player name is the profile default ("Default" on the scoreboard)
             char name[64]; strncpy_s(name, g_relayPersona[0] ? g_relayPersona : g_playerName, _TRUNCATE);
             for (char* c = name; *c; c++) if (*c == '?' || *c == '=' || *c == ' ' || *c == '"' || *c == ',' || *c == '#' || (unsigned char)*c < 0x20) *c = '_';
-            char url[128]; _snprintf_s(url, _TRUNCATE, "127.0.0.1:%d?Name=%s", kRelayLocalPort, name);
+            char url[128]; _snprintf_s(url, _TRUNCATE, "127.0.0.1:%d?Name=%s", RelayLocalPort(), name);
             if (InProcessTravel()) { char cmd[160]; _snprintf_s(cmd, _TRUNCATE, "open %s", url); QueueCommand(cmd); }
             else RelaunchWithUrl(url);
             return 0;

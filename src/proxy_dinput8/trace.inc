@@ -44,7 +44,7 @@ static void TickTrace(const TickObjs& t) {
 
 static void KMirrorHostOp(BYTE* op, const char* cls);   // kmirror.inc
 // ---------------------------------------------------------------- Kismet activity (host)
-static bool g_isSeqClass[8192]; static bool g_seqClassKnown[8192];
+static bool g_isSeqClass[8192]; static bool g_seqClassKnown[8192]; static short g_seqCntOff[8192];   // g_tpTrigCount: scene.inc
 static bool TraceIsSeqOp(BYTE* o) {
     unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff;
     if (!g_seqClassKnown[cid]) {
@@ -52,10 +52,16 @@ static bool TraceIsSeqOp(BYTE* o) {
         if (cn[0]) {
             g_seqClassKnown[cid] = true;
             g_isSeqClass[cid] = strstr(cn, "SeqAct_") || strstr(cn, "SeqEvent_") || strstr(cn, "SeqCond_") || !strcmp(cn, "Sequence");
+            // 2026-10-24: events count their firings in SequenceEvent.TriggerCount, not in ActivateCount (+0x70), so the
+            // tracker never saw a Touch / Used event (the scene activator, scene.inc)
+            g_seqCntOff[cid] = 0x70;
+            if (strstr(cn, "SeqEvent_") && (g_tpTrigCount.off > 0 || MirrorPropFind("SequenceEvent", "TriggerCount", g_tpTrigCount)))
+                g_seqCntOff[cid] = (short)g_tpTrigCount.off;
         }
     }
     return g_isSeqClass[cid];
 }
+static int TraceCount(BYTE* o) { unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff; int off = g_seqCntOff[cid] ? g_seqCntOff[cid] : 0x70; return *(int*)(o + off); }
 static void TickKismetLog(const TickObjs& t) {
     static BYTE* ops[12000]; static int cnt[12000]; static int nops = 0; static int scanPos = 0; static char lastMap[96] = "";
     static DWORD lastCheck = 0;
@@ -71,14 +77,14 @@ static void TickKismetLog(const TickObjs& t) {
         bool have = false; for (int k = 0; k < nops && !have; k++) have = ops[k] == o;
         if (have) continue;
         char nm[80]; if (!ObjNameStr(o, nm, sizeof(nm)) || !strncmp(nm, "Default__", 9)) continue;
-        ops[nops] = o; cnt[nops] = *(int*)(o + 0x70); nops++;
+        ops[nops] = o; cnt[nops] = TraceCount(o); nops++;
     }
     scanPos = to >= go->Num ? 0 : to;
     DWORD now = GetTickCount(); if (now - lastCheck < 200) return; lastCheck = now;
     for (int k = 0; k < nops; k++) {
         BYTE* o = ops[k];
         if (!IsObjFast(o) || !TraceIsSeqOp(o)) { ops[k] = ops[--nops]; cnt[k] = cnt[nops]; k--; continue; }
-        int c = *(int*)(o + 0x70);
+        int c = TraceCount(o);
         if (c == cnt[k]) continue;
         int was = cnt[k]; cnt[k] = c;
         if (c < was) continue;
@@ -86,6 +92,7 @@ static void TickKismetLog(const TickObjs& t) {
         static volatile LONG nl = 0; if (g_ptrace && InterlockedIncrement(&nl) <= 5000) Log("kismet: %s %s activated (count %d)", cn, on, c);
         if (!strcmp(cn, "TnSeqAct_DownRevive")) g_scriptDownAt = now;
         KMirrorHostOp(o, cn);
+        SceneNoteOp(t, o, cn);   // scene.inc: who triggered it (activator of the next cutscene)
         if (!strcmp(cn, "TnSeqAct_SetChapter") && g_chapterSync) {   // B16: the chapter title for the guests (ChapterSnap sends it)
             g_chapNum = (int)*(float*)(o + 0x8c); g_chapSeq++;
             Log("title: host chapter %d (activateCount %d)", g_chapNum, c);
@@ -128,6 +135,7 @@ static void TickGfxDiag(const TickObjs& t);
 static void TickTraceAll(const TickObjs& t) {
     if (g_ptrace) TickTrace(t);
     TickKismetLog(t);   // host: always (chapter title, scripted moments); logs only with ptrace
+    TickScene(t);       // scene.inc: gather everybody at the activator after a cutscene
     TickScriptDown(t);
     TickGfxDiag(t);
 }

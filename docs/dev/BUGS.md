@@ -464,6 +464,27 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Test: tools/lobbyfriend.ps1 (TESTS.md). Escalation itself not re-tested (owner: parked); its relay now starts only
   when the Escalation lobby map loads - first party creation waits for the relay's Steam ID (up to 15 s).
 
+### B50. Story co-op, 3+ players: guest position reports mixed up between guests - FIXED 2026-10-24 (4 copies)
+- One FOCP1 slot (g_gpos) for all guests: TpGuestConsistent / TickReconcile compared guest 1's server pawn with the
+  report of whichever guest sent last ("the guest sees its pawn 8707 uu from the server copy"); reconcile looked only at
+  the first guest and could put its pawn on another guest's spot. Fix: FOCP1 carries PlayerReplicationInfo.PlayerID,
+  the host keeps one report per guest (sync.inc g_gp, tp.inc TpGuestReport), reconcile runs per guest.
+- Also: a server-side move of a guest pawn (scene gather, scenemove) was undone by the guest's next move and then by
+  reconcile; now the host also calls ClientSetLocation on that guest and holds reconcile for 6 s (scene.inc).
+
+### B51. After a scene everybody should stand with the player who triggered it - DONE 2026-10-24 (4 copies, L02a)
+- Owner 2026-10-24 (choice: the game's network stays - host = server, enemies/damage shared; scenes for everybody;
+  actions count for all; afterwards all move to the activator). scene.inc: the activator is the Instigator of the last
+  Kismet event a player caused (Touch, Used, ...; not PlayerSpawned) within 15 s before a cutscene (any controller in
+  cinematic mode); 1.5 s after the scene everybody else (the host too) is moved next to it, guests also through
+  ClientSetLocation. Level-script scenes (intro) move nobody. Ini scenetp (default 1).
+- Found on the way: the Kismet tracker never saw events (they count in SequenceEvent.TriggerCount +0x84, not in
+  ActivateCount +0x70); the reflection search for "Instigator" picked another class' field - Instigator = +0x7c.
+- Test: tools/scene4.ps1 (TESTS.md). Not tested with a natural trigger -> scene chain on a real map (the test fakes the
+  scene with the level's SeqAct_ToggleCinematicMode and a forced activator); a guest's touch counting on the server is
+  the engine's own behaviour, not separately checked. Open from the screenshots: B5 dark silhouettes on guests in the
+  L01 opening (unchanged), "Hold E to Revive" prompt on guests there.
+
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
   every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all

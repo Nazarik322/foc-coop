@@ -40,7 +40,7 @@ static DWORD WINAPI LobbyCreateThread(LPVOID) {
 }
 static DWORD WINAPI LobbyJoinThread(LPVOID) {
     LobbyStopRelays();
-    char a[96]; _snprintf_s(a, _TRUNCATE, "join %s %d", g_lobbyJoinId, kRelayLocalPort);
+    char a[96]; _snprintf_s(a, _TRUNCATE, "join %s %d", g_lobbyJoinId, RelayLocalPort());
     g_relayState[0] = 0; g_relayGo[0] = 0; g_lobbyGoDone[0] = 0;
     if (StartRelay(a)) { g_lobbyRole = 2; strcpy_s(g_lobbyStatus, "in the lobby: waiting for the host to start the mission"); Log("lobby: joining %s", g_lobbyJoinId); }
     return 0;
@@ -168,7 +168,7 @@ static void TickLobby(const TickObjs& t) {
         strncpy_s(g_lobbyGoDone, g_relayGo, _TRUNCATE);
         char name[64]; strncpy_s(name, g_relayPersona[0] ? g_relayPersona : g_playerName, _TRUNCATE);
         for (char* c = name; *c; c++) if (*c == '?' || *c == '=' || *c == ' ' || *c == '"' || *c == ',' || *c == '#' || (unsigned char)*c < 0x20) *c = '_';
-        char cmd[160]; _snprintf_s(cmd, _TRUNCATE, "open 127.0.0.1:%d?Name=%s", kRelayLocalPort, name);
+        char cmd[160]; _snprintf_s(cmd, _TRUNCATE, "open 127.0.0.1:%d?Name=%s", RelayLocalPort(), name);
         strcpy_s(g_lobbyStatus, "the host started the mission: joining");
         Log("lobby: host started (%s) -> %s", g_relayGo, cmd);
         QueueCommand(cmd);

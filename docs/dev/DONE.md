@@ -3,6 +3,12 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-24 night: up to 5 players in story through the F10 lobby, gather at the scene activator (B50, B51)
+- Host = server (enemies, damage shared, owner's choice); after a cutscene everybody moves to the player who triggered
+  it (scene.inc); guest position reports per guest (3+ players); test copies use relay ports 7790 + instance.
+- Verified (mock, `scene_story.txt`): scene4 (4 copies, L02a) PASS, lobbyfriend PASS, lobbytest PASS, lobbycontinue PASS,
+  matrix L02a, L02b, L04c, L06 PASS, Steam mock L03b PASS. Not run: Escalation (parked). Real 2-PC test pending.
+
 ## 2026-10-24 late: B49 - F10 lobby fixes after the second real 2-PC test, lobby banner, Cyrillic menu font
 - svc relay only in the Escalation/Multiplayer menus; Join list without our own / Escalation / abandoned lobbies; no
   Join while hosting; guest leaves when the host left; lobby guest never waits for guests; banner top left; Cyrillic.
