@@ -368,6 +368,26 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   the match). Map picture says OBLIVION after Select Map on every copy.
 - Also seen (open, minor): members show Difficulty EASY while the host shows HARD; the map picture says OBLIVION
   after Select Map on every copy (the loaded map was the selected one).
+- 2026-10-24 keyboard-only run through Friends List (sessions/esc4human, grid_5.png) - **still there, fix later**
+  (owner): game lobby - host shows Difficulty **HARD**, all three members **EASY**; host's ping bars grey, members'
+  green. Party lobby was identical (all green). To fix: send the host's difficulty (game settings) to members, and
+  find why the host's own lobby bars stay grey.
+
+### B42. Escalation: test tools cannot drive the menus with the mouse - open (fix later, owner 2026-10-24)
+- `input click` and posted WM_MOUSEMOVE/LBUTTONDOWN (also SendMessage, with the GetCursorPos spoof) do not move the
+  menu highlight in background copies. The log has no GetDeviceState/GetDeviceData calls; CreateDevice gets device
+  instance GUIDs, never GUID_SysMouse, so g_mouseDev stays null. Probably the DirectInput mouse is read only while
+  the window is active. Idea: hook Acquire (vtable slot 7), classify devices by GetCapabilities dwDevType
+  (0x12 mouse, 0x13 keyboard). Keyboard works for every menu step; tests use keys meanwhile.
+
+### B43. Escalation: foc_state.json on members lists only the member itself - open (fix later)
+- 2026-10-24, in the match: host's players[] had all four names, each member only its own, while TAB on every
+  member showed all four. The esc4menu `-Play` names check reads this file, so it can give a false FAIL. Fix the
+  client state writer (PRIs of the other players) or check names from TAB screenshots.
+
+### B44. Escalation: after "Join game" in ONLINE FRIENDS the member stays on that screen - minor, check
+- 2026-10-24: the member is already in the party (host lists it) but its screen stays on ONLINE FRIENDS until ESC.
+  Check whether the original game returns to the party lobby by itself.
 
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
