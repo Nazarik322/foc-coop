@@ -227,6 +227,10 @@ Waves 1-3 and match end on 4 maps, guest character choice, 4-5 players, B3.
 ### Later / not now (owner)
 Whole campaign (M6-M8), coop-anything write-up and PR (only with OK), B5, B6, Steam relay without VPN, installer.
 
+## Owner 2026-10-24: global Leaderboards (B47)
+Leaderboards in Escalation must work and be GLOBAL (one table for all mod players). Plan: Steam leaderboards (app 480)
+through the relay, answering the game's Demonware stats calls. Details and open questions in BUGS.md B47.
+
 ## Later (owner 2026-10-21, do LAST): the game's MULTIPLAYER menu
 The versus multiplayer menu of the game over Steam Spacewar (names from Steam, friends, game browser, lobbies),
 without the dead online service checks.

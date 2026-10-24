@@ -407,11 +407,17 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   Fix later: find what 0xc1b467 calls (null vtable/delegate in the versus party lobby), or keep the Escalation
   hooks out of UI_Lobby_m until versus is done.
 
-### B47. Escalation: statistics not shown - open, details to check (owner report 2026-10-24)
-- Owner: "everything works great, only the statistics do not show, it seems". Not clear yet which screen (end of
-  match results, XP/level, leaderboards, TAB). Log: MatchOver -> the lobby 17 s later; no stats lines in our log.
-  Probable cause: stats are read/written through Demonware (StatsInterfaceEx), dead; only HasReadKeyArchiveFor is
-  answered. Ask the owner which screen, then check the stats interface slots.
+### B47. Escalation: Leaderboards empty - must be GLOBAL leaderboards - open (owner 2026-10-24)
+- Owner: "Leaderboards are not shown, they must be global". So the screen is Leaderboards (party lobby and game
+  lobby item), and the owner wants one shared table for all players of the mod, not a local/friends-only list.
+- Log: no stats lines; MatchOver -> lobby 17 s later. Cause (probable): the game reads/writes stats and
+  leaderboards through Demonware (StatsInterfaceEx), which is dead; only HasReadKeyArchiveFor is answered.
+- Idea (no outside server, owner rule): Steam leaderboards of our app id 480 (ISteamUserStats::FindOrCreateLeaderboard,
+  UploadLeaderboardScore, DownloadLeaderboardEntries GLOBAL / FRIENDS) through the relay; the DLL answers the game's
+  stats read/write calls (StatsInterfaceEx slots, Write/Flush/ReadOnlineStats*) from them. Check: Spacewar leaderboards
+  are shared by everyone using app 480 - prefix our board names (e.g. "foccoop_esc_<map>_<column>") and accept that
+  anyone can write there. Map first which columns the Leaderboards screen shows (TnLeaderboard* scripts).
+- Also check the post-match XP/level the same way (same stats interface).
 
 ### B48. Campaign over the F10 lobby (real 2-PC, v0.8.1-dev): the friend never gets into the host's game - open
 - 2026-10-24 20:13-20:19, after the Escalation session. Logs: sessions/real_20261024/host_campaign_L09_pid12244.log,
@@ -424,7 +430,8 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Friend (last run): F10 lobby search -> "relay: started ... join 109775242139789935 7790" -> "lobby: joining", then
   8 s later "relay: lobby search started" again; the friend's game stayed in the main menu: no "go", no open of
   127.0.0.1:7790, no travel. So the friend's side lost the join (relay join process gone / "go" never read).
-- Not known yet: friend's relay.log (friend PC, Binariesoc_relayelay.log) and the friend's earlier runs
+- Not known yet: friend's relay.log (friend PC, Binariesoc_relay
+elay.log) and the friend's earlier runs
   (Binariesoc_logs). Ask the owner for them. Also relay.log earlier: "no game running for 60 s, exiting".
 - Story co-op is the main goal (owner requirements) - high priority once the logs are in.
 
