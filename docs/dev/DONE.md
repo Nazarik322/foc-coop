@@ -3,7 +3,8 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
-## 2026-10-24: B48 - campaign co-op over the F10 lobby works again (svc relay paused while a story relay runs, de8b1ba)
+## 2026-10-24: B48 - campaign co-op over the F10 lobby works again (svc relay paused while a story relay runs, de8b1ba; released as v0.8.2-dev from main ba94100)
+- Installer SHA-256 bbe28be5caeec4fb60ff60cf2b847a49907fb834bcbe4fe33983bcf19b5791b6 (downloaded back, same).
 - Real 2-PC test: the friend could not get into the host's campaign (four lobbies, L09 and L01); the Escalation svc
   relay received the story relay's Steam messages. Fix in overlay.inc StartRelay + steamnet.inc TickSteamChat.
 - Verified (mock Steam, 2 copies): lobbytest PASS (`b48_fix5`, `b48_fix6`), twin on v0.8.1-dev FAIL "host silent for
