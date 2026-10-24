@@ -3,6 +3,14 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-24: B48 - campaign co-op over the F10 lobby works again (svc relay paused while a story relay runs, de8b1ba)
+- Real 2-PC test: the friend could not get into the host's campaign (four lobbies, L09 and L01); the Escalation svc
+  relay received the story relay's Steam messages. Fix in overlay.inc StartRelay + steamnet.inc TickSteamChat.
+- Verified (mock Steam, 2 copies): lobbytest PASS (`b48_fix5`, `b48_fix6`), twin on v0.8.1-dev FAIL "host silent for
+  20 s" (`b48_twin2`); lobbycontinue (host presses CONTINUE in the game menu) PASS; must-pass story maps L02a, L02b,
+  L04c PASS, L06 FAIL once (host picture diff 44 while only the guest moved) then PASS on rerun (diff 3); Steam mock
+  L03b PASS. Not run (owner 2026-10-24: Escalation parked): ESC_Ark, esc4menu. Real 2-PC retest pending.
+
 ## 2026-10-23: first real 2-PC test fixes (released as v0.8.1-dev, commit 1e9ba70, main fast-forwarded)
 - B38 match port on every ESC map, B39 in-game Send Invite -> Steam lobby invite, B40/B37 lobby spinners and the
   split party list, free local relay port. Verified on the mock: all 4 maps (esc2_map*), 4 copies esc4_phantom4.
