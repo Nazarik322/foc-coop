@@ -3,6 +3,12 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-23: first real 2-PC test fixes (released as v0.8.1-dev, commit 1e9ba70, main fast-forwarded)
+- B38 match port on every ESC map, B39 in-game Send Invite -> Steam lobby invite, B40/B37 lobby spinners and the
+  split party list, free local relay port. Verified on the mock: all 4 maps (esc2_map*), 4 copies esc4_phantom4.
+  Installer SHA-256 b8ac66f817c598c1cbf6487d1bf511b7ac718eb1d6546d70b936ba5aefc2a5bd (downloaded back, same).
+  Not run: story must-pass (owner: skip singleplayer), real 2-PC retest.
+
 ## 2026-10-22: Escalation through the game's own menus, 4 players (released as v0.8.0-dev, commit b51f5f5)
 - ESCALATION from the main menu over Steam (Spacewar relay): party lobby, Steam invites / Friends List join,
   Private Match > Create Game, game lobby with all players on one team, Start Game, everybody loads the map.
