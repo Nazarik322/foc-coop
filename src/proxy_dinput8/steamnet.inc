@@ -15,6 +15,7 @@
 static SOCKET g_sn = INVALID_SOCKET; static int g_snPort = 0;
 static unsigned long long g_snMe = 0; static char g_snPersona[64] = "";
 static DWORD g_snStartAt = 0, g_snPingAt = 0, g_snStatusAt = 0;
+static volatile bool g_snWanted = false;   // svc relay only in the Escalation / Multiplayer menus (TickSteamChat)
 
 static void SnStatusRead() {
     wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\relay_svc.status", dir);
@@ -42,8 +43,8 @@ static void SnStart() {
     }
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess); Log("steamnet: started %ls", cmd);
 }
-// B48: stop the svc relay (quit command, read once a second by the relay; killed after 3 s) so a story relay is the
-// only process of this Steam user that receives P2P messages. Waits up to 3 s: called from StartRelay, which runs off
+// B48: stop the svc relay (quit command, read once a second by the relay; killed after 10 s) so a story relay is the
+// only process of this Steam user that receives P2P messages. Waits up to 10 s: called from StartRelay or its own thread, which runs off
 // the game thread. g_snMe stays: the local UniqueNetId keeps the Steam ID meanwhile.
 static void SnStopSvc(const char* why) {
     wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\relay_svc.status", dir);
@@ -57,7 +58,7 @@ static void SnStopSvc(const char* why) {
     wchar_t img[MAX_PATH]; DWORD n = MAX_PATH; wchar_t want[MAX_PATH]; _snwprintf_s(want, _TRUNCATE, L"%s\\FoCRelay.exe", dir);
     if (!QueryFullProcessImageNameW(h, 0, img, &n) || _wcsicmp(img, want)) { CloseHandle(h); Log("steamnet: svc status pid %lu is not our relay, ignored", pid); return; }
     _snwprintf_s(p, _TRUNCATE, L"%s\\relay_svc.cmd", dir); f = nullptr; _wfopen_s(&f, p, L"w"); if (f) { fputs("quit", f); fclose(f); }
-    bool quit = WaitForSingleObject(h, 3000) == WAIT_OBJECT_0;
+    bool quit = WaitForSingleObject(h, 10000) == WAIT_OBJECT_0;   // a clean SteamAPI_Shutdown; a kill confused Steam
     if (!quit) TerminateProcess(h, 0);
     CloseHandle(h);
     _snwprintf_s(p, _TRUNCATE, L"%s\\relay_svc.status", dir); DeleteFileW(p);
@@ -538,14 +539,21 @@ static void TickSteamChat(const TickObjs& t) {
         sockaddr_in a = {}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = 0;
         bind(g_sn, (sockaddr*)&a, sizeof(a)); u_long nb = 1; ioctlsocket(g_sn, FIONBIO, &nb);
     }
-    // B48: no svc relay while a story relay (F10 host/join) runs (StartRelay stopped it); it starts again below once
-    // that relay is gone. Nothing of the Escalation party runs meanwhile.
-    static bool paused = false;
-    if (StoryRelayLive()) {
-        if (!paused) { paused = true; g_snPort = 0; Log("steamnet: svc relay paused while the story relay runs"); }
-        return;
+    // B48 (owner 2026-10-24: "only when the ESCALATION button is pressed, and kill it when you go back to the menu"):
+    // the svc relay runs only in the Escalation / Multiplayer lobby menus and their maps. Back in the main menu, on a
+    // story map or while an F10 story relay runs it is stopped and stays off, so the story relay alone owns Steam
+    // networking (two relays of one Steam user: Steam handed the friend's messages to the wrong one, and the svc relay
+    // killed and restarted around every F10 join broke the joins on real Steam).
+    {
+        char map[96]; MapName(t, map, sizeof(map));
+        bool escCtx = !_strnicmp(map, "UI_Lobby", 8) || !_strnicmp(map, "ESC_", 4);
+        if (escCtx && !g_snWanted && !StoryRelayLive()) { g_snWanted = true; g_snStartAt = 0; Log("steamnet: %s - svc relay on", map); }
+        if (g_snWanted && (!escCtx && map[0] || StoryRelayLive())) {
+            g_snWanted = false; Log("steamnet: %s - svc relay off", StoryRelayLive() ? "story relay running" : map);
+            CreateThread(nullptr, 0, [](LPVOID) -> DWORD { SnStopSvc("left the Escalation menus"); return 0; }, nullptr, 0, nullptr);
+        }
+        if (!g_snWanted) { g_snPort = 0; return; }
     }
-    if (paused) { paused = false; g_snStartAt = 0; Log("steamnet: story relay gone, svc relay starts again"); }
     if ((LONG)(now - g_snStatusAt) >= 0) { g_snStatusAt = now + (g_snPort ? 5000 : 1000); SnStatusRead(); }
     if (!g_snPort && (!g_snStartAt || now - g_snStartAt > 20000)) { g_snStartAt = now; SnStart(); }
     if (g_snPort && !g_snMe && (LONG)(now - g_snPingAt) >= 0) { g_snPingAt = now + 1000; SnCmd("ping"); }

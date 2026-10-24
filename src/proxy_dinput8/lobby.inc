@@ -15,6 +15,8 @@ static int g_lobbyMax = 4;
 static char g_lobbyGoDone[128] = "";   // guest: the go value already acted on
 static char g_lobbyJoinId[24] = "", g_lobbyJoinHash[24] = "";
 static char g_lobbyStatus[160] = "";
+static volatile bool g_lobbyInMenu = true;   // not on a mission map: the lobby banner (overlay) is shown
+static DWORD g_lobbyClosedAt = 0;             // when the relay of our lobby ended (the banner shows why for 20 s)
 static void LobbyHash(const char* pw, char* out, size_t n) {   // FNV-1a, 8 hex digits ("-" = no password)
     if (!pw[0]) { strncpy_s(out, n, "-", _TRUNCATE); return; }
     unsigned h = 2166136261u; for (const char* c = pw; *c; c++) { h ^= (unsigned char)*c; h *= 16777619u; }
@@ -22,7 +24,7 @@ static void LobbyHash(const char* pw, char* out, size_t n) {   // FNV-1a, 8 hex 
 }
 static void LobbyStopRelays() {   // the join relay of an earlier try kept port 7790 busy (2026-10-20: 13 relays)
     RelayCommand("quit"); ListRelayStop();
-    for (int i = 0; i < 30; i++) { Sleep(100); ReadRelayStatus(); if (!strcmp(g_relayState, "stopped") || !g_relayState[0]) break; }
+    for (int i = 0; i < 30; i++) { Sleep(100); ReadRelayStatus(); if (!strncmp(g_relayState, "stopped", 7) || !g_relayState[0]) break; }
     // the old status must not be read as the new lobby (a test took a lobby id from the previous session)
     wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t st[MAX_PATH]; _snwprintf_s(st, _TRUNCATE, L"%s\\relay.status", dir); DeleteFileW(st);
     g_relayState[0] = 0; g_relayLobby = 0;
@@ -121,9 +123,18 @@ static void TickLobby(const TickObjs& t) {
     TickWindowSlot();
     if (!g_exec) FindExec();
     LobbyHookExec();
-    if (!g_lobbyRole) return;
     char map[96]; MapName(t, map, sizeof(map));
     bool story = map[0] == 'L' && map[1] >= '0' && map[1] <= '9';
+    g_lobbyInMenu = !story && _strnicmp(map, "ESC_", 4) != 0;
+    // the lobby's relay ended (the host left - Steam would hand its lobby to a guest -, or it stopped): out of the lobby
+    if (g_lobbyRole && !StoryRelayLive()) {
+        bool hostLeft = strstr(g_relayState, "host left") != nullptr;
+        Log("lobby: relay gone (role %d, state '%s')", g_lobbyRole, g_relayState);
+        strcpy_s(g_lobbyStatus, hostLeft ? u8"Хост закрыл лобби / the host closed the lobby" : u8"Лобби закрыто / lobby closed");
+        g_lobbyRole = 0; g_lobbyClosedAt = GetTickCount();
+    }
+    g_lobbyGuest = g_lobbyRole == 2;
+    if (!g_lobbyRole) return;
     DWORD now = GetTickCount();
     if (g_lobbyRole == 1) {
         // keyed on the GameInfo object (a new one per load), not on the map name: the map name was not reliable after a

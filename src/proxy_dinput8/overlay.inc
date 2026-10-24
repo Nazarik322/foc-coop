@@ -674,13 +674,23 @@ static bool StartRelay(const char* args) {
     Log("relay: started %ls", cmd); return true;
 }
 static char g_relayGo[128] = "";   // relay.status go= (lobby guest: the host started a mission, lobby.inc)
+static char g_relayMembers[8][64]; static int g_relayMemberN = 0;   // relay.status member= (Steam names, UTF-8)
+static unsigned long long g_relayHost = 0;
 static void ReadRelayStatus() {   // relay.status: key=value lines
     wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\relay.status", dir);
     FILE* f = nullptr; _wfopen_s(&f, p, L"r"); if (!f) return;
-    char line[200];
+    char line[200]; int nm = 0;
     while (fgets(line, sizeof(line), f)) {
         size_t l = strlen(line); while (l && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0;
-        if (!strncmp(line, "state=", 6)) strncpy_s(g_relayState, line + 6, _TRUNCATE);
+        if (!strncmp(line, "member=", 7) && nm < 8) {   // "member=<steam id> <name>"; the host's name first
+            char* sp = strchr(line + 7, ' '); unsigned long long id = _strtoui64(line + 7, nullptr, 10);
+            const char* name = sp ? sp + 1 : "?";
+            if (id && id == g_relayHost && nm) { memmove(g_relayMembers[1], g_relayMembers[0], 64 * nm); strncpy_s(g_relayMembers[0], name, _TRUNCATE); }
+            else strncpy_s(g_relayMembers[nm], name, _TRUNCATE);
+            nm++;
+        }
+        else if (!strncmp(line, "host=", 5)) g_relayHost = _strtoui64(line + 5, nullptr, 10);
+        else if (!strncmp(line, "state=", 6)) strncpy_s(g_relayState, line + 6, _TRUNCATE);
         else if (!strncmp(line, "lobby=", 6)) g_relayLobby = _strtoui64(line + 6, nullptr, 10);
         else if (!strncmp(line, "peers=", 6)) g_relayPeers = atoi(line + 6);
         else if (!strncmp(line, "role=", 5)) strncpy_s(g_relayRole, line + 5, _TRUNCATE);
@@ -688,6 +698,7 @@ static void ReadRelayStatus() {   // relay.status: key=value lines
         else if (!strncmp(line, "go=", 3)) strncpy_s(g_relayGo, line + 3, _TRUNCATE);
     }
     fclose(f);
+    g_relayMemberN = nm;
 }
 static void RelayCommand(const char* c) {
     wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\relay.cmd", dir);
@@ -897,12 +908,17 @@ static void DrawJoinPage() {
             bool locked = l.pwHash[0] && strcmp(l.pwHash, "-") && strcmp(l.pwHash, "0");
             char b[48]; _snprintf_s(b, _TRUNCATE, "%s##%s", l.inGame ? "Join game" : "Join lobby", l.id);
             if (locked) { ImGui::SameLine(); ImGui::TextDisabled("(password)"); }
+            // 2026-10-24 real test: the host pressed Join while hosting, which closed its own lobby (Steam gave it to the
+            // friend) - no joining while we host one
+            ImGui::BeginDisabled(g_lobbyRole == 1);
             if (ImGui::SmallButton(b)) { strncpy_s(g_joinLobby, l.id, _TRUNCATE); if (LobbyJoin(l.id, l.pwHash, g_joinPw)) g_menuOpen = 0; }
+            ImGui::EndDisabled();
         }
         if (g_steamLobbies.empty()) { ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextDisabled(g_listStarted && GetTickCount() - g_listStarted > 8000 ? "no games found yet - ask your friend to host" : "searching..."); }
         ImGui::EndTable();
     }
     ImGui::EndChild();
+    if (g_lobbyRole == 1) ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), u8"Вы хост лобби - сначала закройте его (Host > Close lobby) / you host a lobby: close it first");
     ImGui::SetNextItemWidth(180); ImGui::InputText("Lobby password", g_joinPw, sizeof(g_joinPw), ImGuiInputTextFlags_Password);
     if (g_relayState[0] && !strcmp(g_relayRole, "join")) ImGui::TextDisabled("Steam: %s", g_relayState);
     if (g_lobbyStatus[0]) ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s", g_lobbyStatus);
@@ -1026,6 +1042,20 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
             ImGuiIO& io = ImGui::GetIO(); io.IniFilename = nullptr; io.MouseDrawCursor = false;
             ImGui::StyleColorsDark();
             ImGuiStyle& st = ImGui::GetStyle(); st.WindowRounding = 6; st.FrameRounding = 4; st.WindowPadding = ImVec2(14, 12); st.ItemSpacing = ImVec2(8, 7);
+            // owner 2026-10-24: Russian Steam names (the friend's) showed as "?" - the built-in font has Latin only.
+            // A Windows font with the Cyrillic range (UTF-8 strings: Steam names from the relay, u8"" texts).
+            {
+                char wd[MAX_PATH] = ""; GetWindowsDirectoryA(wd, MAX_PATH);
+                static const char* files[] = { "segoeui.ttf", "arial.ttf", "tahoma.ttf" };
+                bool ok = false;
+                for (const char* fn : files) {
+                    char path[MAX_PATH]; _snprintf_s(path, _TRUNCATE, "%s\\Fonts\\%s", wd, fn);
+                    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
+                    ok = io.Fonts->AddFontFromFileTTF(path, 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic()) != nullptr;
+                    if (ok) { Log("menu: font %s (Cyrillic)", path); break; }
+                }
+                if (!ok) Log("menu: no Windows font found, built-in font (no Cyrillic)");
+            }
             g_menuT0 = GetTickCount();
             DWORD n = sizeof(g_playerName); GetUserNameA(g_playerName, &n);
             if (g_suffix[0]) { size_t l = strlen(g_playerName); _snprintf_s(g_playerName + l, sizeof(g_playerName) - l, _TRUNCATE, "_%s", g_suffix); }   // second copy on one PC gets its own name
@@ -1058,8 +1088,26 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
         else strcpy_s(t, "Co-op menu: F10");
         ImGui::GetForegroundDrawList()->AddText(ImVec2(10, io.DisplaySize.y - 24 * (io.DisplaySize.y > 900 ? 1.5f : 1.f)), IM_COL32(255, 255, 255, 170), t);
     }
+    // owner 2026-10-24: "some visual sign that we are in the lobby, top left, while in the menu" - who hosts, who is in
+    // it, what happens next (lobby.inc g_lobbyRole/g_lobbyStatus, relay.status member= names)
+    if (!g_menuOpen && g_lobbyRole && g_lobbyInMenu) {
+        float s = io.DisplaySize.y / 720.f; if (s < 1.f) s = 1.f; if (s > 3.f) s = 3.f; io.FontGlobalScale = s;
+        ImGui::SetNextWindowPos(ImVec2(12 * s, 12 * s), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.72f);
+        ImGui::Begin("##lobbybanner", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+        ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), g_lobbyRole == 1 ? u8"ЛОББИ - вы хост" : u8"ЛОББИ - вы гость");
+        ImGui::Text(u8"Игроки: %d / %d", g_relayMemberN ? g_relayMemberN : 1, g_lobbyRole == 1 ? g_lobbyMax : 4);
+        for (int i = 0; i < g_relayMemberN; i++) ImGui::BulletText("%s%s", g_relayMembers[i], i == 0 ? u8"  (хост)" : "");
+        ImGui::Separator();
+        if (g_lobbyRole == 1) ImGui::TextUnformatted(g_relayMemberN > 1 ? u8"Запускайте кампанию из меню игры: CONTINUE или CAMPAIGN" : u8"Ждём друга: F10 > Join a game > Join lobby");
+        else ImGui::TextUnformatted(u8"Ждите в меню: хост запустит миссию, и вы зайдёте сами");
+        ImGui::TextDisabled("Steam: %s   [F10]", g_relayState);
+        ImGui::End();
+    } else if (!g_menuOpen && !g_lobbyRole && g_lobbyInMenu && g_lobbyClosedAt && GetTickCount() - g_lobbyClosedAt < 20000) {   // after the lobby ended
+        ImGui::GetForegroundDrawList()->AddText(ImVec2(14, 14), IM_COL32(255, 200, 80, 230), g_lobbyStatus);
+    }
     if (g_waitingGuest > 0 && !g_menuOpen) {   // sync.inc: the host's story map is paused until a friend has loaded it
-        char t[160]; _snprintf_s(t, _TRUNCATE, "Waiting for your friend to load the level... (%ld s)", g_waitingGuest);
+        char t[160]; _snprintf_s(t, _TRUNCATE, u8"Ждём, пока друг загрузит уровень... / Waiting for your friend to load the level... (%ld s)", g_waitingGuest);
         ImVec2 sz = ImGui::CalcTextSize(t);
         ImGui::GetForegroundDrawList()->AddText(ImVec2((io.DisplaySize.x - sz.x) / 2, io.DisplaySize.y * 0.45f), IM_COL32(255, 255, 255, 230), t);
     }

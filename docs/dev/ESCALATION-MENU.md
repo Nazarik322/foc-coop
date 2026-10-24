@@ -284,3 +284,7 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
   invalid; (2) the first SnStopSvc killed by a pid from a stale relay_svc.status, which Windows had given to the
   test's PowerShell -> it now checks the image path is our FoCRelay.exe; (3) a stale foc_cmd.txt made B join an old
   lobby. Rule: when the Escalation svc relay and another relay may run together, only one may own Steam networking.
+- 2026-10-24 - B49 (story F10 lobby, real 2-PC on v0.8.2-dev, see BUGS): the svc relay is now started only when an
+  Escalation/Multiplayer lobby map (UI_Lobby*) or an ESC_ map is loaded and stopped (clean quit, up to 10 s) in the main
+  menu, on story maps and before an F10 relay. Escalation not re-tested (owner parked it); risk: the first party
+  channel waits for the relay's Steam ID (CreateChatChannel pending up to 15 s).

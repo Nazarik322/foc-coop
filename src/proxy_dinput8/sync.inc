@@ -335,6 +335,7 @@ static void TickEscalationRules(const TickObjs& t) {
 // guest controller exists (the guest has loaded the map and logged in) or waitguest seconds passed. Network keeps
 // running while paused.
 static volatile LONG g_waitingGuest = 0;   // shown by the overlay
+static volatile LONG g_lobbyGuest = 0;     // lobby.inc: we are a guest in an F10 lobby - never wait for guests ourselves
 static void TickWaitGuest(const TickObjs& t) {
     static BYTE* worldSeen = nullptr; static DWORD since = 0; static bool active = false;
     if (g_waitGuestSec <= 0 || t.ngame < 1 || t.nuworld < 1) { g_waitingGuest = 0; return; }
@@ -354,13 +355,15 @@ static void TickWaitGuest(const TickObjs& t) {
     if (!ready) readySince = 0; else if (!readySince) readySince = GetTickCount();
     if (ready && !guestPawns && GetTickCount() - readySince > 3000) { guestPawns = true; Log("waitguest: guest ready 3 s but its pawn is not on the host yet -> going on"); }
     bool guest = ready && guestPawns;
-    bool timeout = GetTickCount() - since > (DWORD)g_waitGuestSec * 1000;
+    // 2026-10-24 real test: the friend (a lobby guest) pressed CONTINUE himself; his solo L01 paused "until a guest
+    // joins" and showed the waiting screen forever. A lobby guest never waits; its mission goes to the host on "go".
+    bool timeout = g_lobbyGuest || GetTickCount() - since > (DWORD)g_waitGuestSec * 1000;
     for (int i = 0; i < t.nworld; i++) {
         BYTE** pauser = (BYTE**)(t.world[i] + 0x394);
         if (guest || timeout) { if (*pauser == pri) *pauser = nullptr; }
         else if (*pauser == nullptr) *pauser = pri;
     }
-    if (guest || timeout) { active = false; g_waitingGuest = 0; Log("waitguest: %s -> unpaused", guest ? "guest ready, no movie playing" : "timeout"); }
+    if (guest || timeout) { active = false; g_waitingGuest = 0; Log("waitguest: %s -> unpaused", guest ? "guest ready, no movie playing" : g_lobbyGuest ? "we are a lobby guest" : "timeout"); }
     else g_waitingGuest = (LONG)(g_waitGuestSec - (GetTickCount() - since) / 1000);
 }
 

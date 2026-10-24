@@ -444,6 +444,26 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   (steamnet.inc) does not start svc while that relay lives and starts it again when it is gone. Both players need the
   new build. Test: tools/lobbytest.ps1 (TESTS.md).
 
+### B49. F10 lobby on real Steam after v0.8.2-dev: still no game together - FIXED 2026-10-24 (mock), real retest pending
+- Owner + friend, v0.8.2-dev, 21:27-21:33 (sessions/real_20261024b: host_run1/2.log, host_relay.log, friend.log):
+  1. The svc relay was killed (not quit within 3 s, often while it was still starting) and restarted around every
+     F10 step on both PCs; the host relay got the friend's session request but never a packet ("peer connected"
+     missing), the friend heard nothing from the host.
+  2. The host pressed Join on its OWN lobby in the list while hosting: its host relay quit, Steam made the friend the
+     lobby owner; every later join went to the friend, who hosts nothing -> empty screen ("host silent for 20 s").
+     The stale go= in the lobby made each join "follow" the old start at once.
+  3. The friend (guest) pressed CONTINUE himself: his solo L01 paused "until a guest joins" -> his waiting screen.
+- Fix: svc relay only from the ESCALATION / MULTIPLAYER menus and their maps (owner: "only when the Escalation button
+  is pressed, kill it when you go back to the menu"), clean quit (10 s) before a kill; Join list (relay list mode)
+  drops our own lobby, Escalation party lobbies (focesc) and lobbies whose host left (owner data != Steam owner or
+  closed=1); Join disabled while we host; the host relay sets go="" and closed=1 when it ends; a guest relay leaves
+  when the host left / the lobby is closed or gone ("stopped: host left the lobby") and the DLL drops the lobby role;
+  a lobby guest never pauses its own map for guests (sync.inc g_lobbyGuest).
+- Also (owner): lobby banner top left in the menus (role, players with Steam names, what to do next); the F10 menu
+  font is a Windows TTF with Cyrillic (Russian Steam names showed as "?"), build.bat compiles with /utf-8.
+- Test: tools/lobbyfriend.ps1 (TESTS.md). Escalation itself not re-tested (owner: parked); its relay now starts only
+  when the Escalation lobby map loads - first party creation waits for the relay's Steam ID (up to 15 s).
+
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
   every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all

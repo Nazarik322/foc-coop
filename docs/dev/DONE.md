@@ -3,6 +3,12 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-24 late: B49 - F10 lobby fixes after the second real 2-PC test, lobby banner, Cyrillic menu font
+- svc relay only in the Escalation/Multiplayer menus; Join list without our own / Escalation / abandoned lobbies; no
+  Join while hosting; guest leaves when the host left; lobby guest never waits for guests; banner top left; Cyrillic.
+- Verified (mock, 2 copies): tools/lobbyfriend.ps1 PASS (`lobbyfriend3`), lobbytest PASS, lobbycontinue PASS, matrix
+  L02a, L02b, L04c, L06 PASS, Steam mock L03b PASS (`b49_story.txt`). Not run: Escalation (parked). Real retest pending.
+
 ## 2026-10-24: B48 - campaign co-op over the F10 lobby works again (svc relay paused while a story relay runs, de8b1ba; released as v0.8.2-dev from main ba94100)
 - Installer SHA-256 bbe28be5caeec4fb60ff60cf2b847a49907fb834bcbe4fe33983bcf19b5791b6 (downloaded back, same).
 - Real 2-PC test: the friend could not get into the host's campaign (four lobbies, L09 and L01); the Escalation svc

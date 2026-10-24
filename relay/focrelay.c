@@ -147,7 +147,7 @@ static char g_dir[MAX_PATH];
 static SOCKET g_cs = INVALID_SOCKET;          /* join: socket the guest game talks to */
 static struct sockaddr_in g_gameAddr; static int g_haveGame;
 static DWORD g_hostSeen; static unsigned long long g_tx, g_rx;
-static volatile LONG g_quit;
+static volatile LONG g_quit; static char g_stopWhy[64];
 /* svc mode (2026-10-21, Escalation through the game's menus): one relay per game, started by the DLL. A local UDP
  * control socket (port in relay.status "svcport=") talks to the DLL:
  *   DLL -> relay  'P' flags(1) to(8) payload   message to a Steam user (flags bit 0: reliable), channel CH_SVC
@@ -176,6 +176,16 @@ static void Status(void) {
     if (g_isSvc) fprintf(f, "svcport=%d\n", g_svcPort);
     for (int i = 0; i < g_npeers; i++) fprintf(f, "peer=%llu tx=%llu rx=%llu\n", g_peers[i].id, g_peers[i].tx, g_peers[i].rx);
     if (g_fr) { const char* pn = SteamAPI_ISteamFriends_GetPersonaName(g_fr); fprintf(f, "persona=%s\n", pn ? pn : ""); }
+    /* lobby members with their Steam names (UTF-8) for the in-game lobby banner (2026-10-24) */
+    if (!g_isSvc && g_inLobby && g_mm && g_fr) {
+        int n = SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(g_mm, g_lobby);
+        for (int i = 0; i < n && i < 16; i++) {
+            uint64_t m = SteamAPI_ISteamMatchmaking_GetLobbyMemberByIndex(g_mm, g_lobby, i);
+            const char* nm = SteamAPI_ISteamFriends_GetFriendPersonaName(g_fr, m);
+            char c[64]; strncpy(c, nm ? nm : "?", 63); c[63] = 0; for (char* q = c; *q; q++) if (*q == '\n' || *q == '\r') *q = ' ';
+            fprintf(f, "member=%llu %s\n", m, c);
+        }
+    }
     fclose(f);
     MoveFileExA(t, p, MOVEFILE_REPLACE_EXISTING);
 }
@@ -232,6 +242,13 @@ static void WriteLobbyList(uint32_t count) {
         char name[64], mode[32], map[96], own[32], max[16];
         CopyData(name, 64, l, "name"); CopyData(mode, 32, l, "mode"); CopyData(map, 96, l, "map"); CopyData(own, 32, l, "owner"); CopyData(max, 16, l, "max");
         uint64_t owner = _strtoui64(own, NULL, 10);
+        /* 2026-10-24 real test: only real story lobbies of somebody else whose host is still in them. Skipped: our own
+           lobby (the host pressed Join on it and killed its own game), Escalation party lobbies (focesc), and lobbies
+           the host left - Steam gives them to a guest, and joining that "host" ended in an empty screen. */
+        char esc[8]; CopyData(esc, 8, l, "focesc");
+        uint64_t realOwner = SteamAPI_ISteamMatchmaking_GetLobbyOwner(g_mm, l);
+        char closed[8]; CopyData(closed, 8, l, "closed");
+        if (esc[0] == '1' || closed[0] == '1' || owner == g_me || (owner && realOwner && realOwner != owner)) continue;
         char pw[24], go[128]; CopyData(pw, 24, l, "pw"); CopyData(go, 128, l, "go");
         fprintf(f, "%llu|%llu|%s|%s|%s|%d|%d|%d|%s|%d\n", l, owner, name, mode, map, SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(g_mm, l), atoi(max), owner && IsFriend(owner), pw[0] ? pw : "-", go[0] != 0);
         seen[ns++] = l;
@@ -243,6 +260,9 @@ static void WriteLobbyList(uint32_t count) {
         if (!SteamAPI_ISteamFriends_GetFriendGamePlayed(g_fr, fid, &gi) || (gi.gameID & 0xffffff) != 480 || !gi.lobby) continue;
         int dup = 0; for (int k = 0; k < ns; k++) if (seen[k] == gi.lobby) dup = 1;
         if (dup) continue;
+        char esc[8], own[32]; CopyData(esc, 8, gi.lobby, "focesc"); CopyData(own, 32, gi.lobby, "owner");
+        uint64_t o = _strtoui64(own, NULL, 10), ro = SteamAPI_ISteamMatchmaking_GetLobbyOwner(g_mm, gi.lobby);
+        if (esc[0] == '1' || o == g_me || (o && ro && ro != o)) continue;   /* Escalation party / ours / host left */
         char name[64]; const char* fn = SteamAPI_ISteamFriends_GetFriendPersonaName(g_fr, fid); strncpy(name, fn ? fn : "?", 63); name[63] = 0; Clean(name);
         fprintf(f, "%llu|%llu|%s|?|?|0|0|1|0|0\n", gi.lobby, fid, name);
     }
@@ -370,6 +390,13 @@ static void OnLobbyEntered(uint64_t lobby, uint32_t response) {
         const char* tag = SteamAPI_ISteamMatchmaking_GetLobbyData(g_mm, lobby, "foccoop");
         if (!tag || strcmp(tag, "1")) { SetState("that lobby is not a Fall of Cybertron co-op game"); return; }
         g_hostId = SteamAPI_ISteamMatchmaking_GetLobbyOwner(g_mm, lobby);
+        const char* own = SteamAPI_ISteamMatchmaking_GetLobbyData(g_mm, lobby, "owner");
+        uint64_t creator = own ? _strtoui64(own, NULL, 10) : 0;
+        const char* cl = SteamAPI_ISteamMatchmaking_GetLobbyData(g_mm, lobby, "closed");
+        if ((creator && creator != g_hostId) || (cl && cl[0] == '1')) {   /* the host left; Steam made a guest the owner (2026-10-24 real test) */
+            printf("lobby %llu: its host %llu left (owner now %llu)\n", lobby, creator, g_hostId);
+            SetState("host left the lobby"); strcpy(g_stopWhy, "stopped: host left the lobby"); g_quit = 1; return;
+        }
         g_hostSeen = GetTickCount();
         SendTo(g_hostId, "H", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);   /* hello: lets the host accept our session */
         SetState("joined: waiting for the game to connect");
@@ -614,6 +641,10 @@ int main(int argc, char** argv) {
                 const char* go = SteamAPI_ISteamMatchmaking_GetLobbyData(g_mm, g_lobby, "go");   /* host started a mission */
                 if (go && strcmp(go, g_go)) { strncpy(g_go, go, sizeof(g_go) - 1); printf("go: %s\n", g_go); Status(); }
                 if (now - g_hostSeen > 20000) SetState("host silent for 20 s");
+                uint64_t owner = SteamAPI_ISteamMatchmaking_GetLobbyOwner(g_mm, g_lobby);
+                const char* closed = SteamAPI_ISteamMatchmaking_GetLobbyData(g_mm, g_lobby, "closed");   /* set by the host on exit */
+                if ((closed && closed[0] == '1') || !owner) owner = 1;   /* closed, or the lobby is gone (mock deletes it) */
+                if (owner && owner != g_hostId) { printf("host %llu left the lobby (owner now %llu)\n", g_hostId, owner); SetState("host left the lobby"); strcpy(g_stopWhy, "stopped: host left the lobby"); break; }
             }
         }
         if (now - lastStatus > 1000) {
@@ -643,9 +674,10 @@ int main(int argc, char** argv) {
     }
     if (g_isHost) for (int i = 0; i < g_npeers; i++) SendTo(g_peers[i].id, "B", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
     else if (g_hostId) SendTo(g_hostId, "B", 1, SEND_RELIABLE_NONAGLE, CH_CTRL);
+    if (g_isHost && !g_isSvc && g_lobby) { SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "go", ""); SteamAPI_ISteamMatchmaking_SetLobbyData(g_mm, g_lobby, "closed", "1"); }   /* a closed lobby: no stale start for a late joiner */
     if (g_lobby) SteamAPI_ISteamMatchmaking_LeaveLobby(g_mm, g_lobby);
     SteamAPI_ISteamFriends_ClearRichPresence(g_fr);
-    SetState("stopped");
+    SetState(g_stopWhy[0] ? g_stopWhy : "stopped");
     SteamAPI_Shutdown();
     return 0;
 }
