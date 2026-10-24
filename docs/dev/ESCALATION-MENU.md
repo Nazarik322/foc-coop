@@ -268,3 +268,10 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
   c2a1dd80.., 7112..), never GUID_SysMouse, so g_mouseDev stays null. Reading: the game reads the DirectInput mouse
   only while its window is active (Acquire fails in background copies). Not fixed; idea for later: hook Acquire
   (slot 7) and classify devices by GetCapabilities dwDevType (0x12 mouse, 0x13 keyboard).
+- 2026-10-24 - **real 2-PC test with v0.8.1-dev** (owner hosts, friend; owner's log
+  sessions/real_20261024/host_escalation_pid6052.log): the in-game Send Invite worked (friend joined the party at
+  68 s), game lobby -> ESC_Gladiator "hosting the match on port 7778", the friend played the whole match (~29 min,
+  both pawns respawning) up to MatchOver -> **B38 and B39 confirmed fixed on real Steam**. Owner: "everything works
+  great, only the statistics do not show" (B47). After the match: back to the lobby, main menu, then a crash when
+  the old online game was destroyed (B45). The owner then tried MULTIPLAYER (versus): crash 4 s after Send Invite
+  (B46). Friend's log not received.

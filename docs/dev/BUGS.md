@@ -389,6 +389,30 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - 2026-10-24: the member is already in the party (host lists it) but its screen stays on ONLINE FRIENDS until ESC.
   Check whether the original game returns to the party lobby by itself.
 
+### B45. Escalation: crash after a finished match, when the online game is destroyed - open (real 2-PC, 2026-10-24)
+- Owner's log (v0.8.1-dev, host, sessions/real_20261024/host_escalation_pid6052.log + foc_crash_6052_crash1.dmp):
+  MatchOver at 1876 s -> UI_Lobby_ESC_m at 1893 s -> UI_FrontEnd_m at 1898 s (left to the main menu) -> at 1931 s
+  "UnsubscribeFromChatChannel" of the game channel, `GetGameSettings(Game) -> -` (null), then EXCEPTION c0000005 at
+  ghidra 0x5e0aff (read of 0x11c), CRASHOBJ OnDestroyOnlineGameComplete / OnlineDisconnector /
+  OnlineGameInterfaceDemonware. Owner says he then tried MULTIPLAYER - the crash is likely that click (the
+  disconnector destroys the old Escalation sessions). Reading: the destroy-complete handler gets a session whose
+  settings we already dropped. Fix later: keep the settings until OnDestroyOnlineGameComplete or answer the destroy
+  for a missing session cleanly. Test: finish (or quit) an Escalation match, back to the main menu, open MULTIPLAYER.
+
+### B46. MULTIPLAYER (versus) lobby: crash a few seconds after Send Invite - open (versus not supported yet)
+- Owner's log (sessions/real_20261024/host_multiplayer_pid7068.log): MULTIPLAYER loads UI_Lobby_m (TnLobbyGame
+  PartyHost, our Steam party lobby is created like in Escalation), Send Invite -> Steam lobby invite to the friend
+  at 45 s; the friend never joined (no member+); at 49 s null call from ghidra 0xc1b467 (stack 8bd33a, b6e252,
+  574b0b ...), no dump. Versus is the last item in the plan (ESCALATION-MENU.md step 6); this is the first real try.
+  Fix later: find what 0xc1b467 calls (null vtable/delegate in the versus party lobby), or keep the Escalation
+  hooks out of UI_Lobby_m until versus is done.
+
+### B47. Escalation: statistics not shown - open, details to check (owner report 2026-10-24)
+- Owner: "everything works great, only the statistics do not show, it seems". Not clear yet which screen (end of
+  match results, XP/level, leaderboards, TAB). Log: MatchOver -> the lobby 17 s later; no stats lines in our log.
+  Probable cause: stats are read/written through Demonware (StatsInterfaceEx), dead; only HasReadKeyArchiveFor is
+  answered. Ask the owner which screen, then check the stats interface slots.
+
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
   every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all
