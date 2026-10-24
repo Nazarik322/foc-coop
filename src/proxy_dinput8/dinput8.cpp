@@ -1570,18 +1570,37 @@ static DWORD WINAPI DbgHelpThread(LPVOID);
 typedef LPWSTR(WINAPI* PFN_GCLW)(); typedef LPSTR(WINAPI* PFN_GCLA)();
 static PFN_GCLW o_GCLW; static PFN_GCLA o_GCLA;
 static wchar_t* g_cmdW; static char* g_cmdA;
+// ini `language` (owner 2026-10-24, the Russian translation the installer can add): the game needs
+// -languageforcooking=<lang> on its command line; added here so nobody has to type it into Steam's launch options.
+static void CmdLanguage(wchar_t* out, size_t n) {
+    out[0] = 0;
+    wchar_t ini[MAX_PATH]; GetModuleFileNameW(nullptr, ini, MAX_PATH); wchar_t* sl = wcsrchr(ini, L'\\'); if (!sl) return;
+    wcscpy_s(sl + 1, MAX_PATH - (sl + 1 - ini), L"foc_coop.ini");
+    wchar_t lang[16] = L""; GetPrivateProfileStringW(L"foc_coop", L"language", L"", lang, 16, ini);
+    for (wchar_t* c = lang; *c; c++) if (!iswalpha(*c)) { lang[0] = 0; break; }
+    if (lang[0]) _snwprintf_s(out, n, _TRUNCATE, L" -languageforcooking=%s", lang);
+}
 static LPWSTR WINAPI h_GetCommandLineW() {
     if (!g_cmdW) {
-        const wchar_t* s = o_GCLW(); size_t n = wcslen(s); wchar_t* d = (wchar_t*)calloc(n + 1, 2); size_t k = 0;
+        const wchar_t* s = o_GCLW(); size_t n = wcslen(s);
+        wchar_t extra[64]; CmdLanguage(extra, 64); if (wcsstr(s, L"languageforcooking")) extra[0] = 0;
+        size_t ne = wcslen(extra);
+        wchar_t* d = (wchar_t*)calloc(n + ne + 1, 2); size_t k = 0;
         for (size_t i = 0; i < n; i++) { if (s[i] == L'%' && s[i + 1] == L'2' && (s[i + 2] == L'C' || s[i + 2] == L'c')) { d[k++] = L','; i += 2; } else d[k++] = s[i]; }
+        memcpy(d + k, extra, ne * 2);
         g_cmdW = d;
     }
     return g_cmdW;
 }
 static LPSTR WINAPI h_GetCommandLineA() {
     if (!g_cmdA) {
-        const char* s = o_GCLA(); size_t n = strlen(s); char* d = (char*)calloc(n + 1, 1); size_t k = 0;
+        const char* s = o_GCLA(); size_t n = strlen(s);
+        wchar_t ew[64]; CmdLanguage(ew, 64); if (strstr(s, "languageforcooking")) ew[0] = 0;
+        char extra[64]; WideCharToMultiByte(CP_ACP, 0, ew, -1, extra, sizeof(extra), nullptr, nullptr);
+        size_t ne = strlen(extra);
+        char* d = (char*)calloc(n + ne + 1, 1); size_t k = 0;
         for (size_t i = 0; i < n; i++) { if (s[i] == '%' && s[i + 1] == '2' && (s[i + 2] == 'C' || s[i + 2] == 'c')) { d[k++] = ','; i += 2; } else d[k++] = s[i]; }
+        memcpy(d + k, extra, ne);
         g_cmdA = d;
     }
     return g_cmdA;
@@ -1986,7 +2005,8 @@ static void LoadConfig(const wchar_t* dir) {
         g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
         g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);
         if (g_tickMs < 20) g_tickMs = 20;
-        if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES) {   // no ini: sensible co-op defaults for players
+        // no ini (or one without the co-op keys, e.g. only the installer's language=rus, 2026-10-24): co-op defaults
+        if (GetFileAttributesW(ini2) == INVALID_FILE_ATTRIBUTES || GetPrivateProfileIntW(L"foc_coop", L"tcpdriver", -1, ini2) == -1) {
             g_tcpDriver = g_forceCharFlag = g_tutGuard = g_ctrlShare = g_hostFirst = g_rescue = g_tpSync = true;
             g_maxPlayers = 5;
         }

@@ -3,6 +3,11 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-25: v0.9.0-dev - installer Russian translation (optional), all mods unticked (R1)
+- Release run (`rel_story.txt`): lobbytest, lobbycontinue, lobbyfriend PASS; scene4 FAIL once (B52 name mix-up) then
+  PASS (`rel_4b`); matrix L02a, L02b, L04c, L06 PASS; Steam mock L03b PASS. Installer /install /mods rus + /uninstall on
+  copy D PASS (files, ini key, backups); Russian menu with language=rus, English without (copy D screenshots).
+
 ## 2026-10-24 night: up to 5 players in story through the F10 lobby, gather at the scene activator (B50, B51)
 - Host = server (enemies, damage shared, owner's choice); after a cutscene everybody moves to the player who triggered
   it (scene.inc); guest position reports per guest (3+ players); test copies use relay ports 7790 + instance.

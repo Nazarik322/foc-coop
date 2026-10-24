@@ -320,7 +320,7 @@ class Wizard : Form
             string state = m.Archive != null ? Path.GetFileName(m.Archive) : T.S("not downloaded — tick to open its page", "не скачан — отметьте, откроется страница");
             if (have.Contains(m.Id)) state = T.S("installed; ", "уже установлен; ") + state;
             int i = modList.Items.Add(name + "  —  " + state);
-            bool tick = chosen.Contains(m.Id) || (m.Archive != null && (m.Default || have.Contains(m.Id)));
+            bool tick = chosen.Contains(m.Id);   // owner 2026-10-24: every mod (and the Russian translation) unticked by default
             modList.SetItemChecked(i, tick);
             if (tick) chosen.Add(m.Id);
         }

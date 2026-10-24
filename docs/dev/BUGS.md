@@ -485,6 +485,24 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   the engine's own behaviour, not separately checked. Open from the screenshots: B5 dark silhouettes on guests in the
   L01 opening (unchanged), "Hold E to Revive" prompt on guests there.
 
+### R1. Installer: optional Russian translation, all mods unticked - DONE 2026-10-24
+- Owner: bundle the Russian translation (Steam guide 2983257437 "РАБОЧИЙ МУЛЬТИПЛЕЕР + НОВАЯ РУСИФИКАЦИЯ TFOC + DLC" by
+  Zerberus, archive TFOC.7z: Coalesced.RUS, a replacement Coalesced.ini, two _RUS.bik, a .reg with Language=RUS) as a
+  choice, and every mod unticked by default. The guide gives no permission to redistribute (said to the owner, his call).
+- Installer: first list entry "Русский язык", resource rus.zip (build_installer.bat, files from E:\FoC-coop\downloads\rus,
+  not in git); copies TransGame\ files with backups and writes foc_coop.ini language=rus; uninstall restores the files and
+  removes the key. DLL: ini language=<x> appends -languageforcooking=<x> to the command line (the guide's launch option).
+- Tested on copy D: files + language=rus -> Russian main menu; without the key English (registry stayed ENU, so the
+  .reg is not needed and HKLM is not touched); installer /install /mods rus and /uninstall on copy D exit 0, files and
+  key put back (Coalesced.ini hash as before).
+- DLL fix on the way: an ini without the co-op keys (e.g. only language=rus) turned co-op features off; the defaults now
+  apply when the ini has no tcpdriver key.
+
+### B52. 4 players: a guest briefly carries another guest's name on the host - open (flaky)
+- 2026-10-25 release run `rel_4`: copy D (Ratchet) showed as "Ironhide" (C's name) on the host; D's log: "names:
+  'Ironhide' -> SetName Ratchet (ok)", so D got C's name and renamed itself back. scene4 found no Ratchet and failed;
+  the rerun `rel_4b` PASS. Check the name path (B32 code, TickNames / ServerChangeName) with 4 copies.
+
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
   every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all

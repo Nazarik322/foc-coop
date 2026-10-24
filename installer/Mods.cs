@@ -3,11 +3,17 @@
 // them with Windows' tar.exe (zip, rar, 7z) and copies the files into the game. Every game file that gets replaced is
 // first copied to <game>\foc_backup\ (same relative path); files that did not exist are listed in foc_backup\added.txt.
 // Uninstall puts the backups back and deletes the added files.
+// Exception (owner 2026-10-24): the Russian translation (Steam guide "РАБОЧИЙ МУЛЬТИПЛЕЕР + НОВАЯ РУСИФИКАЦИЯ TFOC + DLC"
+// by Zerberus, based on the official Novy Disk localisation) is bundled when build_installer.bat finds its files
+// (E:\FoC-coop\downloads\rus, not in git). It also sets foc_coop.ini language=rus (the DLL adds -languageforcooking=rus
+// to the command line); uninstall removes the key again.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 class ModDef
 {
@@ -23,19 +29,22 @@ static class Mods
 {
     // install order matters: the intro skip replaces some of the remastered movies (logos), so it comes after them
     public static readonly ModDef[] All = new ModDef[] {
-        new ModDef { Id = "audiologs", Name = "High Quality Audio Logs", NameRu = "Аудиологи в высоком качестве", Default = true,
+        new ModDef { Id = "rus", Name = "Russian language (fan translation by Zerberus, Steam guide)", NameRu = "Русский язык (русификатор Zerberus из руководства Steam)",
+            Resource = "rus.zip", Url = "https://steamcommunity.com/sharedfiles/filedetails/?id=2983257437",
+            Target = f => f.StartsWith(@"TransGame\", StringComparison.OrdinalIgnoreCase) ? f : null },
+        new ModDef { Id = "audiologs", Name = "High Quality Audio Logs", NameRu = "Аудиологи в высоком качестве", Default = false,
             Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/17?tab=files",
             Pattern = @"High.?Quality.?Audio.?Logs.*\.(rar|zip|7z)$",
             Target = f => Path.GetFileName(f).Equals("TransGame.xxx", StringComparison.OrdinalIgnoreCase) ? @"TransGame\CookedPC\TransGame.xxx" : null },
-        new ModDef { Id = "fmv", Name = "FMV Remaster (cutscene videos)", NameRu = "Ремастер видеороликов", Default = true,
+        new ModDef { Id = "fmv", Name = "FMV Remaster (cutscene videos)", NameRu = "Ремастер видеороликов", Default = false,
             Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/9?tab=files",
             Pattern = @"FMV.?Remaster.*\.(7z|rar|zip)$",
             Target = f => f.EndsWith(".bik", StringComparison.OrdinalIgnoreCase) ? @"TransGame\Movies\" + Path.GetFileName(f) : null },
-        new ModDef { Id = "nointro", Name = "Skip the intro videos", NameRu = "Пропуск вступительных роликов", Default = true,
+        new ModDef { Id = "nointro", Name = "Skip the intro videos", NameRu = "Пропуск вступительных роликов", Default = false,
             Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/12?tab=files",
             Pattern = @"No.?Intro.*\.(zip|rar|7z)$",
             Target = f => f.EndsWith(".bik", StringComparison.OrdinalIgnoreCase) ? @"TransGame\Movies\" + Path.GetFileName(f) : null },
-        new ModDef { Id = "configurator", Name = "Advanced Configurator (F1 menu: FPS, FOV, graphics)", NameRu = "Advanced Configurator (меню F1: FPS, FOV, графика)", Default = true,
+        new ModDef { Id = "configurator", Name = "Advanced Configurator (F1 menu: FPS, FOV, graphics)", NameRu = "Advanced Configurator (меню F1: FPS, FOV, графика)", Default = false,
             Pattern = @"Advanced.?Configurator.*\.(zip|rar|7z)$",
             Url = "https://www.nexusmods.com/transformersfallofcybertron/mods/120?tab=files",
             Note = "loaded by the co-op mod", NoteRu = "загружается кооп-модом",
@@ -44,7 +53,7 @@ static class Mods
                 if (n.Equals("dinput8.dll", StringComparison.OrdinalIgnoreCase)) return @"Binaries\TFOCAdvancedConfigurator.dll";
                 if (n.Equals("TFOCAdvancedConfigurator.ini", StringComparison.OrdinalIgnoreCase)) return @"Binaries\TFOCAdvancedConfigurator.ini";
                 return null; } },
-        new ModDef { Id = "reshade", Name = "ReShade 6.8 + colour preset (bundled; Home = ReShade menu)", NameRu = "ReShade 6.8 + цветовой пресет (встроен; Home — меню ReShade)", Default = true,
+        new ModDef { Id = "reshade", Name = "ReShade 6.8 + colour preset (bundled; Home = ReShade menu)", NameRu = "ReShade 6.8 + цветовой пресет (встроен; Home — меню ReShade)", Default = false,
             Resource = "reshade.zip",
             Target = f => {
                 string n = Path.GetFileName(f);
@@ -158,6 +167,7 @@ static class Mods
                     n++;
                 }
                 if (n == 0) throw new Exception(m.Name + ": " + T.S("no usable files in the archive", "в архиве нет нужных файлов"));
+                if (m.Id == "rus") { progress(T.S("Language: Russian", "Язык: русский")); Language.Apply(game, backup); }
                 File.WriteAllText(Path.Combine(backup, "mod_" + m.Id + ".txt"), Path.GetFileName(m.Archive));
             }
             finally { try { Directory.Delete(tmp, true); } catch { } }
@@ -185,6 +195,7 @@ static class Mods
         string backup = Path.Combine(game, "foc_backup");
         if (!Directory.Exists(backup)) return;
         string added = Path.Combine(backup, "added.txt");
+        Language.Restore(game, backup);
         if (File.Exists(added)) foreach (var l in File.ReadAllLines(added)) { string p = Path.Combine(game, l.Trim()); if (l.Trim().Length > 0 && File.Exists(p)) File.Delete(p); }
         foreach (var f in Directory.GetFiles(backup, "*", SearchOption.AllDirectories))
         {
@@ -193,5 +204,23 @@ static class Mods
             File.Copy(f, Path.Combine(game, rel), true);
         }
         Directory.Delete(backup, true);
+    }
+}
+
+// The game's language: foc_coop.ini language=rus makes the DLL add -languageforcooking=rus to the game's command line.
+// Tested 2026-10-24 (copy D): with the translation's files and this key the menus are Russian, without the key English;
+// the registry Language value the translation's .reg sets (HKLM, needs admin) made no difference, so it is not touched.
+static class Language
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool WritePrivateProfileString(string section, string key, string value, string file);
+    public static void Apply(string game, string backup)
+    {
+        WritePrivateProfileString("foc_coop", "language", "rus", Path.Combine(game, @"Binaries\foc_coop.ini"));
+        File.WriteAllText(Path.Combine(backup, "language_set.txt"), "rus");
+    }
+    public static void Restore(string game, string backup)
+    {
+        if (!File.Exists(Path.Combine(backup, "language_set.txt"))) return;
+        WritePrivateProfileString("foc_coop", "language", null, Path.Combine(game, @"Binaries\foc_coop.ini"));
     }
 }

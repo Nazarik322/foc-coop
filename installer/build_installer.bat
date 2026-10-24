@@ -19,11 +19,22 @@ mkdir "%STAGE%"
 xcopy /e /q /y "%~dp0reshade\*" "%STAGE%\" >nul || exit /b 1
 copy /y "%RESHADEDLL%" "%STAGE%\d3d9.dll" >nul || exit /b 1
 powershell -NoProfile -Command "Compress-Archive -Force -Path '%STAGE%\*' -DestinationPath '%ROOT%\build\reshade.zip'" || exit /b 1
+rem Russian translation (owner 2026-10-24; Steam guide 2983257437 by Zerberus, archive TFOC.7z): its TransGame\ tree in
+rem RUSDIR (third argument, default E:\FoC-coop\downloads\rus; not in git). Without it the installer is built without the
+rem translation and offers the guide's page instead.
+set RUSDIR=%~3
+if "%RUSDIR%"=="" set RUSDIR=E:\FoC-coop\downloads\rus
+set RUSRES=
+if exist "%RUSDIR%\TransGame" (
+  powershell -NoProfile -Command "Compress-Archive -Force -Path '%RUSDIR%\TransGame' -DestinationPath '%ROOT%\build\rus.zip'" || exit /b 1
+  set RUSRES=/resource:"%ROOT%\build\rus.zip",rus.zip
+) else echo note: no Russian translation in %RUSDIR% - built without it
 "%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe" /nologo /target:winexe /optimize /out:"%ROOT%\dist\FoCCoopSetup.exe" ^
   /resource:"%ROOT%\build\dinput8.dll",dinput8.dll ^
   /resource:"%ROOT%\relay\build\FoCRelay.exe",FoCRelay.exe ^
   /resource:"%STEAMAPI%",steam_api.dll ^
   /resource:"%ROOT%\build\reshade.zip",reshade.zip ^
+  %RUSRES% ^
   /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll ^
   "%~dp0Setup.cs" "%~dp0Mods.cs"
 exit /b %ERRORLEVEL%
