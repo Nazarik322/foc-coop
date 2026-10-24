@@ -4,6 +4,8 @@ What is implemented and verified, newest first. Every entry says how it was veri
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
 ## 2026-10-25: v0.9.0-dev - installer Russian translation (optional), all mods unticked (R1)
+- Released as GitHub pre-release v0.9.0-dev from main 660f651 (owner: "push with a release"); installer SHA-256
+  1d63fa3033445a2ed623236745201145764eb0e2c6ddf22f8c12c7ddae4b1368 (downloaded back, same).
 - Release run (`rel_story.txt`): lobbytest, lobbycontinue, lobbyfriend PASS; scene4 FAIL once (B52 name mix-up) then
   PASS (`rel_4b`); matrix L02a, L02b, L04c, L06 PASS; Steam mock L03b PASS. Installer /install /mods rus + /uninstall on
   copy D PASS (files, ini key, backups); Russian menu with language=rus, English without (copy D screenshots).
