@@ -53,7 +53,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - 2026-10-20: also in gameplay (L03a) and only on NPC robots; follows the guest role. Details in B25.
 - Owner 2026-10-20: switching off blur/post effects in the Advanced Configurator (F1) did NOT fix it (first report
   withdrawn).
-- 2026-10-20 gfxdiag (new: both sides write Binariesoc_gfx.txt every 30 s + `gfxdiag` command; tools/gfxdiff.ps1
+- 2026-10-20 gfxdiag (new: both sides write Binaries\foc_gfx.txt every 30 s + `gfxdiag` command; tools/gfxdiff.ps1
   compares). L01 intro, both looking through CameraActor_6095, host vs guest: ShaderCache 95 vs 47 (the guest loaded
   half the shader caches), PointLightComponent 168 vs 151, LightEnvironmentComponent 287 vs 277, TnRampLightManager
   67 vs 51, DecalComponent 56 vs 6, and 8 fewer of each NPC-side helper (TnCharacterTextureLoader,
@@ -419,7 +419,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   anyone can write there. Map first which columns the Leaderboards screen shows (TnLeaderboard* scripts).
 - Also check the post-match XP/level the same way (same stats interface).
 
-### B48. Campaign over the F10 lobby (real 2-PC, v0.8.1-dev): the friend never gets into the host's game - open
+### B48. Campaign over the F10 lobby (real 2-PC, v0.8.1-dev): the friend never gets into the host's game - FIXED 2026-10-24 (mock), real 2-PC retest pending
 - 2026-10-24 20:13-20:19, after the Escalation session. Logs: sessions/real_20261024/host_campaign_L09_pid12244.log,
   host_campaign_L01_pid8320.log, host_relay.log, friend.log (friend's last run only).
 - Host relay.log: four lobbies in a row (L09 ...021042, L09 ...787697, L01 ...788003, L01 ...789935); every time
@@ -430,10 +430,19 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Friend (last run): F10 lobby search -> "relay: started ... join 109775242139789935 7790" -> "lobby: joining", then
   8 s later "relay: lobby search started" again; the friend's game stayed in the main menu: no "go", no open of
   127.0.0.1:7790, no travel. So the friend's side lost the join (relay join process gone / "go" never read).
-- Not known yet: friend's relay.log (friend PC, Binariesoc_relay
-elay.log) and the friend's earlier runs
-  (Binariesoc_logs). Ask the owner for them. Also relay.log earlier: "no game running for 60 s, exiting".
+- Not known yet: friend's relay.log (friend PC, Binaries\foc_relay\relay.log) and the friend's earlier runs
+  (Binaries\foc_logs). Ask the owner for them. Also relay.log earlier: "no game running for 60 s, exiting".
 - Story co-op is the main goal (owner requirements) - high priority once the logs are in.
+- **Cause (2026-10-24):** two relay processes per player under one Steam user and app 480: the Escalation relay
+  (`FoCRelay svc`, started at game start since v0.8.x) and the story relay (`host`/`join`). Steam delivered the
+  friend's P2P messages to the svc process - the host's relay_svc.log has "session request from <friend>: accepted"
+  at the times of the L09 and L01 tries - and svc drops story traffic. Host relay: no peer; guest relay: "host silent
+  for 20 s", so the guest's TickLobby (needs state joined/connected) never opened 127.0.0.1:7790 although go= arrived.
+  Mock Steam shows the same (lobbytest twin: "go=1|L01 state=host silent for 20 s").
+- **Fix:** StartRelay (overlay.inc) stops the svc relay before a host/join relay starts (SnStopSvc: quit, kill after
+  3 s, only if the status pid really is our FoCRelay.exe) and keeps the story relay's process handle; TickSteamChat
+  (steamnet.inc) does not start svc while that relay lives and starts it again when it is gone. Both players need the
+  new build. Test: tools/lobbytest.ps1 (TESTS.md).
 
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:

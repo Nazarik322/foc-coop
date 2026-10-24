@@ -648,8 +648,18 @@ static char g_joinLobby[32] = ""; static char g_joinPw[32] = "";         // Join
 static char g_relayState[160] = "";
 static unsigned long long g_relayLobby = 0; static int g_relayPeers = 0; static char g_relayRole[16] = "";
 static void RelayDir(wchar_t* out) { GetModuleFileNameW(nullptr, out, MAX_PATH); wchar_t* sl = wcsrchr(out, L'\\'); if (sl) wcscpy_s(sl, 32, L"\\foc_relay"); }
+// B48 (real 2-PC test 2026-10-24): the Escalation relay (FoCRelay svc, steamnet.inc) and a story relay (host/join)
+// ran at the same time under one Steam user and app 480. Steam handed the friend's P2P messages to the svc process
+// ("session request ... accepted" in relay_svc.log), which drops them: the host relay never got its peer, the guest
+// relay heard nothing from the host, and the friend never entered the game. Only one relay may own Steam networking:
+// the svc relay stops before a story relay starts and stays off while that relay runs (TickSteamChat).
+static HANDLE g_storyRelayProc = nullptr;
+static bool StoryRelayLive() { return g_storyRelayProc && WaitForSingleObject(g_storyRelayProc, 0) == WAIT_TIMEOUT; }
+static void SnStopSvc(const char* why);   // steamnet.inc
 static bool StartRelay(const char* args) {
     wchar_t dir[MAX_PATH]; RelayDir(dir);
+    bool story = !strncmp(args, "host", 4) || !strncmp(args, "join", 4);
+    if (story) SnStopSvc("a story relay starts");
     wchar_t st[MAX_PATH]; _snwprintf_s(st, _TRUNCATE, L"%s\\relay.status", dir); DeleteFileW(st);
     _snwprintf_s(st, _TRUNCATE, L"%s\\relay.cmd", dir); DeleteFileW(st);   // a leftover "quit" stopped the next relay at once
     wchar_t wa[128]; MultiByteToWideChar(CP_ACP, 0, args, -1, wa, 128);
@@ -658,7 +668,9 @@ static bool StartRelay(const char* args) {
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, dir, &si, &pi)) {
         Log("relay: cannot start %ls (%lu)", cmd, GetLastError()); strcpy_s(g_relayState, "FoCRelay.exe not found in Binaries\\foc_relay"); return false;
     }
-    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    if (story) { HANDLE old = (HANDLE)InterlockedExchangePointer((void**)&g_storyRelayProc, pi.hProcess); if (old) CloseHandle(old); }
+    else CloseHandle(pi.hProcess);
     Log("relay: started %ls", cmd); return true;
 }
 static char g_relayGo[128] = "";   // relay.status go= (lobby guest: the host started a mission, lobby.inc)

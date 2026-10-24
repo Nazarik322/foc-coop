@@ -10,7 +10,9 @@ function Say($s) { $l = "$(Get-Date -Format HH:mm:ss) $s"; Add-Content (Join-Pat
 function RelayStatus($c) { $f = "E:\FoC-coop\$c\Binaries\foc_relay\relay.status"; $h = @{}; if (Test-Path $f) { foreach ($l in Get-Content $f) { if ($l -match '^(\w+)=(.*)$') { $h[$Matches[1]] = $Matches[2] } } }; $h }
 try {
   Stop-Foc; Stop-Relay; Clear-FocState A; Clear-FocState B
+  foreach ($c in "A", "B") { Remove-Item "E:\FoC-coop\$c\Binaries\foc_relay\relay.status", "E:\FoC-coop\$c\Binaries\foc_cmd.txt" -ErrorAction SilentlyContinue }   # a stale status was read as the guest state, a stale command joined an old lobby (2026-10-24)
   $pa = Start-Foc "A" "" 960 540; [void](Wait-FocWindow $pa 90)
+  Start-Sleep 25   # 2026-10-24: B started right after A died at D3D start 3 times in a row (B7); esc4menu waits 25 s too
   $pb = Start-Foc "B" "" 960 540; [void](Wait-FocWindow $pb 90)
   Start-Sleep 30
   Send-Cmd A "lobby create 4"

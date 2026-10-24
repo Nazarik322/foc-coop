@@ -14,7 +14,9 @@ try {
   Stop-Foc; Stop-Relay
   Remove-Item E:\FoC-coop\A\Binaries\foc_relay\relay.cmd, E:\FoC-coop\B\Binaries\foc_relay\relay.cmd -ErrorAction SilentlyContinue
   Remove-Item E:\FoC-coop\A\Binaries\foc_relay\relay.status, E:\FoC-coop\B\Binaries\foc_relay\relay.status -ErrorAction SilentlyContinue   # an old status gave a stale lobby id
+  Remove-Item E:\FoC-coop\A\Binaries\foc_cmd.txt, E:\FoC-coop\B\Binaries\foc_cmd.txt -ErrorAction SilentlyContinue   # a stale command joined an old lobby (2026-10-24)
   $pa = Start-Foc "A" "" 960 540; [void](Wait-FocWindow $pa 90)
+  Start-Sleep 25   # B started right after A died at D3D start (B7, 2026-10-24)
   $pb = Start-Foc "B" "" 960 540; [void](Wait-FocWindow $pb 90)
   # wait until both games sit in the main menu (a fixed 30 s was too short once the window took 59 s to appear)
   foreach ($c in "A", "B") { if (-not (Wait-FocState $c { param($s) $s.map -like "UI_FrontEnd*" } 240)) { Say "RESULT: FAIL $c never reached the main menu"; return } }

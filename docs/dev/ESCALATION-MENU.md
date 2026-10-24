@@ -275,3 +275,12 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
   great, only the statistics do not show" (B47). After the match: back to the lobby, main menu, then a crash when
   the old online game was destroyed (B45). The owner then tried MULTIPLAYER (versus): crash 4 s after Send Invite
   (B46). Friend's log not received.
+- 2026-10-24 - **B48: the svc relay broke F10 story co-op on real Steam.** Owner + friend could not get into a
+  campaign game together (L09, L01, four lobbies). The host's relay_svc.log shows the friend's session requests, so
+  Steam handed P2P messages for the story relay to the svc process (both run as one Steam user, app 480). Mock
+  reproduces it (lobbytest twin: guest "host silent for 20 s"). Fix: svc stops before a host/join relay starts and
+  stays off while it runs (BUGS B48). Pitfalls on the way: (1) lobbytest started B right after A -> B died at D3D
+  start 3 times (B7) and the test read B's relay.status from 2026-10-21 as the result - the first twin run was
+  invalid; (2) the first SnStopSvc killed by a pid from a stale relay_svc.status, which Windows had given to the
+  test's PowerShell -> it now checks the image path is our FoCRelay.exe; (3) a stale foc_cmd.txt made B join an old
+  lobby. Rule: when the Escalation svc relay and another relay may run together, only one may own Steam networking.
