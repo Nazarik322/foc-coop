@@ -251,3 +251,20 @@ Format: date - what was tried -> result. Wrong conclusions are struck out with t
   lobby identical on all four, game lobby without spinners. Remaining: B41.
 - Tried, did not work: `call game SyncPlaceholderPRIsWithSessions` (no Function object in this build).
 - Test pitfall: B once never got "event hello" (state TnFrontendStatisticsCollection) - start flake, rerun.
+- 2026-10-24 - **4 copies, keyboard only, joined through Friends List** (owner: "test 4 players, mouse and keyboard,
+  join through friends", then "keyboard only"); build e4b8323 = v0.8.1-dev, escautoaccept=0 on all, no test
+  commands (no escinvite/call). Steps: main menu DOWN/ENTER -> ESCALATION on all; B/C/D: Friends List (DOWN x5,
+  ENTER) -> host row (mock_85533) -> ENTER -> "Join game?" ENTER -> PartyClient; ESC back to the party lobby; A:
+  Private Match -> Create Game -> Start Game; each picks a character (RIGHT x n, ENTER). Result: **PASS** - party
+  lobby identical on all four with green bars; game lobby all four on every copy; all on Oblivion, host npc=4
+  pawns=4, TAB board identical on all four (sessions/esc4human, grid_*.png, logs foc_coop_A..D.log).
+  Still seen: B41 (host's game-lobby ping bars grey, members show Difficulty EASY while host has HARD). After
+  "Join game" the member stays on ONLINE FRIENDS (needs ESC) - same as the original game, probably fine.
+  Note: Read-FocState on members listed only the member itself (players[]), although TAB showed all four - the
+  state file's player list on clients is not a reliable names check.
+- 2026-10-24 - mouse tried first and dropped (owner switched to keyboard only): `input click` and posted
+  WM_MOUSEMOVE/LBUTTONDOWN (Post and SendMessage, with the GetCursorPos spoof) do not move the menu highlight. The
+  log shows no GetDeviceState/GetDeviceData at all and CreateDevice only with device instance GUIDs (9f9d6dc0..,
+  c2a1dd80.., 7112..), never GUID_SysMouse, so g_mouseDev stays null. Reading: the game reads the DirectInput mouse
+  only while its window is active (Acquire fails in background copies). Not fixed; idea for later: hook Acquire
+  (slot 7) and classify devices by GetCapabilities dwDevType (0x12 mouse, 0x13 keyboard).
