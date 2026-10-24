@@ -413,6 +413,21 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   Probable cause: stats are read/written through Demonware (StatsInterfaceEx), dead; only HasReadKeyArchiveFor is
   answered. Ask the owner which screen, then check the stats interface slots.
 
+### B48. Campaign over the F10 lobby (real 2-PC, v0.8.1-dev): the friend never gets into the host's game - open
+- 2026-10-24 20:13-20:19, after the Escalation session. Logs: sessions/real_20261024/host_campaign_L09_pid12244.log,
+  host_campaign_L01_pid8320.log, host_relay.log, friend.log (friend's last run only).
+- Host relay.log: four lobbies in a row (L09 ...021042, L09 ...787697, L01 ...788003, L01 ...789935); every time
+  "session request from <friend>: accepted" / "peer ... connected, local socket -> 127.0.0.1:7778", so the Steam
+  part works. But the host game never saw a guest: L09 run "waitguest: pausing until a guest joins" with no join,
+  then F10 disconnect after ~80 s; the owner restarted with L01 several times. Last try (pid 8320): lobby created,
+  L01 loaded, "lobby: go L01" sent at 81 s, no guest, F10 disconnect at 109 s.
+- Friend (last run): F10 lobby search -> "relay: started ... join 109775242139789935 7790" -> "lobby: joining", then
+  8 s later "relay: lobby search started" again; the friend's game stayed in the main menu: no "go", no open of
+  127.0.0.1:7790, no travel. So the friend's side lost the join (relay join process gone / "go" never read).
+- Not known yet: friend's relay.log (friend PC, Binariesoc_relayelay.log) and the friend's earlier runs
+  (Binariesoc_logs). Ask the owner for them. Also relay.log earlier: "no game running for 60 s, exiting".
+- Story co-op is the main goal (owner requirements) - high priority once the logs are in.
+
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:
   every guest logs in with UniqueNetId 0 (no online service), so the game applied one guest's name change to all
