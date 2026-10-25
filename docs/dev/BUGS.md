@@ -67,6 +67,21 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   same state words as on the host), material counts and the Tn* character helpers (ramp lights, material managers,
   overriders, texture loaders) are now the same as on the host; the guest's robots still look flatter. Open - next:
   per-material texture parameters (MIC) of the parts and the ramp light targets.
+- 2026-10-25 afternoon (owner: "as if some lighting / metallic / reflection is missing"), L01 intro, host A vs guest B:
+  - Same on both: scene lights (lightsdump: state, brightness, colour), every material parameter of the robots'
+    materials (micdump; scalar MetallicOffset/Energon..., vectors; no texture parameters - textures come from the base
+    materials), mesh parents and light environments, character helper objects; TnRampLightManager = death / cloak
+    effect lights only. Forcing bForceMipStreaming on the guest (forcemips) changed nothing visible.
+  - Different: (1) the host's robots get a warm golden key light, the guest's look neutral grey-blue (crop
+    sessions/fm1/crop.png); (2) lights' AffectedLightEnvironments (+0x104/+0x108): on the guest one player pawn's
+    light environment was missing from 10-14 lights during the intro, registered again later (transient);
+    reattaching all light environments (reattach) made it worse (the dominant directional light lost all 83 links);
+    (3) black stretched polygons on the guest = a CHARSKEL Chest part of a scene robot (hidemesh Chest removes them),
+    most likely the Bumblebee that the host shows complete and lit while the guest shows only its black chest -
+    TnMeshSetActorMAT part visibility / mesh set differs during the scene (guest actors are SimulatedProxy).
+  - Next: compare part HiddenGame and bone transforms of the Bumblebee TnMeshSetActorMATs at the same matinee time
+    (pause both on one frame), and find what switches their parts on the host (Kismet/matinee event, server only).
+  New test commands: lightdump, lightsdump, classprops, hideowner, hidemesh, micdump, forcemips, propsat, reattach, lecount.
 - 2026-10-20: also in gameplay (L03a) and only on NPC robots; follows the guest role. Details in B25.
 - Owner 2026-10-20: switching off blur/post effects in the Advanced Configurator (F1) did NOT fix it (first report
   withdrawn).

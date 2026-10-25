@@ -49,6 +49,15 @@ static void LightFixCommand();                  // scene.inc
 static void SoundInfoCommand(const char* file);  // scene.inc
 static void NameFindCommand(const char* args);    // scene.inc
 static void LightDumpCommand(const char* file);   // scene.inc
+static void LightsDumpCommand(const char* file);  // scene.inc
+static void ClassPropsCommand(const char* args);  // scene.inc
+static void HideOwnerCommand(const char* args);   // scene.inc
+static void MicDumpCommand(const char* args);     // scene.inc
+static void ForceMipsCommand(const char* args);   // scene.inc
+static void PropsAtOffsetCommand(const char* args); // scene.inc
+static void ReattachCommand(const char* args);    // scene.inc
+static void LeCountCommand(const char* file);     // scene.inc
+static void HideMeshCommand(const char* args);    // scene.inc
 static void SceneCommand(const TickObjs& t, const char* verb, const char* args);   // scene.inc
 static void LobbyCommand(const char* args);      // lobby.inc
 static void PcProbeCommand();                     // lobby.inc
@@ -405,6 +414,15 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("soundinfo ", 0) == 0) { SoundInfoCommand(cmd.c_str() + 10); return; }
     if (cmd.rfind("namefind ", 0) == 0) { NameFindCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("lightdump ", 0) == 0) { LightDumpCommand(cmd.c_str() + 10); return; }
+    if (cmd.rfind("lightsdump ", 0) == 0) { LightsDumpCommand(cmd.c_str() + 11); return; }
+    if (cmd.rfind("classprops ", 0) == 0) { ClassPropsCommand(cmd.c_str() + 11); return; }
+    if (cmd.rfind("hideowner ", 0) == 0) { HideOwnerCommand(cmd.c_str() + 10); return; }
+    if (cmd.rfind("micdump ", 0) == 0) { MicDumpCommand(cmd.c_str() + 8); return; }
+    if (cmd.rfind("forcemips ", 0) == 0) { ForceMipsCommand(cmd.c_str() + 10); return; }
+    if (cmd.rfind("propsat ", 0) == 0) { PropsAtOffsetCommand(cmd.c_str() + 8); return; }
+    if (cmd.rfind("reattach ", 0) == 0) { ReattachCommand(cmd.c_str() + 9); return; }
+    if (cmd.rfind("lecount ", 0) == 0) { LeCountCommand(cmd.c_str() + 8); return; }
+    if (cmd.rfind("hidemesh ", 0) == 0) { HideMeshCommand(cmd.c_str() + 9); return; }
     if (cmd == "lightfix") { LightFixCommand(); return; }
     if (cmd.rfind("meshinfo ", 0) == 0) { MeshInfoCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("propat ", 0) == 0) { PropAtCommand(cmd.c_str() + 7); return; }

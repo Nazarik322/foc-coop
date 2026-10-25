@@ -534,3 +534,219 @@ static void LightDumpCommand(const char* file) {
     }
     fclose(f); Log("lightdump: %d mesh(es) -> %s", n, file);
 }
+
+// `lightsdump <file>` (2026-10-25, B5 leftovers: guests' robots look flatter): every light component (point, spot,
+// directional, sky, dominant...) with its owner actor, bEnabled, Brightness, LightColor and lighting channels, to diff
+// host and guest (level actors have the same names on both).
+static void LightsDumpCommand(const char* file) {
+    static MirrorProp en = {}, br = {}, col = {}, ch = {}, cast = {};
+    MirrorPropFind("LightComponent", "bEnabled", en); MirrorPropFind("LightComponent", "Brightness", br);
+    MirrorPropFind("LightComponent", "LightColor", col); MirrorPropFind("LightComponent", "LightingChannels", ch);
+    MirrorPropFind("LightComponent", "CastShadows", cast);
+    if (cast.off > 0) { en.off = cast.off; en.mask = 1; }   // the "largest offset" guess for bEnabled was outside the object; it sits next to CastShadows
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        __try {
+        char cn[64] = ""; ClassNameOf(o, cn, sizeof(cn));
+        size_t l = strlen(cn); if (l < 14 || strcmp(cn + l - 14, "LightComponent") || !strncmp(cn, "Default__", 9)) continue;
+        char nm[64] = ""; ObjLabel(o, nm, sizeof(nm)); if (!strncmp(nm, "Default__", 9)) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); char on[64] = "-", oc[64] = "";
+        if (IsObjFast(ow)) { ObjLabel(ow, on, sizeof(on)); ClassNameOf(ow, oc, sizeof(oc)); }
+        int e = (en.off > 0 && en.mask) ? ((*(unsigned*)(o + en.off) & en.mask) ? 1 : 0) : -1;
+        float b = br.off > 0 ? *(float*)(o + br.off) : -1.f;
+        unsigned c = col.off > 0 ? *(unsigned*)(o + col.off) : 0, chv = ch.off > 0 ? *(unsigned*)(o + ch.off) : 0;
+        int cs = (cast.off > 0 && cast.mask) ? ((*(unsigned*)(o + cast.off) & cast.mask) ? 1 : 0) : -1;
+        fprintf(f, "%s|%s|%s|%s|en=%d|br=%.3f|col=%08x|ch=%08x|cast=%d\n", cn, oc, on, nm, e, b, c, chv, cs); n++;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+    fclose(f); Log("lightsdump: %d light(s) -> %s (bEnabled +0x%x/%x Brightness +0x%x)", n, file, en.off, en.mask, br.off);
+}
+// `classprops <Class> <file>`: the script variables declared by a class (property objects whose Outer is that class),
+// with type, offset (+0x30 >> 20) and bool mask, and for every live instance (up to 40) their values as words.
+static void ClassPropsCommand(const char* args) {
+    char cls[80] = "", file[MAX_PATH] = ""; if (sscanf_s(args, "%79s %259s", cls, (unsigned)sizeof(cls), file, (unsigned)sizeof(file)) < 2) return;
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    TArr* go = GObj(); struct P { char n[64]; char t[40]; int off; unsigned mask; }; std::vector<P> ps;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char cn[48] = ""; ClassNameOf(o, cn, sizeof(cn)); size_t l = strlen(cn);
+        if (l < 8 || strcmp(cn + l - 8, "Property")) continue;
+        if (!MirrorOuterIs(o, cls)) continue;
+        P p = {}; ObjNameStr(o, p.n, sizeof(p.n)); strcpy_s(p.t, cn); p.off = (int)(*(unsigned*)(o + 0x30) >> 20);
+        p.mask = strcmp(cn, "BoolProperty") ? 0 : *(unsigned*)(o + 0x40); ps.push_back(p);
+        fprintf(f, "PROP %s %s +0x%x mask %x\n", p.n, p.t, p.off, p.mask);
+    }
+    unsigned cid = ClassIdByName(cls); int k = 0;
+    for (int i = 0; i < go->Num && cid && k < 40; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        char on[64] = ""; ObjLabel(o, on, sizeof(on)); fprintf(f, "OBJ %s\n", on); k++;
+        for (auto& p : ps) {
+            if (!Rd(o + p.off, 4)) continue;
+            unsigned w = *(unsigned*)(o + p.off);
+            char ref[64] = ""; if (IsObjFast((BYTE*)(UINT_PTR)w)) ObjLabel((BYTE*)(UINT_PTR)w, ref, sizeof(ref));
+            fprintf(f, "  %s = %08x %s%s\n", p.n, p.mask ? ((w & p.mask) ? 1 : 0) : w, ref, !strcmp(p.t, "FloatProperty") ? "" : "");
+            if (!strcmp(p.t, "FloatProperty")) fprintf(f, "    (float %.3f)\n", *(float*)(o + p.off));
+        }
+    }
+    fclose(f); Log("classprops: %d prop(s), %d object(s) of %s -> %s", (int)ps.size(), k, cls, file);
+}
+// `hideowner <owner class substring> <1|0>`: HiddenGame on/off for every mesh component whose owner's class contains
+// the substring (B5 leftovers: which actor draws the black stretched polygons on the guest).
+static void HideOwnerCommand(const char* args) {
+    char want[64] = ""; int on = 1; sscanf_s(args, "%63s %d", want, (unsigned)sizeof(want), &on);
+    static MirrorProp hid = {}; MirrorPropFind("PrimitiveComponent", "HiddenGame", hid); if (hid.off <= 0 || !hid.mask) return;
+    static MirrorProp reat = {}; MirrorPropFind("ActorComponent", "bNeedsReattach", reat);
+    unsigned c1 = ClassIdByName("SkeletalMeshComponent"), c2 = ClassIdByName("StaticMeshComponent");
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o) continue; unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff; if (cid != c1 && cid != c2) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue;
+        unsigned* w = (unsigned*)(o + hid.off); if (on) *w |= hid.mask; else *w &= ~hid.mask; n++;
+        if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
+    }
+    Log("hideowner: %s %d -> %d mesh(es)", want, on, n);
+}
+// `micdump <owner class substring> <file>` (B5 leftovers, owner: "metallic / reflection missing on the guest"): for every
+// mesh of matching owners, the materials of its SkeletalMesh asset (or the component's own) with their parent and
+// parameter values (scalar / vector / texture), names resolved, to diff host and guest. FName is 4 bytes here
+// (packed index << 14 | number), so the elements are 24 (scalar, texture) and 36 (vector) bytes.
+static void MicDumpValues(FILE* f, BYTE* mi, int depth) {
+    static MirrorProp par = {}, sc = {}, ve = {}, tx = {};
+    MirrorPropFind("MaterialInstance", "Parent", par); MirrorPropFind("MaterialInstanceConstant", "ScalarParameterValues", sc);
+    MirrorPropFind("MaterialInstanceConstant", "VectorParameterValues", ve); MirrorPropFind("MaterialInstanceConstant", "TextureParameterValues", tx);
+    char mn[96] = "-", cn[48] = ""; ObjLabel(mi, mn, sizeof(mn)); ClassNameOf(mi, cn, sizeof(cn));
+    fprintf(f, "%*sMAT %s (%s)\n", depth * 2, "", mn, cn);
+    if (!strstr(cn, "MaterialInstance") || depth > 4) return;
+    struct { MirrorProp* p; int sz; const char* k; } arr[] = { { &sc, 28, "S" }, { &ve, 40, "V" }, { &tx, 28, "T" } };   // name 8 bytes (packed + 0), value, GUID
+    for (auto& a : arr) {
+        if (a.p->off <= 0 || !Rd(mi + a.p->off, 12)) continue;
+        TArr* t = (TArr*)(mi + a.p->off); if (t->Num < 0 || t->Num > 64 || (t->Num && !Rd(t->Data, t->Num * a.sz))) continue;
+        { static int raw = 0; if (raw < 6 && t->Num >= 2 && Rd(t->Data, 64)) { raw++; fprintf(f, "%*s  RAW %s n=%d:", depth * 2, "", a.k, t->Num); for (int w = 0; w < 16; w++) fprintf(f, " %08x", ((unsigned*)t->Data)[w]); fprintf(f, "\n"); } }
+        for (int i = 0; i < t->Num; i++) {
+            BYTE* e = (BYTE*)t->Data + i * a.sz; char pn[64] = "?"; NameAt((int)(*(unsigned*)e >> 14), pn, sizeof(pn));
+            if (a.k[0] == 'S') fprintf(f, "%*s  S %s = %.3f\n", depth * 2, "", pn, *(float*)(e + 8));
+            else if (a.k[0] == 'V') fprintf(f, "%*s  V %s = %.3f %.3f %.3f %.3f\n", depth * 2, "", pn, *(float*)(e + 8), *(float*)(e + 12), *(float*)(e + 16), *(float*)(e + 20));
+            else { BYTE* tex = *(BYTE**)(e + 8); char tn[96] = "none"; if (IsObjFast(tex)) ObjLabel(tex, tn, sizeof(tn)); fprintf(f, "%*s  T %s = %s\n", depth * 2, "", pn, tn); }
+        }
+    }
+    BYTE* p = par.off > 0 ? *(BYTE**)(mi + par.off) : nullptr;
+    if (IsObjFast(p)) MicDumpValues(f, p, depth + 1);
+}
+static void MicDumpCommand(const char* args) {
+    char want[64] = "", file[MAX_PATH] = ""; if (sscanf_s(args, "%63s %259s", want, (unsigned)sizeof(want), file, (unsigned)sizeof(file)) < 2) return;
+    static MirrorProp skm = {}, mats = {}, smats = {};
+    MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm); MirrorPropFind("MeshComponent", "Materials", mats); MirrorPropFind("SkeletalMesh", "Materials", smats);
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    fprintf(f, "offsets: SkeletalMesh.Materials +0x%x MeshComponent.Materials +0x%x\n", smats.off, mats.off);
+    unsigned c1 = ClassIdByName("SkeletalMeshComponent"); TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != c1) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue;
+        char on[64] = "", sn[96] = "-"; ObjLabel(ow, on, sizeof(on));
+        BYTE* sk = skm.off > 0 ? *(BYTE**)(o + skm.off) : nullptr; if (IsObjFast(sk)) ObjLabel(sk, sn, sizeof(sn));
+        fprintf(f, "MESH %s %s\n", on, sn); n++;
+        TArr* own = mats.off > 0 ? (TArr*)(o + mats.off) : nullptr;
+        TArr* use = (own && Rd(own, 12) && own->Num > 0) ? own : nullptr;
+        // SkeletalMesh.Materials by content (the name lookup picked the component's offset): a TArray whose first
+        // element is a material object
+        if (!use && IsObjFast(sk))
+            for (int w = 0x30; w < 0x300 && !use; w += 4) {
+                TArr* t = (TArr*)(sk + w); if (!Rd(t, 12) || t->Num <= 0 || t->Num > 16 || t->Max < t->Num || !Rd(t->Data, 4)) continue;
+                BYTE* m0 = (BYTE*)t->Data[0]; if (!IsObjFast(m0)) continue;
+                char mc[48] = ""; ClassNameOf(m0, mc, sizeof(mc)); if (strstr(mc, "Material")) { use = t; if (n < 2) fprintf(f, "  (SkeletalMesh materials at +0x%x)\n", w); }
+            }
+        if (!use || !Rd(use, 12) || use->Num <= 0 || use->Num > 16 || !Rd(use->Data, use->Num * 4)) continue;
+        for (int m = 0; m < use->Num; m++) { BYTE* mi = (BYTE*)use->Data[m]; if (IsObjFast(mi)) MicDumpValues(f, mi, 1); }
+    }
+    fclose(f); Log("micdump: %d mesh(es) of '%s' -> %s", n, want, file);
+}
+// `forcemips <owner class substring> <1|0>` (B5 leftovers): PrimitiveComponent.bForceMipStreaming on the meshes of
+// matching owners - the host prestreams character textures before scenes (Kismet "Stream In Textures", server only),
+// a guest may render them with low mips (flat, no metal detail).
+static int ForceMipsPass(const char* want, int on) {
+    static MirrorProp fm = {}; MirrorPropFind("PrimitiveComponent", "bForceMipStreaming", fm); if (fm.off <= 0 || !fm.mask) return -1;
+    unsigned c1 = ClassIdByName("SkeletalMeshComponent"), c2 = ClassIdByName("StaticMeshComponent");
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o) continue; unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff; if (cid != c1 && cid != c2) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue;
+        unsigned* w = (unsigned*)(o + fm.off); bool was = (*w & fm.mask) != 0;
+        if (on && !was) { *w |= fm.mask; n++; } else if (!on && was) { *w &= ~fm.mask; n++; }
+    }
+    return n;
+}
+static void ForceMipsCommand(const char* args) {
+    char want[64] = ""; int on = 1; sscanf_s(args, "%63s %d", want, (unsigned)sizeof(want), &on);
+    Log("forcemips: %s %d -> %d mesh(es) changed", want, on, ForceMipsPass(want, on));
+}
+// `propsat <offset>`: every script property object with that offset (+0x30 >> 20), its class, bool mask and owner class
+static void PropsAtOffsetCommand(const char* args) {
+    int want = (int)strtol(args, nullptr, 0); TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num && n < 80; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char cn[48] = ""; ClassNameOf(o, cn, sizeof(cn)); size_t l = strlen(cn); if (l < 8 || strcmp(cn + l - 8, "Property")) continue;
+        if ((int)(*(unsigned*)(o + 0x30) >> 20) != want) continue;
+        char nm[64] = "", ow[64] = "?";
+        ObjNameStr(o, nm, sizeof(nm));
+        for (int h = 0x10; h <= 0x3c; h += 4) { BYTE* q = *(BYTE**)(o + h); if (IsObjFast(q) && q != o) { char qc[48] = ""; ClassNameOf(q, qc, sizeof(qc)); if (!strcmp(qc, "Class") || !strcmp(qc, "ScriptStruct")) { ObjNameStr(q, ow, sizeof(ow)); break; } } }
+        unsigned mask = strcmp(cn, "BoolProperty") ? 0 : *(unsigned*)(o + 0x40);
+        Log("propsat: +0x%x %s.%s %s mask %08x", want, ow, nm, cn, mask); n++;
+    }
+    Log("propsat: %d property(ies) at +0x%x", n, want);
+}
+// `reattach <component class> <owner class substring|*>` (B5 leftovers): ActorComponent.bNeedsReattach on matching
+// components. On guests the lights' AffectedLightEnvironments lists (+0x104) held 1-3 fewer entries than on the host
+// (the robots' light environments were not registered with the lights): reattaching rebuilds those links.
+static int ReattachPass(const char* cls, const char* want) {
+    static MirrorProp reat = {}; MirrorPropFind("ActorComponent", "bNeedsReattach", reat); if (reat.off <= 0 || !reat.mask) return -1;
+    unsigned cid = ClassIdByName(cls); if (!cid) return -2;
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        if (strcmp(want, "*")) { char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue; }
+        *(unsigned*)(o + reat.off) |= reat.mask; n++;
+    }
+    return n;
+}
+static void ReattachCommand(const char* args) {
+    char cls[64] = "", want[64] = "*"; sscanf_s(args, "%63s %63s", cls, (unsigned)sizeof(cls), want, (unsigned)sizeof(want));
+    Log("reattach: %s of %s -> %d", cls, want, ReattachPass(cls, want));
+}
+// `lecount <file>`: AffectedLightEnvironments.Num (+0x108) of every light component, to compare host and guest
+static void LeCountCommand(const char* file) {
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return; TArr* go = GObj(); int n = 0, tot = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char cn[64] = ""; ClassNameOf(o, cn, sizeof(cn)); size_t l = strlen(cn); if (l < 14 || strcmp(cn + l - 14, "LightComponent")) continue;
+        char nm[64] = ""; ObjLabel(o, nm, sizeof(nm)); int c = *(int*)(o + 0x108); fprintf(f, "%s %s %d", cn, nm, c); n++; tot += c;
+        BYTE** arr = *(BYTE***)(o + 0x104);
+        if (c > 0 && c < 400 && Rd(arr, c * 4)) for (int k = 0; k < c; k++) { BYTE* le = arr[k]; char ow[64] = "?"; if (IsObjFast(le)) { BYTE* lo = *(BYTE**)(le + 0x3c); if (IsObjFast(lo)) ObjLabel(lo, ow, sizeof(ow)); else ObjLabel(le, ow, sizeof(ow)); } fprintf(f, " %s", ow); }
+        fprintf(f, "\n");
+    }
+    fclose(f); Log("lecount: %d light(s), %d light environment links -> %s", n, tot, file);
+}
+// `hidemesh <mesh name substring|*> <1|0>`: HiddenGame (+ reattach) on every skeletal/static mesh component of scene
+// robots and pawns whose mesh asset name contains the substring (B5 leftovers: which part draws the black polygons)
+static void HideMeshCommand(const char* args) {
+    char want[64] = ""; int on = 1; sscanf_s(args, "%63s %d", want, (unsigned)sizeof(want), &on);
+    static MirrorProp hid = {}, reat = {}, skm = {}, stm = {};
+    MirrorPropFind("PrimitiveComponent", "HiddenGame", hid); MirrorPropFind("ActorComponent", "bNeedsReattach", reat);
+    MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm); MirrorPropFind("StaticMeshComponent", "StaticMesh", stm);
+    unsigned c1 = ClassIdByName("SkeletalMeshComponent"), c2 = ClassIdByName("StaticMeshComponent"); TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o) continue; unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff; if (cid != c1 && cid != c2) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, "MeshSetActor") && !strstr(oc, "Pawn")) continue;
+        MirrorProp& mp = cid == c1 ? skm : stm; BYTE* me = mp.off > 0 ? *(BYTE**)(o + mp.off) : nullptr; char mn[96] = "";
+        if (IsObjFast(me)) ObjLabel(me, mn, sizeof(mn)); if (strcmp(want, "*") && !strstr(mn, want)) continue;
+        unsigned* w = (unsigned*)(o + hid.off); if (on) *w |= hid.mask; else *w &= ~hid.mask;
+        if (reat.off > 0) *(unsigned*)(o + reat.off) |= reat.mask; n++;
+    }
+    Log("hidemesh: %s %d -> %d", want, on, n);
+}
