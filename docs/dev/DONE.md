@@ -3,6 +3,17 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-25 night: B5 dark robots in scenes and B63 host seen as hands only - fixed on guests (mock)
+- B5: scene.inc TickLightFix (`lightfix`): body-part meshes get their master mesh's light environment (was an unlit one
+  on guests). B63: scene.inc TickPartShow (`partshow`): other players' hidden body parts shown. Diagnostics commands
+  `meshinfo`, `meshnodes`, `pawnvis`, `animfix`, `lightfix`, `partshow`.
+- Verified: `tools/lighttest.ps1` PASS (guest 3-7 % black, host 0.5-2.7 %), twin FAIL (37-67 %); screenshots L01 with 4
+  copies (f10visual PASS 4/4, all guests lit), L03a, L08a (guest sees the host's whole body, lit).
+- Must-pass set (`lf_regress.txt`): matrix ESC_Ark, L02a, L02b, L04c, L06 PASS; Steam mock L03b PASS; lobbyfriend PASS.
+  scene4: FAIL (B52 name mix-up), FAIL (host 2236 uu from the activator, two "Bumblebee"), control with lightfix=0
+  partshow=0 PASS, again with both on PASS -> flaky, not caused by these fixes (B52 stays open).
+- Not tested: Escalation (parked); real Steam 2-PC.
+
 ## 2026-10-25: v0.9.0-dev - installer Russian translation (optional), all mods unticked (R1)
 - Released as GitHub pre-release v0.9.0-dev from main 660f651 (owner: "push with a release"); installer SHA-256
   1d63fa3033445a2ed623236745201145764eb0e2c6ddf22f8c12c7ddae4b1368 (downloaded back, same).

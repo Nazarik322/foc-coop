@@ -42,6 +42,10 @@ static void KImpulseCommand(const char* args);   // kmirror.inc
 static void PropAtCommand(const char* args);     // mirror.inc
 static void PawnVisCommand(const TickObjs& t);  // scene.inc
 static void AnimFixCommand(const TickObjs& t);  // scene.inc
+static void MeshNodesCommand();                 // scene.inc
+static void PartShowCommand(const TickObjs& t); // scene.inc
+static void MeshInfoCommand(const char* want);  // scene.inc
+static void LightFixCommand();                  // scene.inc
 static void SceneCommand(const TickObjs& t, const char* verb, const char* args);   // scene.inc
 static void LobbyCommand(const char* args);      // lobby.inc
 static void PcProbeCommand();                     // lobby.inc
@@ -393,6 +397,10 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("hdrprobe ", 0) == 0) { HdrProbeCommand(cmd.c_str() + 9); return; }
     if (cmd == "pawnvis") { PawnVisCommand(g_to); return; }
     if (cmd == "animfix") { AnimFixCommand(g_to); return; }
+    if (cmd == "meshnodes") { MeshNodesCommand(); return; }
+    if (cmd == "partshow") { PartShowCommand(g_to); return; }
+    if (cmd == "lightfix") { LightFixCommand(); return; }
+    if (cmd.rfind("meshinfo ", 0) == 0) { MeshInfoCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("propat ", 0) == 0) { PropAtCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("kimpulse ", 0) == 0) { KImpulseCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("sceneact ", 0) == 0) { SceneCommand(g_to, "sceneact", cmd.c_str() + 9); return; }

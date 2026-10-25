@@ -318,3 +318,149 @@ static void AnimFixCommand(const TickObjs& t) {
         (void)reat;
     }
 }
+
+// `meshnodes` (test command, 2026-10-25): every SkeletalMeshComponent with an owner: owner class/name, the animation
+// node list (+0x224) count and the SkeletalMesh - do enemies (simulated proxies like the host's copy) have nodes?
+static void MeshNodesCommand() {
+    static MirrorProp owner = { 0x3c, 0, true }, skm = {};   // ActorComponent.Owner right after the object header (mesh dump)
+    MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm);
+    unsigned cid = ClassIdByName("SkeletalMeshComponent"); if (!cid || owner.off <= 0) { Log("meshnodes: no class/offset (Owner %x)", owner.off); return; }
+    TArr* go = GObj(); int n = 0, zero = 0, some = 0;
+    for (int i = 0; i < go->Num && n < 80; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        BYTE* ow = *(BYTE**)(o + owner.off); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, "Pawn")) continue;
+        TArr* at = (TArr*)(o + 0x224); int nodes = Rd(at, 12) ? at->Num : -1; if (nodes == 0) zero++; else some++;
+        char on[64], sn[64] = "-"; ObjLabel(ow, on, sizeof(on)); BYTE* sk = skm.off > 0 ? *(BYTE**)(o + skm.off) : nullptr; if (IsObjFast(sk)) ObjLabel(sk, sn, sizeof(sn));
+        static MirrorProp par = {}, hid = {}, att = {}; MirrorPropFind("SkeletalMeshComponent", "ParentAnimComponent", par); MirrorPropFind("PrimitiveComponent", "HiddenGame", hid);
+        BYTE* pa = par.off > 0 ? *(BYTE**)(o + par.off) : nullptr; char pn[64] = "-"; if (IsObjFast(pa)) ObjLabel(pa, pn, sizeof(pn));
+        int h = hid.off > 0 && hid.mask ? ((*(unsigned*)(o + hid.off) & hid.mask) ? 1 : 0) : -1;
+        char cn[64]; ObjLabel(o, cn, sizeof(cn));
+        Log("meshnodes: %s (%s) %s nodes %d mesh %s parent %s hidden %d", on, oc, cn, nodes, sn, pn, h); n++;
+    }
+    Log("meshnodes: pawn meshes with nodes %d, without %d", some, zero);
+}
+
+// `partshow` (test command, 2026-10-25): the host's copy on a guest has most body part meshes (RB_<Char>_CHARSKEL_Chest,
+// Head, Legs, CapL/R ...) HiddenGame=1 while the guest's own pawn shows them - only the arms and the gun draw. For every
+// player pawn that is not ours: each *_CHARSKEL_<part> mesh takes the visibility of our own pawn's mesh with the same
+// <part> (weapons and other meshes stay as they are). Tries PrimitiveComponent.SetHidden, else the bit + reattach flag.
+static int PartShowPass(const TickObjs& t, bool verbose) {
+    static MirrorProp owner = { 0x3c, 0, true }, skm = {}, hid = {}, reat = {};
+    MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm); MirrorPropFind("PrimitiveComponent", "HiddenGame", hid);
+    MirrorPropFind("ActorComponent", "bNeedsReattach", reat);
+    unsigned cid = ClassIdByName("SkeletalMeshComponent"); if (!cid || skm.off <= 0 || hid.off <= 0 || !hid.mask) return 0;
+    BYTE* own = nullptr; for (int i = 0; i < t.npc; i++) if (IsLocalPC(t.pc[i])) own = PawnOf(t.pc[i]);
+    if (!own) return 0;
+    struct Part { BYTE* comp; BYTE* pawn; char part[32]; int hidden; };
+    static Part parts[256]; int np = 0;
+    TArr* go = GObj();
+    for (int i = 0; i < go->Num && np < 256; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        BYTE* ow = *(BYTE**)(o + owner.off); if (!IsObjFast(ow)) continue;
+        bool player = false; for (int k = 0; k < t.npc; k++) if (PawnOf(t.pc[k]) == ow) player = true;
+        if (!player && ow != own) { char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, "TnPlayerPawn")) continue; }
+        BYTE* sk = *(BYTE**)(o + skm.off); if (!IsObjFast(sk)) continue;
+        char sn[96]; ObjNameStr(sk, sn, sizeof(sn)); const char* p = strstr(sn, "_CHARSKEL_"); if (!p) continue;
+        Part& q = parts[np++]; q.comp = o; q.pawn = ow; strncpy_s(q.part, p + 10, _TRUNCATE); q.hidden = (*(unsigned*)(o + hid.off) & hid.mask) ? 1 : 0;
+    }
+    int changed = 0;
+    static MirrorProp par = {}; MirrorPropFind("SkeletalMeshComponent", "ParentAnimComponent", par);
+    for (int i = 0; i < np; i++) {
+        if (parts[i].pawn == own) continue;
+        // body parts of another player's pawn: shown, except the arms (the game hides the arm a weapon replaces, right
+        // on every copy) and while the robot mesh itself is hidden (vehicle form)
+        if (!_strnicmp(parts[i].part, "Arm", 3)) continue;
+        BYTE* pa = par.off > 0 ? *(BYTE**)(parts[i].comp + par.off) : nullptr;
+        if (IsObjFast(pa) && (*(unsigned*)(pa + hid.off) & hid.mask)) continue;
+        int want = 0;
+        if (want == parts[i].hidden) continue;
+        DWORD parms[4] = { (DWORD)want, 0, 0, 0 };
+        bool viaScript = CallScript(parts[i].comp, "SetHidden", parms, sizeof(parms));
+        if (!viaScript) {
+            unsigned* w = (unsigned*)(parts[i].comp + hid.off); if (want) *w |= hid.mask; else *w &= ~hid.mask;
+            if (reat.off > 0 && reat.mask) *(unsigned*)(parts[i].comp + reat.off) |= reat.mask;
+        }
+        changed++;
+        if (verbose) { char pn[64]; ObjLabel(parts[i].pawn, pn, sizeof(pn)); Log("partshow: %s %s hidden %d -> %d (%s)", pn, parts[i].part, parts[i].hidden, want, viaScript ? "SetHidden" : "bit + reattach"); }
+    }
+    return changed;
+}
+static void PartShowCommand(const TickObjs& t) { int n = PartShowPass(t, true); Log("partshow: %d part(s) changed", n); }
+
+// B63 fix (2026-10-25): every 2 s on a story map, on host and guests, body parts of other players' pawns are shown
+// (PartShowPass). On a guest the host's copy had Chest, Head, Legs, CapL/R hidden - only the arms and the gun drew.
+static void TickPartShow(const TickObjs& t) {
+    static DWORD next = 0; DWORD now = GetTickCount();
+    if ((LONG)(now - next) < 0 || !g_partShow) return; next = now + 2000;
+    if (!StoryMapNow(t)) return;
+    int n = PartShowPass(t, false);
+    static volatile LONG logged = 0; if (n && InterlockedIncrement(&logged) <= 20) Log("partshow: %d hidden body part(s) of other players shown", n);
+}
+
+// `meshinfo <owner class part>` (test command, 2026-10-25, B5: NPC robots black on guests in scenes): every
+// SkeletalMeshComponent whose owner's class contains the text: mesh, hidden, its LightEnvironment (class, bEnabled),
+// bAcceptsLights / bAcceptsDynamicLights, LightingChannels word, CastShadow - to diff host and guest.
+static void MeshInfoCommand(const char* want) {
+    static MirrorProp owner = { 0x3c, 0, true }, skm = {}, hid = {}, le = {}, leOn = {}, acc = {}, accDyn = {}, chan = {}, shad = {}, mats = {};
+    MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm); MirrorPropFind("PrimitiveComponent", "HiddenGame", hid);
+    MirrorPropFind("PrimitiveComponent", "LightEnvironment", le); MirrorPropFind("LightEnvironmentComponent", "bEnabled", leOn);
+    MirrorPropFind("PrimitiveComponent", "bAcceptsLights", acc); MirrorPropFind("PrimitiveComponent", "bAcceptsDynamicLights", accDyn);
+    MirrorPropFind("PrimitiveComponent", "LightingChannels", chan); MirrorPropFind("PrimitiveComponent", "CastShadow", shad);
+    MirrorPropFind("MeshComponent", "Materials", mats);
+    unsigned cid = ClassIdByName("SkeletalMeshComponent"); if (!cid) return;
+    TArr* go = GObj(); int n = 0;
+    auto bit = [](BYTE* o, MirrorProp& q) { return q.off > 0 && q.mask && Rd(o + q.off, 4) ? ((*(unsigned*)(o + q.off) & q.mask) ? 1 : 0) : -1; };
+    for (int i = 0; i < go->Num && n < 60; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        BYTE* ow = *(BYTE**)(o + owner.off); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (strcmp(want, "*") && !strstr(oc, want)) continue;
+        if (!strcmp(want, "*")) { static char seen[64][64]; static int ns = 0; bool k = false; for (int j = 0; j < ns; j++) if (!strcmp(seen[j], oc)) k = true; if (k) continue; if (ns < 64) strcpy_s(seen[ns++], oc); }
+        char on[64], sn[64] = "-"; ObjLabel(ow, on, sizeof(on)); BYTE* sk = skm.off > 0 ? *(BYTE**)(o + skm.off) : nullptr; if (IsObjFast(sk)) ObjLabel(sk, sn, sizeof(sn));
+        // the light environment by content: the first pointer in the mesh to a *LightEnvironmentComponent
+        BYTE* l = nullptr; int loff = 0;
+        for (int w = 0x40; w < 0x400 && !l; w += 4) { BYTE* q = nullptr; __try { q = *(BYTE**)(o + w); } __except (EXCEPTION_EXECUTE_HANDLER) { break; } if (IsObjFast(q)) { char qc[64] = ""; ClassNameOf(q, qc, sizeof(qc)); if (strstr(qc, "LightEnvironmentComponent")) { l = q; loff = w; } } }
+        char ln[64] = "-", lc[64] = ""; if (IsObjFast(l)) { ObjLabel(l, ln, sizeof(ln)); _snprintf_s(lc, _TRUNCATE, "+%x ", loff); size_t z = strlen(lc); ClassNameOf(l, lc + z, sizeof(lc) - z); }
+        int lon = IsObjFast(l) ? bit(l, leOn) : -1;
+        unsigned ch = chan.off > 0 && Rd(o + chan.off, 4) ? *(unsigned*)(o + chan.off) : 0;
+        TArr* ma = mats.off > 0 ? (TArr*)(o + mats.off) : nullptr; int nm = ma && Rd(ma, 12) ? ma->Num : -1;
+        char m0[64] = "-"; if (nm > 0 && Rd(ma->Data, 4) && IsObjFast((BYTE*)ma->Data[0])) ObjLabel((BYTE*)ma->Data[0], m0, sizeof(m0));
+        Log("meshinfo: %s (%s) %s hid=%d le=%s(%s) leOn=%d acc=%d accDyn=%d chan=%08x shadow=%d mats=%d %s", on, oc, sn, bit(o, hid), ln, lc, lon, bit(o, acc), bit(o, accDyn), ch, bit(o, shad), nm, m0);
+        n++;
+    }
+    Log("meshinfo: %d mesh(es) for '%s'", n, want);
+}
+
+// B5 fix (2026-10-25): NPC robots in scenes (TnMeshSetActorMAT) and player pawns are a master SkeletalMeshComponent
+// (RB_Iconic_SKEL / RB_NpcAi_SKEL) plus part meshes (*_CHARSKEL_*) with ParentAnimComponent = the master. On the host
+// every part uses the master's LightEnvironment; on a guest the parts had another light environment (never lit) ->
+// black robots with only their emissive bits showing. Every 2 s on story maps (host and guests): a part whose
+// LightEnvironment (+0x100, checked to be a *LightEnvironmentComponent) differs from its master's gets the master's,
+// and is reattached (ActorComponent.bNeedsReattach) so the render proxy uses it. Ini lightfix (default 1).
+static int LightFixPass(bool verbose) {
+    static MirrorProp par = {}, reat = {};
+    MirrorPropFind("SkeletalMeshComponent", "ParentAnimComponent", par); MirrorPropFind("ActorComponent", "bNeedsReattach", reat);
+    unsigned cid = ClassIdByName("SkeletalMeshComponent"); if (!cid || par.off <= 0) return 0;
+    auto isLE = [](BYTE* q) { if (!IsObjFast(q)) return false; char qc[64] = ""; ClassNameOf(q, qc, sizeof(qc)); return strstr(qc, "LightEnvironmentComponent") != nullptr; };
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        BYTE* pa = *(BYTE**)(o + par.off); if (!IsObjFast(pa) || pa == o) continue;
+        BYTE* mine = *(BYTE**)(o + 0x100); BYTE* theirs = *(BYTE**)(pa + 0x100);
+        if (mine == theirs || !isLE(theirs) || (mine && !isLE(mine))) continue;
+        *(BYTE**)(o + 0x100) = theirs;
+        if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
+        n++;
+        if (verbose) { char on[64], ln[64], tn[64] = "-"; ObjLabel(o, on, sizeof(on)); ObjLabel(theirs, ln, sizeof(ln)); if (IsObjFast(mine)) ObjLabel(mine, tn, sizeof(tn)); Log("lightfix: %s light environment %s -> master's %s", on, tn, ln); }
+    }
+    return n;
+}
+static void TickLightFix(const TickObjs& t) {
+    static DWORD next = 0; DWORD now = GetTickCount();
+    if ((LONG)(now - next) < 0 || !g_lightFix) return; next = now + 2000;
+    if (!StoryMapNow(t)) return;
+    static volatile LONG logged = 0; bool verbose = logged < 3;
+    int n = LightFixPass(verbose);
+    if (n && InterlockedIncrement(&logged) <= 30) Log("lightfix: %d part mesh(es) given their master's light environment", n);
+}
+static void LightFixCommand() { int n = LightFixPass(true); Log("lightfix: %d part mesh(es) fixed (command)", n); }

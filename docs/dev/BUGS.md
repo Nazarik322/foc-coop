@@ -49,7 +49,19 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   (Demonware session code, TCP 3074). Blocking 3074 and spoofing foreground did not help.
 - Workaround: the menu relaunches the game with the URL on the command line (20–30 s).
 
-### B5. Guest visuals: dark silhouettes in cutscenes — open
+### B5. Guest visuals: dark silhouettes in cutscenes — FIXED 2026-10-25 (mock, `lightfix`)
+- Cause (owner's lead "only characters in animations are dark"): scene robots (TnMeshSetActorMAT) and player pawns are
+  a master SkeletalMeshComponent (RB_Iconic_SKEL) plus part meshes (RB_<Char>_CHARSKEL_<Part>, ParentAnimComponent =
+  master). `meshinfo TnMeshSetActorMAT` (L01 intro): on the host every part uses the master's LightEnvironmentComponent
+  (mesh +0x100); on the guest the parts of most robots pointed at one other light environment (e.g. master _691, parts
+  _15655) that nothing lights -> black robots with only the emissive bits (eyes, Autobot logo). Bumblebee's parts shared
+  the master's on both and were lit.
+- Fix (scene.inc TickLightFix, ini `lightfix`, default 1): every 2 s on story maps a part whose light environment differs
+  from its master's gets the master's + bNeedsReattach. Guest L01: 107 parts at the start, 36 at the next scene; host 0.
+  Test command `lightfix`.
+- Verified: `tools/lighttest.ps1` PASS (guest 3-7 % black pixels, host 0.5-2.7 %), twin `-Twin` FAIL (guest 37-67 %);
+  screenshots L01 (4 copies through f10visual, all lit), L03a, L08a (sessions/charvis: lfgrid, c3_grid, c8_grid).
+  Leftover: a few small black rectangles in one L01 guest shot (not robots; not investigated).
 - 2026-10-20: also in gameplay (L03a) and only on NPC robots; follows the guest role. Details in B25.
 - Owner 2026-10-20: switching off blur/post effects in the Advanced Configurator (F1) did NOT fix it (first report
   withdrawn).
@@ -505,6 +517,9 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   'Ironhide' -> SetName Ratchet (ok)", so D got C's name and renamed itself back. scene4 found no Ratchet and failed;
   the rerun `rel_4b` PASS. Check the name path (B32 code, TickNames / ServerChangeName) with 4 copies.
 
+- 2026-10-25 night: scene4 failed 2 of 4 runs ("no player named Ratchet"; two players named Bumblebee and the host
+  2236 uu from the activator after the scene); the other 2 passed. The host's player list said Optimus, Default, Default, Default every time.
+
 ### Real test 2026-10-25 (v0.9.0-dev, owner hosts + friend, chapters 1-2) - list and state
 Logs: sessions/real_20261025/host.log (host session from 00:37), friend_restart.log (only the friend's restart after his
 crash - the crash run is in the friend's Binaries\foc_logs, not received yet), host_relay.log.
@@ -573,7 +588,11 @@ crash - the crash run is in the friend's Binaries\foc_logs, not received yet), h
   ops (up to 12000) one by one; the host froze for that long and the guest saw it as lag. Now a hash set (trace.inc).
 - Still to check with the friend's log: his own long frames and the relay's receive gaps.
 
-### B63. Guests do not see the host's character (only the hands / weapon) - every chapter - open, investigated
+### B63. Guests do not see the host's character (only the hands / weapon) - every chapter - FIXED 2026-10-25 (mock, `partshow`)
+- Fix: the host copy's body part meshes (CHARSKEL parts) were HiddenGame on the guest; scene.inc TickPartShow (ini
+  `partshow`, default 1) unhides every non-"Arm" CHARSKEL part of other players' pawns unless the master is hidden, every
+  2 s on story maps. Verified by screenshots on L03b and L01 (sessions/charvis ps*_B, auto1_*) and L08a (c8_grid: the
+  guest sees the host's whole Decepticon, lit). The empty anim node list below was not the cause.
 - Owner 2026-10-25: "chapter 3: at the start the client sees only the host's hands; the host sees everything ... same in
   chapter 8, in every chapter". Reproduced with 2 copies on L03b (sessions/charvis: near_*, xm_B, fix0_B): from 900 uu
   behind the host the guest sees only the host's gun floating where its hand is; the host sees the guest fully.
