@@ -559,6 +559,176 @@ static void LightGuardTestCommand() {
     __try { r = fn(nullptr, nullptr, elem, 0, 0, 0, 0); Log("lightguardtest: returned %d (guard hits %ld)", r, g_guardHits[7]); }
     __except (EXCEPTION_EXECUTE_HANDLER) { Log("lightguardtest: raised %08lx (no guard)", GetExceptionCode()); }
 }
+// Object by exact name with instance number 0 (class objects, Default__ objects, archetypes); classOnly: class id 3
+static BYTE* FindObjByName0(const char* name, bool classOnly) {
+    TArr* go = GObj();
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        if (classOnly && (*(unsigned*)(o + 0x14) & 0x1fff) != 3) continue;
+        char nm[96] = ""; unsigned num = 0; if (ObjNameStr(o, nm, sizeof(nm), &num) && num == 0 && !strcmp(nm, name)) return o;
+    }
+    return nullptr;
+}
+// Script variable by class name through the class's own field list (class +0x30 = first field, field +0x2c = next
+// field; found 2026-10-25 for fulldump) and then its superclasses. Exact, unlike MirrorPropFind's Outer guess (that one
+// looks for the Outer in header words +0x10..+0x3c where this build has none, so it falls back to "largest offset").
+static bool FieldPropFind(const char* cls, const char* name, MirrorProp& p) {
+    if (p.done) return p.off > 0;
+    BYTE* c = FindObjByName0(cls, true); if (!c) return false;   // class not loaded yet: try again later
+    p.done = true; int sup = SuperOffset();
+    for (int depth = 0; depth < 24 && IsObjFast(c) && p.off <= 0; depth++) {
+        BYTE* q = *(BYTE**)(c + 0x30);
+        for (int k = 0; k < 2000 && IsObjFast(q); k++) {
+            char nm[96] = ""; unsigned num = 0;
+            if (ObjNameStr(q, nm, sizeof(nm), &num) && !strcmp(nm, name)) {
+                char cn[48] = ""; ClassNameOf(q, cn, sizeof(cn)); size_t l = strlen(cn);
+                if (l >= 8 && !strcmp(cn + l - 8, "Property")) { p.off = (int)(*(unsigned*)(q + 0x30) >> 20); p.mask = strcmp(cn, "BoolProperty") ? 0 : *(unsigned*)(q + 0x40); break; }
+            }
+            if (!Rd(q + 0x2c, 4)) break; q = *(BYTE**)(q + 0x2c);
+        }
+        if (sup < 0) break; c = *(BYTE**)(c + sup);
+    }
+    Log("field: %s.%s -> +0x%x mask 0x%x", cls, name, p.off, p.mask);
+    return p.off > 0;
+}
+
+// B5 rest (2026-10-25, found with fulldump/fulldiff): reflections. Robots' meshes get ClosestReflectionCubeMap from the
+// level's StaticSceneCaptureCubeMapActors (host: 212 meshes -> _10619, which holds 877 primitives). On a guest those
+// actors are destroyed at level start (bDeleteMe = 1, one already gone): a network client deletes every actor that is
+// neither bStatic nor bNoDelete because the server would replicate it - but these have RemoteRole None and are never
+// sent. So guests' robots had no reflection cube map (flat, cooler, "no metallic"). Fix (ini `cubefix`, default 1):
+// bNoDelete on the class default objects of such purely visual classes before the map loads, so the level's
+// instances inherit it and the client keeps them.
+static const char* const kKeepOnClient[] = { "StaticSceneCaptureCubeMapActor" };
+static void TickCubeFix() {
+    static DWORD next = 0; DWORD now = GetTickCount();
+    if ((LONG)(now - next) < 0 || !g_cubeFix) return; next = now + 2000;
+    static MirrorProp nd = {}; if (!FieldPropFind("Actor", "bNoDelete", nd) || !nd.mask) return;
+    static BYTE* cdo[8] = {}; static int logged = 0;
+    for (int i = 0; i < (int)(sizeof(kKeepOnClient) / sizeof(kKeepOnClient[0])); i++) {
+        char dn[96]; _snprintf_s(dn, _TRUNCATE, "Default__%s", kKeepOnClient[i]);
+        if (!IsObjFast(cdo[i])) cdo[i] = FindObjByName0(dn, false);
+        if (!IsObjFast(cdo[i])) continue;
+        unsigned* w = (unsigned*)(cdo[i] + nd.off);
+        if (!(*w & nd.mask)) { *w |= nd.mask; if (logged++ < 10) Log("cubefix: %s.bNoDelete = 1 (kept on network clients)", dn); }
+    }
+}
+// `groupswap <from actor label> <to actor label>` (B5 rest experiment, 2026-10-26): in every SeqAct_Interp's group
+// instances (+0xd8) whose GroupActor is <from>, put <to> instead - to let the guest's matinee animate the host's pawn
+// copy (the guest's own pawn stands at another spawn point, out of the shot).
+static BYTE* FindActorByLabel(const char* label) {
+    TArr* go = GObj();
+    for (int i = 0; i < go->Num; i++) { BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue; char on[96] = ""; ObjLabel(o, on, sizeof(on)); if (!strcmp(on, label)) return o; }
+    return nullptr;
+}
+static void GroupSwapCommand(const char* args) {
+    char a[96] = "", b[96] = ""; if (sscanf_s(args, "%95s %95s", a, (unsigned)sizeof(a), b, (unsigned)sizeof(b)) < 2) return;
+    static MirrorProp ga = {}; FieldPropFind("InterpGroupInst", "GroupActor", ga); if (ga.off <= 0) { Log("groupswap: GroupActor not found"); return; }
+    BYTE* from = FindActorByLabel(a); BYTE* to = FindActorByLabel(b);
+    if (!IsObjFast(from) || !IsObjFast(to)) { Log("groupswap: %s or %s not found", a, b); return; }
+    unsigned sid = ClassIdByName("SeqAct_Interp"); TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num && sid; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != sid || !Rd(o, 0xe4)) continue;
+        TArr* gi = (TArr*)(o + 0xd8); if (gi->Num <= 0 || gi->Num > 200 || !Rd(gi->Data, gi->Num * 4)) continue;
+        for (int g = 0; g < gi->Num; g++) { BYTE* x = (BYTE*)gi->Data[g]; if (IsObjFast(x) && *(BYTE**)(x + ga.off) == from) { *(BYTE**)(x + ga.off) = to; n++; } }
+    }
+    Log("groupswap: %s -> %s in %d group instance(s) (GroupActor +0x%x)", a, b, n, ga.off);
+}
+struct FullDumpProp { char n[64]; char t[24]; int off; unsigned mask; };
+struct FullDumpCtx { FILE* f; int sup; std::unordered_map<BYTE*, std::vector<FullDumpProp>>* props; std::unordered_map<std::string, int>* seen; MirrorProp* skm; MirrorProp* stm; const char* only; };
+static int FullDumpOne(FullDumpCtx& x, BYTE* o) {
+    FILE* f = x.f; int sup = x.sup; auto& props = *x.props; auto& seen = *x.seen; MirrorProp& skm = *x.skm; MirrorProp& stm = *x.stm;
+        char cn[64] = ""; ClassNameOf(o, cn, sizeof(cn)); size_t l = strlen(cn);
+        char nm[64] = ""; ObjLabel(o, nm, sizeof(nm)); if (!strncmp(nm, "Default__", 9)) return 0;
+        bool light = l >= 14 && !strcmp(cn + l - 14, "LightComponent");
+        bool le = strstr(cn, "LightEnvironmentComponent") != nullptr;
+        bool mesh = !strcmp(cn, "SkeletalMeshComponent") || !strcmp(cn, "StaticMeshComponent");
+        bool actor = strstr(cn, "MeshSetActor") || strstr(cn, "TnPlayerPawn");
+        if (x.only[0]) { if (!strstr(cn, x.only)) return 0; light = le = mesh = false; actor = true; }
+        if (!light && !le && !mesh && !actor) return 0;
+        BYTE* ow = actor ? nullptr : *(BYTE**)(o + 0x3c); char on[64] = "-", oc[64] = "-";
+        if (IsObjFast(ow)) { ObjLabel(ow, on, sizeof(on)); ClassNameOf(ow, oc, sizeof(oc)); }
+        if (mesh && !strstr(oc, "MeshSetActor") && !strstr(oc, "Pawn")) return 0;
+        char asset[96] = "-";
+        if (mesh) { MirrorProp& mp = !strcmp(cn, "SkeletalMeshComponent") ? skm : stm; BYTE* a = mp.off > 0 ? *(BYTE**)(o + mp.off) : nullptr; if (IsObjFast(a)) ObjLabel(a, asset, sizeof(asset)); }
+        // pawn / scene-actor names differ between host and guest: key by class only for those
+        char ownKey[64]; strcpy_s(ownKey, (strstr(oc, "Pawn") || strstr(oc, "MeshSetActor")) ? oc : on);
+        char key[300]; _snprintf_s(key, _TRUNCATE, "%s|%s|%s|%s", actor ? cn : ownKey, cn, asset, actor ? "self" : "");
+        int k = seen[key]++; fprintf(f, "OBJ %s#%d %s owner=%s\n", key, k, nm, on);
+        BYTE* c = g_classObjById[*(unsigned*)(o + 0x14) & 0x1fff];
+        std::unordered_map<std::string, int> done;   // the field list may already hold the superclasses' fields
+        for (int depth = 0; depth < 24 && IsObjFast(c); depth++) {
+            auto it = props.find(c);
+            if (it != props.end()) for (auto& pr : it->second) {
+                char dk[96]; _snprintf_s(dk, _TRUNCATE, "%s+%x", pr.n, pr.off); if (done[dk]++) continue;
+                BYTE* a = o + pr.off; if (!Rd(a, 16)) continue;
+                char v[160] = "";
+                if (!strcmp(pr.t, "BoolProperty")) _snprintf_s(v, _TRUNCATE, "%d", (*(unsigned*)a & pr.mask) ? 1 : 0);
+                else if (!strcmp(pr.t, "FloatProperty")) _snprintf_s(v, _TRUNCATE, "%.3f", *(float*)a);
+                else if (!strcmp(pr.t, "IntProperty")) _snprintf_s(v, _TRUNCATE, "%d", *(int*)a);
+                else if (!strcmp(pr.t, "ByteProperty")) _snprintf_s(v, _TRUNCATE, "%u", (unsigned)*a);
+                else if (!strcmp(pr.t, "NameProperty")) { char t[64] = "?"; NameAt((int)(*(unsigned*)a >> 14), t, sizeof(t)); _snprintf_s(v, _TRUNCATE, "%s", t); }
+                else if (strstr(pr.t, "ObjectProperty") || strstr(pr.t, "ComponentProperty") || strstr(pr.t, "ClassProperty")) {
+                    BYTE* q = *(BYTE**)a; if (!q) strcpy_s(v, "None"); else if (IsObjFast(q)) { char qn[64] = "", qc[48] = ""; ObjLabel(q, qn, sizeof(qn)); ClassNameOf(q, qc, sizeof(qc)); _snprintf_s(v, _TRUNCATE, "%s(%s)", qc, qn); } else strcpy_s(v, "?ptr"); }
+                else if (!strcmp(pr.t, "ArrayProperty")) _snprintf_s(v, _TRUNCATE, "n=%d", ((TArr*)a)->Num);
+                else if (!strcmp(pr.t, "StrProperty")) strcpy_s(v, "str");
+                else { unsigned* w = (unsigned*)a; _snprintf_s(v, _TRUNCATE, "%08x %08x %08x %08x", w[0], w[1], w[2], w[3]); }
+                fprintf(f, "  %s.%s = %s   @%x/%x\n", pr.t, pr.n, v, pr.off, pr.mask);
+            }
+            if (sup < 0) break; c = *(BYTE**)(c + sup);
+        }
+    return 1;
+}
+static int FullDumpOneGuarded(FullDumpCtx& x, BYTE* o) { __try { return FullDumpOne(x, o); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0; } }
+// `fulldump <file> [class substring]` (B5 rest, 2026-10-25: owner "look at the other parameters the host has and the guest does not"):
+// 1) a count of live objects per class (CLASS lines) - what exists on one side only; 2) every script property of every
+// light component, light environment, mesh component of scene robots / pawns and of those actors (PROP lines, whole class
+// chain). Keyed by owner + class + mesh asset + occurrence, so host and guest dumps diff with tools/fulldiff.py.
+static void FullDumpCommand(const char* args) {
+    char file[MAX_PATH] = "", only[64] = ""; if (sscanf_s(args, "%259s %63s", file, (unsigned)sizeof(file), only, (unsigned)sizeof(only)) < 1) return;
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    TArr* go = GObj(); int sup = SuperOffset();
+    typedef FullDumpProp P;
+    std::unordered_map<BYTE*, std::vector<P>> props;   // class object -> its own properties
+    std::unordered_map<unsigned, int> perClass;
+    // a class's fields are a linked list (field +0x2c = next field); the class word holding the first one is calibrated
+    // on PrimitiveComponent (its list must contain the property LightEnvironment)
+    for (int i = 0; i < go->Num; i++) { BYTE* o = (BYTE*)go->Data[i]; if (IsObjFast(o)) perClass[*(unsigned*)(o + 0x14) & 0x1fff]++; }
+    auto isProp = [](BYTE* q, char* cn, size_t n) { if (!IsObjFast(q)) return false; ClassNameOf(q, cn, n); size_t l = strlen(cn); return l >= 8 && !strcmp(cn + l - 8, "Property"); };
+    static int linkOff = -1;
+    if (linkOff < 0) {
+        BYTE* prim = nullptr;
+        for (int i = 0; i < go->Num && !prim; i++) { BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o) || (*(unsigned*)(o + 0x14) & 0x1fff) != 3) continue; char nm[64] = ""; unsigned num = 0; if (ObjNameStr(o, nm, sizeof(nm), &num) && num == 0 && !strcmp(nm, "PrimitiveComponent")) prim = o; }
+        for (int w = 0x20; prim && w < 0x120 && linkOff < 0; w += 4) {
+            BYTE* q = *(BYTE**)(prim + w);
+            for (int k = 0; k < 600 && IsObjFast(q); k++) {
+                char nm[64] = ""; unsigned num = 0; if (ObjNameStr(q, nm, sizeof(nm), &num) && !strcmp(nm, "LightEnvironment")) { char cn[48]; if (isProp(q, cn, sizeof(cn))) { linkOff = w; break; } }
+                if (!Rd(q + 0x2c, 4)) break; q = *(BYTE**)(q + 0x2c);
+            }
+        }
+    }
+    for (int id = 1; id < 8192; id++) for (BYTE* c = g_classObjById[id]; IsObjFast(c) && !props.count(c); c = sup >= 0 ? *(BYTE**)(c + sup) : nullptr) {
+        std::vector<P>& v = props[c];
+        if (linkOff < 0) continue;
+        BYTE* q = *(BYTE**)(c + linkOff);
+        for (int k = 0; k < 2000 && IsObjFast(q); k++) {
+            char cn[48] = ""; if (isProp(q, cn, sizeof(cn))) {
+                P pr = {}; ObjNameStr(q, pr.n, sizeof(pr.n)); strncpy_s(pr.t, cn, _TRUNCATE); pr.off = (int)(*(unsigned*)(q + 0x30) >> 20);
+                pr.mask = strcmp(cn, "BoolProperty") ? 0 : *(unsigned*)(q + 0x40);
+                if (pr.off > 0 && pr.off < 0x2000) v.push_back(pr);
+            }
+            if (!Rd(q + 0x2c, 4)) break; q = *(BYTE**)(q + 0x2c);
+        }
+    }
+    fprintf(f, "field list at class +0x%x, %d classes\n", linkOff, (int)props.size());
+    for (auto& kv : perClass) { BYTE* c = kv.first < 8192 ? g_classObjById[kv.first] : nullptr; char cn[80] = "?"; if (IsObjFast(c)) ObjNameStr(c, cn, sizeof(cn)); fprintf(f, "CLASS %s %d\n", cn, kv.second); }
+    static MirrorProp skm = {}, stm = {};
+    MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm); MirrorPropFind("StaticMeshComponent", "StaticMesh", stm);
+    std::unordered_map<std::string, int> seen; int n = 0;
+    FullDumpCtx x = { f, sup, &props, &seen, &skm, &stm, only };
+    for (int i = 0; i < go->Num; i++) { BYTE* o = (BYTE*)go->Data[i]; if (IsObjFast(o)) n += FullDumpOneGuarded(x, o); }
+    fclose(f); Log("fulldump: %d object(s), %d classes with properties -> %s", n, (int)props.size(), file);
+}
 static void LightFixCommand() { int n = LightFixPass(true); Log("lightfix: %d part mesh(es) fixed (command)", n); }
 
 // `soundinfo <file>` (2026-10-25, Quality Audio Logs mod: audio logs ignore the volume sliders): every SoundCue with its
@@ -877,7 +1047,7 @@ static void AnimStateCommand(const char* args) {
     MirrorPropFind("AnimNode", "SkelComponent", sk); MirrorPropFind("AnimNodeSequence", "AnimSeqName", nm);
     MirrorPropFind("AnimNodeSequence", "CurrentTime", tm); MirrorPropFind("AnimNodeSequence", "Rate", rt);
     MirrorPropFind("AnimNodeSequence", "bPlaying", pl); MirrorPropFind("AnimNodeSequence", "AnimSeq", as);
-    MirrorPropFind("MatineeActor", "Position", mpos); MirrorPropFind("MatineeActor", "bIsPlaying", mplay); MirrorPropFind("MatineeActor", "InterpAction", mact);
+    FieldPropFind("MatineeActor", "Position", mpos); FieldPropFind("MatineeActor", "bIsPlaying", mplay); FieldPropFind("MatineeActor", "InterpAction", mact);
     FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
     fprintf(f, "offsets SkelComponent +%x AnimSeqName +%x CurrentTime +%x Rate +%x bPlaying +%x/%x AnimSeq +%x | Matinee Position +%x bIsPlaying +%x/%x InterpAction +%x\n",
             sk.off, nm.off, tm.off, rt.off, pl.off, pl.mask, as.off, mpos.off, mplay.off, mplay.mask, mact.off);
@@ -895,9 +1065,9 @@ static void AnimStateCommand(const char* args) {
             if (IsObjFast(a) && Rd(a, 0xe4)) { ir = *(float*)(a + 0xc4); ip = *(float*)(a + 0xc8); ng = ((TArr*)(a + 0xd8))->Num; fb8 = *(unsigned*)(a + 0xb8); fbc = *(unsigned*)(a + 0xbc); fc0 = *(unsigned*)(a + 0xc0); (void)ipl; }
             int playingNow = (mplay.off > 0 && mplay.mask) ? ((*(unsigned*)(o + mplay.off) & mplay.mask) ? 1 : 0) : -1;
             fprintf(f, "MATINEE %s action=%s pos=%.3f playing=%d | interp pos=%.3f rate=%.2f groups=%d flags b8=%08x bc=%08x c0=%08x\n", on, an, mpos.off > 0 ? *(float*)(o + mpos.off) : -1.f, playingNow, ip, ir, ng, fb8, fbc, fc0);
-            if (playingNow == 1 && ng > 0 && ng < 200 && Rd(((TArr*)(a + 0xd8))->Data, ng * 4)) {
+            if (ng > 0 && ng < 200 && Rd(((TArr*)(a + 0xd8))->Data, ng * 4)) {
                 static MirrorProp gg = {}, ga = {}, gn = {};
-                MirrorPropFind("InterpGroupInst", "Group", gg); MirrorPropFind("InterpGroupInst", "GroupActor", ga); MirrorPropFind("InterpGroup", "GroupName", gn);
+                FieldPropFind("InterpGroupInst", "Group", gg); FieldPropFind("InterpGroupInst", "GroupActor", ga); FieldPropFind("InterpGroup", "GroupName", gn);
                 for (int g = 0; g < ng; g++) {
                     BYTE* gi = (BYTE*)((TArr*)(a + 0xd8))->Data[g]; if (!IsObjFast(gi)) continue;
                     char gname[64] = "?", aname[64] = "-", gcls[48] = ""; ClassNameOf(gi, gcls, sizeof(gcls));

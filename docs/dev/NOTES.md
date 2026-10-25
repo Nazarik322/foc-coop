@@ -267,6 +267,17 @@ targets: pc pawn rpc rpawn game pri rpri obj:Name_N. Any other text = engine con
 - Rendering code (TickBorderless etc.) runs on the render thread: anything that sends window messages
   (SetWindowPos/SetWindowLong) must run on the window thread (we post WM_APP+0x4F2 to GetMsgProc) or the game freezes.
 
+## Reflection and reflection-field notes (2026-10-26)
+- UStruct field list: class object +0x30 = first field, field +0x2c = next field; property offset = word +0x30 >> 20,
+  bool mask = +0x40 (FieldPropFind). A property has no Outer in its header words +0x10..+0x3c.
+- Actor.bNoDelete +0x84 mask 0x10, bHidden +0x84 mask 4, Physics +0x6c, RemoteRole +0x6d, Role +0x6e.
+- Network clients delete level actors that are neither bStatic nor bNoDelete at level start, also those with
+  RemoteRole None (never replicated) - e.g. StaticSceneCaptureCubeMapActor (reflections). cubefix keeps them.
+- PrimitiveComponent.ClosestReflectionCubeMap / bComputeClosestReflectionCubeMap: the cube map actor's Primitives
+  array lists the meshes it reflects into.
+- `fulldump <file> [class substring]` + `python tools/fulldiff.py <host> <guest>` = class counts, objects on one side
+  only, property differences grouped. Commands to the game go through a one-entry queue: wait ~2 s between them.
+
 ## Packages and installer notes (2026-10-25)
 - TransGame.xxx: UE3 package v846/181, fully chunk-compressed (zlib, 128 KB blocks); chunk table in the summary at an
   unaligned offset; data starts at uncompressed offset 0x81. Name table entry: int length (without the 0), chars, 8

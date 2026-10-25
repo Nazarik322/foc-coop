@@ -97,6 +97,24 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   - Still: guests' robots look slightly cooler than the host's in the intro; the host's Bumblebee is not shown in the
     guest's intro (cinehide).
   More test commands: animnodes, animstate (matinee + interp positions + groups), animseq, hideactor.
+- 2026-10-26 - FIXED the "flat / cooler / no metallic" rest: reflections (`cubefix`, ini default 1).
+  - Found with the new full property dump (`fulldump <file> [class]`, every script variable of lights, light
+    environments, robot / pawn meshes and scene actors, through the class field lists) and `tools/fulldiff.py`:
+    host meshes of robots have ClosestReflectionCubeMap = StaticSceneCaptureCubeMapActor_10619 (212) / _8044 (8);
+    on the guest all 293 were None. The guest's StaticSceneCaptureCubeMapActors had bDeleteMe = 1 (_10619 and its
+    cube map texture already gone): a network client deletes every level actor that is neither bStatic nor bNoDelete
+    at level start (the server would replicate it), but these have RemoteRole None and are never sent.
+  - Fix (scene.inc TickCubeFix): bNoDelete on Default__StaticSceneCaptureCubeMapActor before the map loads (the level's
+    instances inherit it). Guest now 196 meshes with a cube map vs host 220 (`tools/cubetest.ps1` PASS, twin
+    cubefix=0 FAIL with 0). Screenshots sessions/cf1, ch1, ch2: guest robots with the same highlights and warm tone.
+  - On the way: property offsets by name were often guesses - MirrorPropFind looks for a property's Outer in header
+    words +0x10..+0x3c, but this build keeps none there ("largest offset" fallback). Exact way: class +0x30 = first
+    field, field +0x2c = next field (FieldPropFind in scene.inc). MirrorPropFind is unchanged (callers depend on it).
+  - With cinehide=0 and cubefix the black stretched chest did not show in sessions/ch1, ch2, hc1. Why the host's
+    Bumblebee is missing in the guest's intro: the host's matinee group BB drives the host's own pawn (animated at its
+    spawn point); on the guest the same group drives the guest's own pawn (another spawn point, out of the shot) and the
+    host's pawn copy gets no animation. Fix idea: point the guest's group at the host's copy and call the native
+    BeginAnimControl (no Function object; needs the C++ virtual). cinehide stays on until then.
 - 2026-10-20: also in gameplay (L03a) and only on NPC robots; follows the guest role. Details in B25.
 - Owner 2026-10-20: switching off blur/post effects in the Advanced Configurator (F1) did NOT fix it (first report
   withdrawn).
