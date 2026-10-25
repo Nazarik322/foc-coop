@@ -232,6 +232,12 @@ static bool g_inputInject = true;   // ini inputinject: test input injection (in
 static int g_inputMode = 6;         // ini inputmode: 1 DirectInput, 2 key messages, 4 GetAsyncKeyState/GetKeyState, 8 focus spoof
 static bool g_chapterSync = true; // B16: guest shows the chapter title the host shows (story_title.inc), ini chaptersync
 static bool g_cineSync = true;    // B14: the guest follows the host's cinematic mode (sync.inc TickCinematic), ini cinesync
+// ini language=rus (the installer sets it when the Russian translation is ticked): the game runs with
+// -languageforcooking=rus and the F10 menu is Russian; no key -> English (owner 2026-10-25)
+#define FOC_VERSION "1.0.0 beta"   // shown on F10 > About; installer/Setup.cs has the same
+static bool g_langRu = false;
+static bool g_borderless = true;   // ini borderless: windowed game fills its monitor without a frame (overlay.inc TickBorderless)
+static const char* Tr(const char* en, const char* ru) { return g_langRu ? ru : en; }
 static bool g_lightFix = true;  // ini lightfix: part meshes use their master mesh's light environment (scene.inc, B5)
 static bool g_partShow = true;  // ini partshow: show other players' body parts the game hid on this copy (scene.inc, B63)
 static bool g_sceneTp = true;   // ini scenetp: after a cutscene everybody is moved to the player who triggered it (scene.inc)
@@ -2005,6 +2011,8 @@ static void LoadConfig(const wchar_t* dir) {
         g_sceneTp = GetPrivateProfileIntW(L"foc_coop", L"scenetp", 1, ini2) != 0;
         g_partShow = GetPrivateProfileIntW(L"foc_coop", L"partshow", 1, ini2) != 0;
         g_lightFix = GetPrivateProfileIntW(L"foc_coop", L"lightfix", 1, ini2) != 0;
+        g_borderless = GetPrivateProfileIntW(L"foc_coop", L"borderless", 1, ini2) != 0;
+        { wchar_t lg[16] = L""; GetPrivateProfileStringW(L"foc_coop", L"language", L"", lg, 16, ini2); g_langRu = !_wcsnicmp(lg, L"rus", 3); }
         g_autoRestart = GetPrivateProfileIntW(L"foc_coop", L"autorestart", 1, ini2) != 0;
         g_waitGuestSec = GetPrivateProfileIntW(L"foc_coop", L"waitguest", 300, ini2);
         g_downedSec = GetPrivateProfileIntW(L"foc_coop", L"downedsec", 0, ini2);

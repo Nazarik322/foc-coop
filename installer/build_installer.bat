@@ -36,5 +36,6 @@ if exist "%RUSDIR%\TransGame" (
   /resource:"%ROOT%\build\reshade.zip",reshade.zip ^
   %RUSRES% ^
   /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll ^
+  /r:"%WINDIR%\Microsoft.NET\Framework\v4.0.30319\WPF\UIAutomationClient.dll" /r:"%WINDIR%\Microsoft.NET\Framework\v4.0.30319\WPF\UIAutomationTypes.dll" /r:"%WINDIR%\Microsoft.NET\Framework\v4.0.30319\WPF\WindowsBase.dll" ^
   "%~dp0Setup.cs" "%~dp0Mods.cs"
 exit /b %ERRORLEVEL%

@@ -3,6 +3,20 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-25: v1.0.0-beta - installer downloads mods, textures via TFC Installer, Russian F10 menu, borderless window
+- Owner's requests: Russian translation ticked -> whole game + F10 menu Russian, else English (installer sets/clears
+  `language` on every install; DLL `Tr()`); High Quality Audio Logs follow the volume sliders (B65); mod defaults as in
+  the owner's game (configurator ini FPS 200, ReShade only AdaptiveSharpen); mods download from the owner's Google Drive
+  with progress bar, speed and sizes; Authentic High-Quality Textures installed automatically (TFC Installer + portable
+  .NET 6 via UI Automation, uninstall through its "Uninstall all"); borderless window (game's windowed mode fills the
+  monitor; F10 > Settings); README.md / README.ru.md for players with screenshots (docs/img); version 1.0.0 beta.
+- Verified (mock): matrix L02a, L02b, L04c, L06 PASS; Steam mock L03b PASS; lobbyfriend PASS; lobbycontinue PASS;
+  lighttest PASS (one start failure before, rerun PASS); f10visual 4/4 PASS (README shots); installer silent install with
+  `/nolocal` (Drive downloads) PASS; language on/off on reinstall PASS; textures install (338-394 s, 740 packages) and
+  uninstall (12 s, all packages equal to the original again) PASS on copy C; mixed co-op (host without textures, guest
+  with them) PASS; Russian menu screenshots; borderless 2560x1440 on copy D.
+- Not verified: audio logs category by ear (DX_DRY_RADIO), installer GUI pages (only the silent path ran), real 2-PC.
+
 ## 2026-10-25 night: B5 dark robots in scenes and B63 host seen as hands only - fixed on guests (mock)
 - B5: scene.inc TickLightFix (`lightfix`): body-part meshes get their master mesh's light environment (was an unlit one
   on guests). B63: scene.inc TickPartShow (`partshow`): other players' hidden body parts shown. Diagnostics commands

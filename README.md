@@ -1,75 +1,70 @@
-# foc-coop
+# Fall of Cybertron Co-op
 
-**Co-op for Transformers: Fall of Cybertron** — play the story and Escalation with friends (up to 5).
-Unofficial, early development. English | [Русский](README.ru.md)
+**Play the Transformers: Fall of Cybertron campaign together with your friends — up to 5 players, over Steam.**
+
+English | [Русский](README.ru.md)
+
+![Four players in one lobby](docs/img/lobby.jpg)
+
+## What it does
+
+- **Co-op campaign for up to 5 players.** One player hosts, friends join, and you go through the story together.
+- **Everything goes through Steam.** No IP addresses, no port forwarding: friends find your game in the in-game menu.
+- **Same world for everyone.** Enemies, damage and story events are shared; cutscenes play for everybody at the same
+  time, and after a scene the whole team continues together.
+- **Help each other.** A downed player can be revived by a friend.
+- **In-game co-op menu on F10** — create a lobby, join a friend, change settings. English and Russian.
+- **Russian language** for the whole game (optional, built into the installer).
+- **Borderless window.** Choose windowed mode in the game's settings and it fills the screen without a frame —
+  Alt+Tab is instant.
+- **Extra mods in one click.** The installer downloads and installs them for you, with a progress bar:
+  - High Quality Audio Logs
+  - FMV Remaster (cutscene videos in high quality)
+  - Authentic High-Quality Textures (textures from the PS4 version; installing takes 5-10 minutes)
+  - Skip the intro videos
+  - Advanced Configurator (F1 menu: FPS, field of view, graphics) — set up for 200 FPS and high quality
+  - ReShade with a light sharpening preset (Home opens its menu)
+
+![Everybody watches the same cutscene](docs/img/intro4.jpg)
 
 ## Install
 
-1. Run **`FoCCoopSetup.exe`**.
-2. Next → Next → the game folder is found automatically (or press Browse) → **Install**.
+1. Download **`FoCCoopSetup.exe`** from [Releases](https://github.com/Nazarik322/foc-coop/releases).
+2. Run it. The game folder is found automatically.
+3. Tick the extra mods you want (sizes are shown next to them) and press **Install**.
 
-That's it. To remove the mod, run the installer again and tick "Remove the mod".
+To remove the mod, run the installer again and tick "Remove the mod". Every game file a mod replaces is backed up and
+put back.
 
-**Extra mods (optional).** The installer can also put in these Nexus mods if you downloaded them (it finds the archives
-in your Downloads folder): High Quality Audio Logs, FMV Remaster, No-Intro Splash Fix, TFOC Advanced Configurator (F1
-menu; runs together with the co-op mod). ReShade 6.8 with a colour/sharpness preset is bundled (on by default, Home opens
-its menu; colour effects only, so it looks the same online). Replaced game files are backed up and restored on removal.
-Ticking a mod you have not downloaded opens its Nexus page in your browser, and the installer waits until the download
-is in Downloads. All players should pick the same mods. The texture pack (Authentic High-Quality Textures) needs the separate TFC
-Installer and is not handled yet.
-Works with the Steam version of the game (build 12831). Every player needs their own copy.
+**You need:** Transformers: Fall of Cybertron on Steam, Steam running, and your friends in your Steam friends list.
+Every player needs their own copy of the game and this mod.
 
 ## Play with friends
 
-Steam must be running for everyone, and you must be Steam friends.
+| | |
+|---|---|
+| ![Host page](docs/img/host_menu.jpg) | ![Join page](docs/img/join_menu.jpg) |
+| **Host:** press **F10** → Host a game → **Create lobby**. | **Friends:** press **F10** → Join a game → **Join lobby**. |
 
-**Story with a lobby (recommended):**
-- **Host:** start the game, press **F10** → Host a game → at the bottom **Create lobby** (friends only, public or
-  private, optional password). Nothing loads yet.
-- **Friends:** press **F10** → Join a game → **Join lobby** (type the password if there is one) and wait in the main menu.
-- **Host:** start the mission from the game's own menu as in single player (**Continue** or **Campaign** → chapter).
-  Everybody in the lobby is taken into it; the intro waits until they have loaded. Joining a game that already runs
-  works the same way (**Join game**), with a fresh character.
+When everybody is in the lobby, the host starts the campaign from the game's own menu — **Continue** or **Campaign** —
+and all friends are taken into the mission automatically.
 
-**Direct:** Host a game → pick a chapter or Escalation map → Start hosting; friends: Join a game → **Join**.
-No game restart any more: hosting, joining and leaving happen inside the running game.
+![Four players in chapter 1](docs/img/play4.jpg)
 
-No IP addresses, no port forwarding: traffic goes through Steam. While the mod is installed, Steam shows the game as
-"Spacewar" (the free Steam app the co-op connection uses); `spacewar=0` in `Binaries\foc_coop.ini` turns that off. On one network you can also join from the lobby list
-or by IP.
+![Chapter 8 with a friend](docs/img/chapter8.jpg)
 
-## What works
+## Good to know
 
-- Escalation for 2 players on all 4 maps, with score, kills, money and the weapon store as in the original.
-- Story chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9: both players spawn, each with their own camera and HUD.
-- Joining through Steam (tested on one PC; a test with two real Steam accounts is still to come).
-- Story: the host waits until the friend has loaded the level, then it starts for both; the current objective and the
-  objective marker show on both screens (tested in chapter 6).
-- A downed player stays down until the other one revives them; one player dying no longer ends the mission. Only when
-  everybody is down: MISSION FAILED, restart from the checkpoint. If a player really dies (e.g. falls into a pit),
-  both restart at the last checkpoint after about 15 seconds.
-- The chapter title shows on both screens.
-- A player left behind (a scripted door closed, a scene moved the host) is brought to the host; scenes use the
-  host's camera for everybody.
-- In cutscenes the friend's HUD hides and they cannot walk away, as for the host.
-- A player who falls out of the level is teleported next to the other one instead of falling forever.
+- While the mod is installed, Steam shows the game as "Spacewar" — this is the free Steam app the co-op connection uses.
+- All players should pick the same extra mods.
 
-## Known problems
+## Credits
 
-- 3–5 players are not tested yet.
-- Scripted events are only partly in sync; in cutscenes the guest can see dark silhouettes, and the other player's
-  robot can stand in the scene.
-- Reaching some markers loads the next area only around that player: stay together (the teleport is not yet tested
-  on every such marker).
-- Starting a mission from the lobby loads the chapter twice on the host (once as single player, then as the session).
-- After a friend leaves and joins again the host shows one player too many for a while.
+Extra mods by their authors on [Nexus Mods](https://www.nexusmods.com/transformersfallofcybertron): High Quality Audio
+Logs, FMV Remaster, Authentic High-Quality Textures, No-Intro Splash Fix, TFOC Advanced Configurator; TFC Installer
+(UPK Explorer) applies the texture pack. Russian translation by Zerberus
+([Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=2983257437)). [ReShade](https://reshade.me) by
+crosire, colour preset by fpc.
 
-Bugs and progress: [docs/dev](docs/dev/README.md).
-
-## Build
-
-`installer\build_installer.bat` (Visual Studio 2022 Build Tools, x86) builds the DLL, the Steam relay and
-`dist\FoCCoopSetup.exe`.
-
----
-Not affiliated with Hasbro, High Moon Studios or Activision. No game files are included.
+Unofficial fan project, not affiliated with Hasbro, High Moon Studios or Activision. No game files are included.
+For developers: [docs/dev](docs/dev/README.md).

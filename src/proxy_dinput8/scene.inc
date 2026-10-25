@@ -464,3 +464,73 @@ static void TickLightFix(const TickObjs& t) {
     if (n && InterlockedIncrement(&logged) <= 30) Log("lightfix: %d part mesh(es) given their master's light environment", n);
 }
 static void LightFixCommand() { int n = LightFixPass(true); Log("lightfix: %d part mesh(es) fixed (command)", n); }
+
+// `soundinfo <file>` (2026-10-25, Quality Audio Logs mod: audio logs ignore the volume sliders): every SoundCue with its
+// package, SoundClass (FName) and VolumeMultiplier, one line each, to diff the original TransGame.xxx against the mod's.
+static void SoundInfoCommand(const char* file) {
+    static MirrorProp cls = {}, vol = {};
+    MirrorPropFind("SoundCue", "SoundClass", cls); MirrorPropFind("SoundCue", "VolumeMultiplier", vol);
+    unsigned cid = ClassIdByName("SoundCue"); if (!cid) { Log("soundinfo: no SoundCue class"); return; }
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) { Log("soundinfo: cannot write %s", file); return; }
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        char nm[96] = "", pk[96] = "?", cn[96] = "-";
+        ObjLabel(o, nm, sizeof(nm));
+        for (int h = 0x10; h <= 0x3c; h += 4) { BYTE* q = *(BYTE**)(o + h); if (!IsObjFast(q) || q == o) continue; char qc[64] = ""; ClassNameOf(q, qc, sizeof(qc)); if (!strcmp(qc, "Package")) { ObjNameStr(q, pk, sizeof(pk)); break; } }
+        if (cls.off > 0) { unsigned packed = *(unsigned*)(o + cls.off); NameAt((int)(packed >> 14), cn, sizeof(cn)); }
+        float v = vol.off > 0 ? *(float*)(o + vol.off) : -1.f;
+        fprintf(f, "%s|%s|%s|%.3f\n", pk, nm, cn, v); n++;
+    }
+    fclose(f); Log("soundinfo: %d SoundCue(s) -> %s (SoundClass +0x%x, VolumeMultiplier +0x%x)", n, file, cls.off, vol.off);
+}
+// `namefind <substring> <file>`: every live object whose name contains the substring (case-insensitive), with its class
+// and address; for finding what a mod package changed (soundinfo above).
+static void NameFindCommand(const char* args) {
+    char want[64] = "", file[MAX_PATH] = ""; if (sscanf_s(args, "%63s %259s", want, (unsigned)sizeof(want), file, (unsigned)sizeof(file)) < 2) return;
+    _strlwr_s(want);
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char nm[128] = "", lw[128]; ObjLabel(o, nm, sizeof(nm)); strcpy_s(lw, nm); _strlwr_s(lw);
+        if (!strstr(lw, want)) continue;
+        char cn[64] = ""; ClassNameOf(o, cn, sizeof(cn)); fprintf(f, "%s|%s\n", cn, nm); n++;
+    }
+    fclose(f); Log("namefind: %d object(s) with '%s' -> %s", n, want, file);
+}
+
+// `lightdump <file>` (2026-10-25, owner: "some parts are still black, animations only half fixed"): every mesh component
+// (skeletal and static) of characters - TnMeshSetActorMAT and pawns - with its parent (ParentAnimComponent / attach
+// parent), light environment, its bEnabled, HiddenGame, mesh and first material; host and guest dumps are diffed by
+// owner class + mesh name.
+static void LightDumpCommand(const char* file) {
+    static MirrorProp par = {}, leOn = {}, hid = {}, skm = {}, stm = {}, mats = {}, ap = {};
+    MirrorPropFind("SkeletalMeshComponent", "ParentAnimComponent", par); MirrorPropFind("LightEnvironmentComponent", "bEnabled", leOn);
+    MirrorPropFind("PrimitiveComponent", "HiddenGame", hid); MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm);
+    MirrorPropFind("StaticMeshComponent", "StaticMesh", stm); MirrorPropFind("MeshComponent", "Materials", mats);
+    MirrorPropFind("SkeletalMeshComponent", "AttachedComponents", ap);
+    unsigned c1 = ClassIdByName("SkeletalMeshComponent"), c2 = ClassIdByName("StaticMeshComponent");
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    auto isLE = [](BYTE* q) { if (!IsObjFast(q)) return false; char qc[64] = ""; ClassNameOf(q, qc, sizeof(qc)); return strstr(qc, "LightEnvironmentComponent") != nullptr; };
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o) continue; unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff;
+        if (cid != c1 && cid != c2) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc));
+        if (!strstr(oc, "MeshSetActor") && !strstr(oc, "Pawn")) continue;
+        char on[64] = "", mn[96] = "-", pn[64] = "-", ln[64] = "-", m0[96] = "-";
+        ObjLabel(ow, on, sizeof(on));
+        MirrorProp& mp = cid == c1 ? skm : stm; BYTE* me = mp.off > 0 ? *(BYTE**)(o + mp.off) : nullptr; if (IsObjFast(me)) ObjLabel(me, mn, sizeof(mn));
+        BYTE* pa = (cid == c1 && par.off > 0) ? *(BYTE**)(o + par.off) : nullptr; if (IsObjFast(pa)) { BYTE* pm = skm.off > 0 ? *(BYTE**)(pa + skm.off) : nullptr; if (IsObjFast(pm)) ObjLabel(pm, pn, sizeof(pn)); else ObjLabel(pa, pn, sizeof(pn)); }
+        BYTE* l = *(BYTE**)(o + 0x100); int lon = -1;
+        char lo[64] = "-";
+        if (isLE(l)) { ObjLabel(l, ln, sizeof(ln)); if (leOn.off > 0 && leOn.mask) lon = (*(unsigned*)(l + leOn.off) & leOn.mask) ? 1 : 0; BYTE* low = *(BYTE**)(l + 0x3c); if (IsObjFast(low)) ObjLabel(low, lo, sizeof(lo)); } else if (l) strcpy_s(ln, "?");
+        int h = (hid.off > 0 && hid.mask) ? ((*(unsigned*)(o + hid.off) & hid.mask) ? 1 : 0) : -1;
+        TArr* ma = mats.off > 0 ? (TArr*)(o + mats.off) : nullptr; if (ma && Rd(ma, 12) && ma->Num > 0 && Rd(ma->Data, 4) && IsObjFast((BYTE*)ma->Data[0])) ObjLabel((BYTE*)ma->Data[0], m0, sizeof(m0));
+        char cn[48] = ""; ClassNameOf(o, cn, sizeof(cn));
+        fprintf(f, "%s|%s|%s|%s|parent=%s|le=%s|leOn=%d|hid=%d|mat=%s|leOwner=%s\n", oc, on, cn, mn, pn, ln, lon, h, m0, lo); n++;
+    }
+    fclose(f); Log("lightdump: %d mesh(es) -> %s", n, file);
+}

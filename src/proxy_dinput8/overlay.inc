@@ -46,6 +46,9 @@ static void MeshNodesCommand();                 // scene.inc
 static void PartShowCommand(const TickObjs& t); // scene.inc
 static void MeshInfoCommand(const char* want);  // scene.inc
 static void LightFixCommand();                  // scene.inc
+static void SoundInfoCommand(const char* file);  // scene.inc
+static void NameFindCommand(const char* args);    // scene.inc
+static void LightDumpCommand(const char* file);   // scene.inc
 static void SceneCommand(const TickObjs& t, const char* verb, const char* args);   // scene.inc
 static void LobbyCommand(const char* args);      // lobby.inc
 static void PcProbeCommand();                     // lobby.inc
@@ -399,6 +402,9 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd == "animfix") { AnimFixCommand(g_to); return; }
     if (cmd == "meshnodes") { MeshNodesCommand(); return; }
     if (cmd == "partshow") { PartShowCommand(g_to); return; }
+    if (cmd.rfind("soundinfo ", 0) == 0) { SoundInfoCommand(cmd.c_str() + 10); return; }
+    if (cmd.rfind("namefind ", 0) == 0) { NameFindCommand(cmd.c_str() + 9); return; }
+    if (cmd.rfind("lightdump ", 0) == 0) { LightDumpCommand(cmd.c_str() + 10); return; }
     if (cmd == "lightfix") { LightFixCommand(); return; }
     if (cmd.rfind("meshinfo ", 0) == 0) { MeshInfoCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("propat ", 0) == 0) { PropAtCommand(cmd.c_str() + 7); return; }
@@ -485,6 +491,7 @@ static const UINT kTickMsg = WM_APP + 0x4F1;   // posted by TickThread; runs Gam
 static volatile LONG g_tickPosted = 0;
 static volatile DWORD g_tickPostedAt = 0;
 static volatile LONG g_menuOpen = 0;
+static void ApplyBorderless();   // below (borderless window)
 static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0 && lp) {
         MSG* m = (MSG*)lp;
@@ -492,7 +499,8 @@ static LRESULT CALLBACK GetMsgProc(int code, WPARAM wp, LPARAM lp) {
         // DirectInput hooks already return "nothing pressed"). Our menu reads keys with GetAsyncKeyState.
         if (g_menuOpen && ((m->message >= WM_KEYFIRST && m->message <= WM_KEYLAST) || (m->message >= WM_MOUSEFIRST && m->message <= WM_MOUSELAST) || m->message == WM_INPUT))
             m->message = WM_NULL;
-        if (m->message == WM_APP + 0x4F0) {
+        if (m->message == WM_APP + 0x4F2) { ApplyBorderless(); m->message = WM_NULL; }
+        else if (m->message == WM_APP + 0x4F0) {
             std::string c; EnterCriticalSection(&g_cmdCs); c.swap(g_cmdForGame); LeaveCriticalSection(&g_cmdCs);
             if (!c.empty()) RunCommandNow(c);
             m->message = WM_NULL;
@@ -916,22 +924,37 @@ static void FeedInput(ImGuiIO& io) {
 }
 
 // ---------------------------------------------------------------- the menu UI
+// relay states (FoCRelay SetState) shown in the menu: Russian when g_langRu, the relay's own English otherwise
+static const char* StateText(const char* s) {
+    static const char* kRu[][2] = {
+        {"connected", u8"подключено: игра идёт через Steam"}, {"joined", u8"в лобби: ждём подключения игры"},
+        {"joining the lobby failed", u8"не удалось войти в лобби"}, {"joining", u8"вход в лобби..."},
+        {"hosting", u8"лобби открыто, ждём друзей"}, {"creating the lobby failed", u8"не удалось создать лобби"},
+        {"creating", u8"создание лобби..."}, {"host left", u8"хост покинул лобби"}, {"host silent", u8"хост не отвечает 20 с"},
+        {"local port busy", u8"локальный порт занят"}, {"steam_api.dll", u8"steam_api.dll отсутствует или устарел"},
+        {"svc: in a lobby", u8"в лобби"}, {"svc: lobby open", u8"лобби открыто"}, {"svc: ready", u8"готово"},
+        {"that lobby is not", u8"это лобби - не кооператив Fall of Cybertron"}, {"stopped", u8"остановлено"},
+    };
+    if (!g_langRu || !s) return s;
+    for (auto& e : kRu) if (!strncmp(s, e[0], strlen(e[0]))) return e[1];
+    return s;
+}
 static void Tooltip(const char* t) { if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", t); }
 
 #include "lobby.inc"
 static void DrawHostPage() {
-    ImGui::TextUnformatted("HOST A GAME");
+    ImGui::TextUnformatted(Tr("HOST A GAME", u8"СОЗДАТЬ ИГРУ"));
     ImGui::Separator();
     // 2026-10-25: the lobby (friends join, then the mission starts from the game's menu) is the main way now - first,
     // so "Create lobby" is visible without scrolling even in a small window; the direct chapter start follows
     DrawLobbyHostPart();
     ImGui::Spacing(); ImGui::Separator();
-    ImGui::TextDisabled("Or start a chapter directly (friends join the running game):");
-    if (ImGui::RadioButton("Story (co-op campaign)", g_hostMode == 0)) g_hostMode = 0;
+    ImGui::TextDisabled("%s", Tr("Or start a chapter directly (friends join the running game):", u8"Или сразу запустите главу (друзья зайдут в идущую игру):"));
+    if (ImGui::RadioButton(Tr("Story (co-op campaign)", u8"Сюжет (кооп-кампания)"), g_hostMode == 0)) g_hostMode = 0;
     ImGui::SameLine();
-    if (ImGui::RadioButton("Escalation", g_hostMode == 1)) g_hostMode = 1;
+    if (ImGui::RadioButton(Tr("Escalation", u8"Эскалация"), g_hostMode == 1)) g_hostMode = 1;
     ImGui::Spacing();
-    ImGui::TextUnformatted(g_hostMode == 0 ? "Chapter:" : "Map:");
+    ImGui::TextUnformatted(g_hostMode == 0 ? Tr("Chapter:", u8"Глава:") : Tr("Map:", u8"Карта:"));
     ImGui::BeginChild("maps", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 8.5f), true);
     if (g_hostMode == 0) {
         for (int i = 0; i < (int)(sizeof(kChapters) / sizeof(kChapters[0])); i++)
@@ -941,56 +964,56 @@ static void DrawHostPage() {
             if (ImGui::Selectable(kEscalation[i].title, g_hostMapEsc == i)) g_hostMapEsc = i;
     }
     ImGui::EndChild();
-    ImGui::SliderInt("Max players", &g_hostPlayers, 2, 5);
+    ImGui::SliderInt(Tr("Max players", u8"Макс. игроков"), &g_hostPlayers, 2, 5);
     ImGui::Spacing();
-    ImGui::TextDisabled("%s", g_hostMode == 0 ? "Story co-op: chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9 tested." : "Escalation: wave survival, up to 5 players.");
-    ImGui::TextWrapped("Your game appears in your friends' Join list through Steam (no IP addresses, no port forwarding). Steam must be running.");
+    ImGui::TextDisabled("%s", g_hostMode == 0 ? Tr("Story co-op: chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9 tested.", u8"Кооп-сюжет: проверены главы 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9.") : Tr("Escalation: wave survival, up to 5 players.", u8"Эскалация: выживание против волн, до 5 игроков."));
+    ImGui::TextWrapped("%s", Tr("Your game appears in your friends' Join list through Steam (no IP addresses, no port forwarding). Steam must be running.", u8"Ваша игра появится у друзей в списке «Присоединиться к игре» через Steam (без IP-адресов и проброса портов). Steam должен быть запущен."));
     ImGui::Spacing();
-    if (UiButton("Start hosting", ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
-    ImGui::SameLine(); ImGui::TextDisabled("(loads the chapter now)");
+    if (UiButton(Tr("Start hosting", u8"Запустить"), ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
+    ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("(loads the chapter now)", u8"(глава загрузится сразу)"));
     ImGui::SameLine();
-    if (UiButton("Back")) g_page = 0;
+    if (UiButton(Tr("Back", u8"Назад"))) g_page = 0;
 }
 
 static void DrawJoinPage() {
-    ImGui::TextUnformatted("JOIN A GAME");
+    ImGui::TextUnformatted(Tr("JOIN A GAME", u8"ПРИСОЕДИНИТЬСЯ К ИГРЕ"));
     ImGui::Separator();
     ListRelayTick();
-    ImGui::TextUnformatted("Games on Steam (friends first, refreshed every few seconds):");
+    ImGui::TextUnformatted(Tr("Games on Steam (friends first, refreshed every few seconds):", u8"Игры в Steam (сначала друзья, список обновляется каждые несколько секунд):"));
     ImGui::BeginChild("lobbies", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 9.5f), true);
     if (ImGui::BeginTable("lt", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Host"); ImGui::TableSetupColumn("Mode"); ImGui::TableSetupColumn("Map / chapter");
-        ImGui::TableSetupColumn("Players"); ImGui::TableSetupColumn("");
+        ImGui::TableSetupColumn(Tr("Host", u8"Хост")); ImGui::TableSetupColumn(Tr("Mode", u8"Режим")); ImGui::TableSetupColumn(Tr("Map / chapter", u8"Карта / глава"));
+        ImGui::TableSetupColumn(Tr("Players", u8"Игроки")); ImGui::TableSetupColumn("");
         ImGui::TableHeadersRow();
         for (int i = 0; i < (int)g_steamLobbies.size(); i++) {
             const SteamLobby& l = g_steamLobbies[i];
             ImGui::TableNextRow(); ImGui::TableNextColumn();
-            if (l.isFriend) ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s (friend)", l.name); else ImGui::TextUnformatted(l.name);
+            if (l.isFriend) ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), Tr("%s (friend)", u8"%s (друг)"), l.name); else ImGui::TextUnformatted(l.name);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(l.mode);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(l.map);
             ImGui::TableNextColumn(); if (l.maxp) ImGui::Text("%d / %d", l.members, l.maxp); else ImGui::TextUnformatted("?");
             ImGui::TableNextColumn();
             bool locked = l.pwHash[0] && strcmp(l.pwHash, "-") && strcmp(l.pwHash, "0");
-            char b[48]; _snprintf_s(b, _TRUNCATE, "%s##%s", l.inGame ? "Join game" : "Join lobby", l.id);
-            if (locked) { ImGui::SameLine(); ImGui::TextDisabled("(password)"); }
+            char b[48]; _snprintf_s(b, _TRUNCATE, "%s##%s", l.inGame ? Tr("Join game", u8"Войти в игру") : Tr("Join lobby", u8"Войти в лобби"), l.id);
+            if (locked) { ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("(password)", u8"(пароль)")); }
             // 2026-10-24 real test: the host pressed Join while hosting, which closed its own lobby (Steam gave it to the
             // friend) - no joining while we host one
             ImGui::BeginDisabled(g_lobbyRole == 1);
             if (UiSmallButton(b)) { strncpy_s(g_joinLobby, l.id, _TRUNCATE); if (LobbyJoin(l.id, l.pwHash, g_joinPw)) g_menuOpen = 0; }
             ImGui::EndDisabled();
         }
-        if (g_steamLobbies.empty()) { ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextDisabled(g_listStarted && GetTickCount() - g_listStarted > 8000 ? "no games found yet - ask your friend to host" : "searching..."); }
+        if (g_steamLobbies.empty()) { ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextDisabled(g_listStarted && GetTickCount() - g_listStarted > 8000 ? Tr("no games found yet - ask your friend to host", u8"игр пока нет - попросите друга создать игру") : Tr("searching...", u8"поиск...")); }
         ImGui::EndTable();
     }
     ImGui::EndChild();
-    if (g_lobbyRole == 1) ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), u8"Вы хост лобби - сначала закройте его (Host > Close lobby) / you host a lobby: close it first");
-    ImGui::SetNextItemWidth(180); ImGui::InputText("Lobby password", g_joinPw, sizeof(g_joinPw), ImGuiInputTextFlags_Password);
-    if (g_relayState[0] && !strcmp(g_relayRole, "join")) ImGui::TextDisabled("Steam: %s", g_relayState);
+    if (g_lobbyRole == 1) ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%s", Tr("You host a lobby: close it first (Host a game > Close lobby)", u8"Вы хост лобби - сначала закройте его (Создать игру > Закрыть лобби)"));
+    ImGui::SetNextItemWidth(180); ImGui::InputText(Tr("Lobby password", u8"Пароль лобби"), g_joinPw, sizeof(g_joinPw), ImGuiInputTextFlags_Password);
+    if (g_relayState[0] && !strcmp(g_relayRole, "join")) ImGui::TextDisabled("Steam: %s", StateText(g_relayState));
     if (g_lobbyStatus[0]) ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s", g_lobbyStatus);
-    if (g_lobbyRole == 2 && UiButton("Leave lobby")) LobbyLeave();
-    ImGui::TextDisabled("You wait in the main menu; when the host starts the mission you join it (no restart).");
+    if (g_lobbyRole == 2 && UiButton(Tr("Leave lobby", u8"Покинуть лобби"))) LobbyLeave();
+    ImGui::TextDisabled("%s", Tr("You wait in the main menu; when the host starts the mission you join it (no restart).", u8"Ждите в главном меню: когда хост запустит миссию, вы зайдёте в неё (без перезапуска)."));
     ImGui::Spacing();
-    if (UiButton("Back")) { ListRelayStop(); g_page = 0; }
+    if (UiButton(Tr("Back", u8"Назад"))) { ListRelayStop(); g_page = 0; }
 }
 
 static void DrawMainPage() {
@@ -998,27 +1021,27 @@ static void DrawMainPage() {
     ImGui::Separator();
     ImGui::Spacing();
     ImVec2 bs(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight() * 2.4f);
-    if (UiButton("Host a game", bs)) g_page = 1;
-    Tooltip("Pick story chapter or Escalation map and let friends join you");
-    if (UiButton("Join a game", bs)) g_page = 2;
-    Tooltip("Choose a lobby from the list or type an IP address");
+    if (UiButton(Tr("Host a game", u8"Создать игру"), bs)) g_page = 1;
+    Tooltip(Tr("Pick story chapter or Escalation map and let friends join you", u8"Выберите главу сюжета или карту Эскалации - друзья смогут зайти к вам"));
+    if (UiButton(Tr("Join a game", u8"Присоединиться к игре"), bs)) g_page = 2;
+    Tooltip(Tr("Choose a lobby from the list", u8"Выберите лобби из списка"));
     if (g_hosting) {
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "Hosting: %s - %s (max %d)", g_hostModeName, g_hostTitle, g_hostMax);
+        ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), Tr("Hosting: %s - %s (max %d)", u8"Хост: %s - %s (макс. %d)"), g_hostModeName, g_hostTitle, g_hostMax);
     }
     if (g_relayState[0]) {
-        ImGui::Text("Steam: %s", g_relayState);
-        if (g_relayLobby) { ImGui::SameLine(); ImGui::TextDisabled("(lobby %llu, friends %d)", g_relayLobby, g_relayPeers); }
+        ImGui::Text("Steam: %s", StateText(g_relayState));
+        if (g_relayLobby) { ImGui::SameLine(); ImGui::TextDisabled(Tr("(lobby %llu, friends %d)", u8"(лобби %llu, друзей %d)"), g_relayLobby, g_relayPeers); }
         // no Steam invite button: the invite dialog only opens for the process that owns the lobby (the relay, which has
         // no window), so it only showed the overlay; friends find the game in their Join list instead
-        if (!strcmp(g_relayRole, "host")) ImGui::TextDisabled("Friends see your game in F10 > Join a game.");
+        if (!strcmp(g_relayRole, "host")) ImGui::TextDisabled("%s", Tr("Friends see your game in F10 > Join a game.", u8"Друзья видят вашу игру в F10 > Присоединиться к игре."));
     }
-    if (UiButton(InProcessTravel() ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; g_hostUrl[0] = 0; if (InProcessTravel()) { QueueCommand("disconnect"); CreateThread(nullptr, 0, LobbyRelayQuitLater, nullptr, 0, nullptr); g_lobbyRole = 0; } else RelaunchWithUrl(""); }
-    if (UiButton("Settings", bs)) g_page = 4;
-    Tooltip("Co-op options; most apply at once, also during a game");
-    if (UiButton("About / status", bs)) g_page = 3;
+    if (UiButton(InProcessTravel() ? Tr("Disconnect / stop", u8"Отключиться") : Tr("Leave to main menu (restarts the game)", u8"В главное меню (игра перезапустится)"), bs)) { g_hosting = 0; g_menuOpen = 0; g_hostUrl[0] = 0; if (InProcessTravel()) { QueueCommand("disconnect"); CreateThread(nullptr, 0, LobbyRelayQuitLater, nullptr, 0, nullptr); g_lobbyRole = 0; } else RelaunchWithUrl(""); }
+    if (UiButton(Tr("Settings", u8"Настройки"), bs)) g_page = 4;
+    Tooltip(Tr("Co-op options; most apply at once, also during a game", u8"Настройки кооператива; большинство действует сразу, и во время игры"));
+    if (UiButton(Tr("About / status", u8"О моде / состояние"), bs)) g_page = 3;
     ImGui::Spacing();
-    ImGui::SetNextItemWidth(200); ImGui::InputText("Your name", g_playerName, sizeof(g_playerName));
+    ImGui::SetNextItemWidth(200); ImGui::InputText(Tr("Your name", u8"Ваше имя"), g_playerName, sizeof(g_playerName));
 }
 
 // ---------------------------------------------------------------- settings page (F10 -> Settings)
@@ -1032,42 +1055,44 @@ static void SaveSettings() {
         {L"ctrlshare", g_ctrlShare}, {L"hostfirst", g_hostFirst}, {L"rescue", g_rescue}, {L"viewfix", g_viewFix},
         {L"spawnshift", g_spawnShiftFlag}, {L"ctrldiag", g_ctrlDiag}, {L"ctrlsharedelay", g_ctrlShareDelay}, {L"steamhost", g_useSteam},
     };
+    WritePrivateProfileStringW(L"foc_coop", L"borderless", g_borderless ? L"1" : L"0", ini);
     for (auto& e : kv) { wchar_t v[16]; _snwprintf_s(v, _TRUNCATE, L"%d", e.v); WritePrivateProfileStringW(L"foc_coop", e.k, v, ini); }
     if (g_suffix[0]) { wchar_t v[64]; MultiByteToWideChar(CP_ACP, 0, g_suffix, -1, v, 64); WritePrivateProfileStringW(L"foc_coop", L"instance", v, ini); }
     Log("settings: saved to %ls", ini);
 }
 static void DrawSettingsPage() {
-    ImGui::TextUnformatted("SETTINGS");
+    ImGui::TextUnformatted(Tr("SETTINGS", u8"НАСТРОЙКИ"));
     ImGui::Separator();
     bool changed = false;
-    ImGui::TextDisabled("Apply at once (also while playing):");
-    changed |= ImGui::Checkbox("Rescue a player who falls out of the level", &g_rescue);
-    changed |= ImGui::Checkbox("Spawn the guest next to the host when the start spot is blocked", &g_spawnShiftFlag);
-    changed |= ImGui::Checkbox("Guest camera follows its own character", &g_viewFix);
-    changed |= ImGui::Checkbox("Share host objects with guests (fixes host crashes in story)", &g_ctrlShare);
-    changed |= ImGui::Checkbox("Host first in the player list (story scripts target the host)", &g_hostFirst);
-    changed |= ImGui::Checkbox("Detailed diagnostics in foc_coop.log", &g_ctrlDiag);
+    ImGui::TextDisabled("%s", Tr("Apply at once (also while playing):", u8"Действуют сразу (и во время игры):"));
+    changed |= ImGui::Checkbox(Tr("Rescue a player who falls out of the level", u8"Спасать игрока, выпавшего за пределы уровня"), &g_rescue);
+    changed |= ImGui::Checkbox(Tr("Spawn the guest next to the host when the start spot is blocked", u8"Ставить гостя рядом с хостом, если точка появления занята"), &g_spawnShiftFlag);
+    changed |= ImGui::Checkbox(Tr("Guest camera follows its own character", u8"Камера гостя следует за его персонажем"), &g_viewFix);
+    changed |= ImGui::Checkbox(Tr("Share host objects with guests (fixes host crashes in story)", u8"Делиться объектами хоста с гостями (исправляет вылеты хоста в сюжете)"), &g_ctrlShare);
+    changed |= ImGui::Checkbox(Tr("Host first in the player list (story scripts target the host)", u8"Хост первый в списке игроков (сюжетные скрипты нацелены на хоста)"), &g_hostFirst);
+    if (ImGui::Checkbox(Tr("Borderless window (windowed mode fills the screen)", u8"Развёрнутый экран (оконный режим на весь экран без рамки)"), &g_borderless)) changed = true;
+    changed |= ImGui::Checkbox(Tr("Detailed diagnostics in foc_coop.log", u8"Подробная диагностика в foc_coop.log"), &g_ctrlDiag);
     ImGui::Spacing();
-    ImGui::TextDisabled("Used when you host next time:");
-    changed |= ImGui::Checkbox("Host through Steam by default", &g_useSteam);
-    changed |= ImGui::SliderInt("Player limit", &g_maxPlayers, 2, 5);
+    ImGui::TextDisabled("%s", Tr("Used when you host next time:", u8"Действуют, когда вы в следующий раз создадите игру:"));
+    changed |= ImGui::Checkbox(Tr("Host through Steam by default", u8"Создавать игру через Steam по умолчанию"), &g_useSteam);
+    changed |= ImGui::SliderInt(Tr("Player limit", u8"Лимит игроков"), &g_maxPlayers, 2, 5);
     ImGui::Spacing();
     if (changed) SaveSettings();
-    ImGui::TextDisabled("Saved to foc_coop.ini next to TFOC.exe.");
-    if (UiButton("Back")) g_page = 0;
+    ImGui::TextDisabled("%s", Tr("Saved to foc_coop.ini next to TFOC.exe.", u8"Сохраняется в foc_coop.ini рядом с TFOC.exe."));
+    if (UiButton(Tr("Back", u8"Назад"))) g_page = 0;
 }
 
 static void DrawAboutPage() {
-    ImGui::TextUnformatted("ABOUT");
+    ImGui::TextUnformatted(Tr("ABOUT", u8"О МОДЕ"));
     ImGui::Separator();
-    ImGui::TextWrapped("foc-coop dev build. Unofficial co-op layer for Fall of Cybertron. Press F10 to open or close this menu.");
+    ImGui::TextWrapped("%s", Tr("Fall of Cybertron Co-op " FOC_VERSION ". Unofficial co-op mod. Press F10 to open or close this menu.", u8"Кооператив для Fall of Cybertron " FOC_VERSION ". Неофициальный мод. F10 открывает и закрывает это меню."));
     ImGui::Spacing();
-    ImGui::Text("Engine: %s", g_execStatus);
-    ImGui::Text("Last command: %s", g_lastCmd[0] ? g_lastCmd : "(none)");
-    ImGui::Text("Instance: %s", g_suffix[0] ? g_suffix : "(default)");
-    ImGui::Checkbox("Fast travel without restart (experimental, usually fails)", &g_fastTravel);
+    ImGui::Text(Tr("Engine: %s", u8"Движок: %s"), g_execStatus);
+    ImGui::Text(Tr("Last command: %s", u8"Последняя команда: %s"), g_lastCmd[0] ? g_lastCmd : Tr("(none)", u8"(нет)"));
+    ImGui::Text(Tr("Instance: %s", u8"Копия: %s"), g_suffix[0] ? g_suffix : Tr("(default)", u8"(основная)"));
+    ImGui::Checkbox(Tr("Fast travel without restart (experimental, usually fails)", u8"Быстрый переход без перезапуска (экспериментально, обычно не работает)"), &g_fastTravel);
     ImGui::Spacing();
-    if (UiButton("Back")) g_page = 0;
+    if (UiButton(Tr("Back", u8"Назад"))) g_page = 0;
 }
 
 static void DrawMenu(ImGuiIO& io) {
@@ -1079,9 +1104,7 @@ static void DrawMenu(ImGuiIO& io) {
     ImGui::SetNextWindowBgAlpha(0.92f);
     ImGui::Begin("foc-coop", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
     switch (g_page) { case 1: DrawHostPage(); break; case 2: DrawJoinPage(); break; case 3: DrawAboutPage(); break; case 4: DrawSettingsPage(); break; default: DrawMainPage(); }
-    ImGui::Spacing(); ImGui::Separator();
-    ImGui::TextDisabled("%s", g_execStatus);
-    ImGui::End();
+    ImGui::End();   // the engine status is on the About page (players took "engine not ready" for an error)
 }
 
 // ---------------------------------------------------------------- Direct3D9 hook
@@ -1099,6 +1122,53 @@ static D3dVt g_d3dVts[4]; static int g_d3dVtN = 0;
 static D3dVt* D3dFor(void* dev) { void** vt = *(void***)dev; for (int i = 0; i < g_d3dVtN; i++) if (g_d3dVts[i].vt == vt) return &g_d3dVts[i]; return nullptr; }
 static IDirect3DDevice9* g_imDev = nullptr;
 static DWORD g_menuT0 = 0;
+
+// Borderless window ("развёрнутый экран", owner 2026-10-25): when the game runs windowed (the game's own Windowed
+// option or -windowed), the window loses its frame and covers the whole monitor it is on; Alt+Tab / Win are instant
+// because there is no exclusive fullscreen. The game keeps rendering at its own resolution (ResX/ResY) and Windows
+// stretches it (the F10 menu already maps the mouse from window to back-buffer pixels). Ini borderless (default 1),
+// F10 > Settings checkbox. Test copies (E:/FoC-coop/A..D) have borderless=0 in their ini (tools want small windows).
+// The render thread only posts a message; the window is changed in GetMsgProc on the window's own thread (SetWindowPos
+// from the render thread waits for the main thread, which may be waiting for the render thread: the game froze).
+static void TickBorderless() {
+    static DWORD next = 0; DWORD now = GetTickCount();
+    if ((LONG)(now - next) < 0) return; next = now + 1000;
+    if (g_gameWnd) PostMessageW(g_gameWnd, WM_APP + 0x4F2, 0, 0);
+}
+// The game puts its window frame back (its own SetWindowLong(GWL_STYLE) after every resize): the imports of TFOC.exe
+// for SetWindowLongA/W are hooked and drop the frame bits for the game window while borderless is on and windowed.
+static volatile LONG g_d3dWindowed = 1;   // RenderOverlay: the game's swap chain is windowed (not exclusive fullscreen)
+static const LONG kFrameBits = WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+typedef LONG(WINAPI* PFN_SetWL)(HWND, int, LONG);
+static PFN_SetWL o_SetWindowLongW, o_SetWindowLongA;
+static LONG BorderlessStyle(HWND h, int i, LONG v) { return (h == g_gameWnd && i == GWL_STYLE && g_borderless && g_d3dWindowed) ? ((v & ~kFrameBits) | WS_POPUP) : v; }
+static LONG WINAPI h_SetWindowLongW(HWND h, int i, LONG v) { return o_SetWindowLongW(h, i, BorderlessStyle(h, i, v)); }
+static LONG WINAPI h_SetWindowLongA(HWND h, int i, LONG v) { return o_SetWindowLongA(h, i, BorderlessStyle(h, i, v)); }
+static void ApplyBorderless() {
+    static bool hooked = false;
+    if (!hooked) {
+        hooked = true;
+        o_SetWindowLongW = (PFN_SetWL)Resolve("user32.dll", "SetWindowLongW"); o_SetWindowLongA = (PFN_SetWL)Resolve("user32.dll", "SetWindowLongA");
+        int a = PatchIat((void*)o_SetWindowLongW, (void*)h_SetWindowLongW), b = PatchIat((void*)o_SetWindowLongA, (void*)h_SetWindowLongA);
+        Log("borderless: SetWindowLong imports patched W=%d A=%d", a, b);
+    }
+    if (!g_gameWnd || !IsWindow(g_gameWnd) || IsIconic(g_gameWnd)) return;
+    LONG st = GetWindowLongW(g_gameWnd, GWL_STYLE);
+    static LONG savedStyle = 0; static RECT savedRect = {};
+    if (!g_borderless) {
+        if (savedStyle) { o_SetWindowLongW(g_gameWnd, GWL_STYLE, savedStyle); SetWindowPos(g_gameWnd, nullptr, savedRect.left, savedRect.top, savedRect.right - savedRect.left, savedRect.bottom - savedRect.top, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE); savedStyle = 0; Log("borderless: off, window frame back"); }
+        return;
+    }
+    if (!g_d3dWindowed) return;   // exclusive fullscreen: not ours to change
+    if (st & WS_CAPTION) { savedStyle = st; GetWindowRect(g_gameWnd, &savedRect); }
+    MONITORINFO mi = { sizeof(mi) }; if (!GetMonitorInfoW(MonitorFromWindow(g_gameWnd, MONITOR_DEFAULTTONEAREST), &mi)) return;
+    RECT m = mi.rcMonitor, r = {}; GetWindowRect(g_gameWnd, &r);
+    if ((st & WS_CAPTION) || r.left != m.left || r.top != m.top || r.right != m.right || r.bottom != m.bottom) {
+        o_SetWindowLongW(g_gameWnd, GWL_STYLE, (st & ~kFrameBits) | WS_POPUP | WS_VISIBLE);
+        SetWindowPos(g_gameWnd, HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top, SWP_FRAMECHANGED | SWP_NOACTIVATE);
+        Log("borderless: window %p -> %ldx%ld at %ld,%ld (was style %08lx, %ld,%ld-%ld,%ld)", g_gameWnd, m.right - m.left, m.bottom - m.top, m.left, m.top, st, r.left, r.top, r.right, r.bottom);
+    }
+}
 
 static void RenderOverlay(IDirect3DDevice9* dev) {
     if (g_imDev != dev) {
@@ -1139,7 +1209,9 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
     if (f10 && !f10prev) { g_menuOpen = !g_menuOpen; if (g_menuOpen) { g_page = 0; ClipCursor(nullptr); } }
     f10prev = f10;
     if (g_menuOpen && KeyDown(VK_ESCAPE)) { g_menuOpen = 0; }
-    { static DWORD bbAt = 0; if (GetTickCount() - bbAt > 1000) { bbAt = GetTickCount(); IDirect3DSurface9* bb = nullptr; if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) { D3DSURFACE_DESC d = {}; if (SUCCEEDED(bb->GetDesc(&d))) { g_bbW = d.Width; g_bbH = d.Height; } bb->Release(); } } }
+    { static DWORD bbAt = 0; if (GetTickCount() - bbAt > 1000) { bbAt = GetTickCount(); IDirect3DSurface9* bb = nullptr; if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) { D3DSURFACE_DESC d = {}; if (SUCCEEDED(bb->GetDesc(&d))) { g_bbW = d.Width; g_bbH = d.Height; } bb->Release(); }
+        IDirect3DSwapChain9* sc = nullptr; if (SUCCEEDED(dev->GetSwapChain(0, &sc)) && sc) { D3DPRESENT_PARAMETERS pp = {}; if (SUCCEEDED(sc->GetPresentParameters(&pp))) g_d3dWindowed = pp.Windowed ? 1 : 0; sc->Release(); } } }
+    TickBorderless();
     FeedInput(io);
     ImGui_ImplDX9_NewFrame();
     ImGui::NewFrame();
@@ -1151,8 +1223,9 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
         ImGui::GetForegroundDrawList()->AddTriangleFilled(io.MousePos, ImVec2(io.MousePos.x + 14 * io.FontGlobalScale, io.MousePos.y + 10 * io.FontGlobalScale), ImVec2(io.MousePos.x + 5 * io.FontGlobalScale, io.MousePos.y + 17 * io.FontGlobalScale), IM_COL32(255, 255, 255, 255));
     } else if (GetTickCount() - g_menuT0 < 25000 || g_hosting) {
         char t[160];
-        if (g_hosting) _snprintf_s(t, _TRUNCATE, "co-op: hosting %s - %s   [F10 menu]", g_hostModeName, g_hostTitle);
-        else strcpy_s(t, "Co-op menu: F10");
+        if (g_hosting && g_hostTitle[0]) _snprintf_s(t, _TRUNCATE, Tr("co-op: hosting %s - %s   [F10 menu]", u8"кооп: хост %s - %s   [меню F10]"), g_hostModeName, g_hostTitle);
+        else if (g_hosting) strcpy_s(t, Tr("co-op: you are the host   [F10 menu]", u8"кооп: вы хост   [меню F10]"));
+        else strcpy_s(t, Tr("Co-op menu: F10", u8"Меню кооператива: F10"));
         ImGui::GetForegroundDrawList()->AddText(ImVec2(10, io.DisplaySize.y - 24 * (io.DisplaySize.y > 900 ? 1.5f : 1.f)), IM_COL32(255, 255, 255, 170), t);
     }
     // owner 2026-10-24: "some visual sign that we are in the lobby, top left, while in the menu" - who hosts, who is in
@@ -1162,19 +1235,19 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
         ImGui::SetNextWindowPos(ImVec2(12 * s, 12 * s), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.72f);
         ImGui::Begin("##lobbybanner", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-        ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), g_lobbyRole == 1 ? u8"ЛОББИ - вы хост" : u8"ЛОББИ - вы гость");
-        ImGui::Text(u8"Игроки: %d / %d", g_relayMemberN ? g_relayMemberN : 1, g_lobbyRole == 1 ? g_lobbyMax : 4);
-        for (int i = 0; i < g_relayMemberN; i++) ImGui::BulletText("%s%s", g_relayMembers[i], i == 0 ? u8"  (хост)" : "");
+        ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s", g_lobbyRole == 1 ? Tr("LOBBY - you are the host", u8"ЛОББИ - вы хост") : Tr("LOBBY - you are a guest", u8"ЛОББИ - вы гость"));
+        ImGui::Text(Tr("Players: %d / %d", u8"Игроки: %d / %d"), g_relayMemberN ? g_relayMemberN : 1, g_lobbyRole == 1 ? g_lobbyMax : 4);
+        for (int i = 0; i < g_relayMemberN; i++) ImGui::BulletText("%s%s", g_relayMembers[i], i == 0 ? Tr("  (host)", u8"  (хост)") : "");
         ImGui::Separator();
-        if (g_lobbyRole == 1) ImGui::TextUnformatted(g_relayMemberN > 1 ? u8"Запускайте кампанию из меню игры: CONTINUE или CAMPAIGN" : u8"Ждём друга: F10 > Join a game > Join lobby");
-        else ImGui::TextUnformatted(u8"Ждите в меню: хост запустит миссию, и вы зайдёте сами");
-        ImGui::TextDisabled("Steam: %s   [F10]", g_relayState);
+        if (g_lobbyRole == 1) ImGui::TextUnformatted(g_relayMemberN > 1 ? Tr("Start the campaign from the game's menu: CONTINUE or CAMPAIGN", u8"Запускайте кампанию из меню игры: ПРОДОЛЖИТЬ или КАМПАНИЯ") : Tr("Waiting for a friend: F10 > Join a game > Join lobby", u8"Ждём друга: F10 > Присоединиться к игре > Войти в лобби"));
+        else ImGui::TextUnformatted(Tr("Wait in the menu: the host starts the mission and you join by yourself", u8"Ждите в меню: хост запустит миссию, и вы зайдёте сами"));
+        ImGui::TextDisabled("Steam: %s   [F10]", StateText(g_relayState));
         ImGui::End();
     } else if (!g_menuOpen && !g_lobbyRole && g_lobbyInMenu && g_lobbyClosedAt && GetTickCount() - g_lobbyClosedAt < 20000) {   // after the lobby ended
         ImGui::GetForegroundDrawList()->AddText(ImVec2(14, 14), IM_COL32(255, 200, 80, 230), g_lobbyStatus);
     }
     if (g_waitingGuest > 0 && !g_menuOpen) {   // sync.inc: the host's story map is paused until a friend has loaded it
-        char t[160]; _snprintf_s(t, _TRUNCATE, u8"Ждём, пока друг загрузит уровень... / Waiting for your friend to load the level... (%ld s)", g_waitingGuest);
+        char t[160]; _snprintf_s(t, _TRUNCATE, Tr("Waiting for your friend to load the level... (%ld s)", u8"Ждём, пока друг загрузит уровень... (%ld с)"), g_waitingGuest);
         ImVec2 sz = ImGui::CalcTextSize(t);
         ImGui::GetForegroundDrawList()->AddText(ImVec2((io.DisplaySize.x - sz.x) / 2, io.DisplaySize.y * 0.45f), IM_COL32(255, 255, 255, 230), t);
     }

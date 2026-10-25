@@ -32,7 +32,8 @@ try {
   foreach ($c in $Copies) { Set-IniKey $c "playername" $names[$c]; if ($c -ne "A") { Set-IniKey $c "instance" $c } }
   Stop-Foc; Stop-Relay; Get-Process FoCRelay -ErrorAction SilentlyContinue | Stop-Process -Force
   foreach ($c in $Copies) { Clear-FocState $c; Remove-Item "E:\FoC-coop\$c\Binaries\foc_relay\relay.status", "E:\FoC-coop\$c\Binaries\foc_cmd.txt" -ErrorAction SilentlyContinue }
-  foreach ($c in $Copies) { [void](Start-Foc $c "" 1280 720); Start-Sleep 20 }   # 1280x720: 800x450 cut the F10 menu (Create lobby below the edge)
+  foreach ($c in $Copies) { $env:FOC_MOCK_NAME = $names[$c]; [void](Start-Foc $c "" 1280 720); Start-Sleep 20 }   # Steam (mock) names = player names; 1280x720: 800x450 cut the F10 menu
+  Remove-Item Env:FOC_MOCK_NAME -ErrorAction SilentlyContinue
   foreach ($c in $Copies) { $ok = $false; for ($i = 0; $i -lt 180 -and -not $ok; $i++) { Start-Sleep 1; $ok = Has $c "overlay initialised" }; if (-not $ok) { Say "RESULT: SKIP $c has no game window (B7)"; return } }
   Start-Sleep 12
   # host creates the lobby

@@ -49,7 +49,7 @@ static void LobbyCreate() { g_hosting = 0; CreateThread(nullptr, 0, LobbyCreateT
 static bool LobbyJoin(const char* id, const char* hash, const char* pw) {
     if (hash && hash[0] && strcmp(hash, "-") && strcmp(hash, "0")) {
         char h[24]; LobbyHash(pw ? pw : "", h, sizeof(h));
-        if (strcmp(h, hash)) { strcpy_s(g_lobbyStatus, "wrong password"); return false; }
+        if (strcmp(h, hash)) { strcpy_s(g_lobbyStatus, Tr("wrong password", u8"неверный пароль")); return false; }
     }
     strncpy_s(g_lobbyJoinId, id, _TRUNCATE);
     CreateThread(nullptr, 0, LobbyJoinThread, nullptr, 0, nullptr);
@@ -130,7 +130,7 @@ static void TickLobby(const TickObjs& t) {
     if (g_lobbyRole && !StoryRelayLive()) {
         bool hostLeft = strstr(g_relayState, "host left") != nullptr;
         Log("lobby: relay gone (role %d, state '%s')", g_lobbyRole, g_relayState);
-        strcpy_s(g_lobbyStatus, hostLeft ? u8"Хост закрыл лобби / the host closed the lobby" : u8"Лобби закрыто / lobby closed");
+        strcpy_s(g_lobbyStatus, hostLeft ? Tr("The host closed the lobby", u8"Хост закрыл лобби") : Tr("Lobby closed", u8"Лобби закрыто"));
         g_lobbyRole = 0; g_lobbyClosedAt = GetTickCount();
     }
     g_lobbyGuest = g_lobbyRole == 2;
@@ -169,7 +169,7 @@ static void TickLobby(const TickObjs& t) {
         char name[64]; strncpy_s(name, g_relayPersona[0] ? g_relayPersona : g_playerName, _TRUNCATE);
         for (char* c = name; *c; c++) if (*c == '?' || *c == '=' || *c == ' ' || *c == '"' || *c == ',' || *c == '#' || (unsigned char)*c < 0x20) *c = '_';
         char cmd[160]; _snprintf_s(cmd, _TRUNCATE, "open 127.0.0.1:%d?Name=%s", RelayLocalPort(), name);
-        strcpy_s(g_lobbyStatus, "the host started the mission: joining");
+        strcpy_s(g_lobbyStatus, Tr("the host started the mission: joining", u8"хост запустил миссию: входим"));
         Log("lobby: host started (%s) -> %s", g_relayGo, cmd);
         QueueCommand(cmd);
     }
@@ -178,20 +178,20 @@ static void TickLobby(const TickObjs& t) {
 // ---------------------------------------------------------------- F10 parts
 static void DrawLobbyHostPart() {
     ImGui::Spacing(); ImGui::Separator();
-    ImGui::TextUnformatted("LOBBY - friends join first, then you start the mission from the game's own menu");
+    ImGui::TextUnformatted(Tr("LOBBY - friends join first, then you start the mission from the game's own menu", u8"ЛОББИ - сначала заходят друзья, потом вы запускаете миссию из меню игры"));
     if (g_lobbyRole == 1) {
         ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s", g_lobbyStatus);
-        ImGui::Text("Steam: %s   players in lobby: %d", g_relayState, g_relayPeers + 1);
-        if (UiButton("Close lobby")) LobbyLeave();
+        ImGui::Text(Tr("Steam: %s   players in lobby: %d", u8"Steam: %s   игроков в лобби: %d"), StateText(g_relayState), g_relayPeers + 1);
+        if (UiButton(Tr("Close lobby", u8"Закрыть лобби"))) LobbyLeave();
         return;
     }
-    ImGui::RadioButton("Friends only", &g_lobbyType, 1); ImGui::SameLine();
-    ImGui::RadioButton("Public", &g_lobbyType, 0); ImGui::SameLine();
-    ImGui::RadioButton("Private (invite)", &g_lobbyType, 2);
-    ImGui::SetNextItemWidth(180); ImGui::InputText("Password (optional)", g_lobbyPw, sizeof(g_lobbyPw), ImGuiInputTextFlags_Password);
-    ImGui::SetNextItemWidth(180); ImGui::SliderInt("Players", &g_lobbyMax, 2, 5);
-    if (UiButton("Create lobby")) { LobbyCreate(); g_menuOpen = 0; }
-    ImGui::SameLine(); ImGui::TextDisabled("(no map loads; the game is not restarted)");
+    ImGui::RadioButton(Tr("Friends only", u8"Только друзья"), &g_lobbyType, 1); ImGui::SameLine();
+    ImGui::RadioButton(Tr("Public", u8"Открытое"), &g_lobbyType, 0); ImGui::SameLine();
+    ImGui::RadioButton(Tr("Private (invite)", u8"Закрытое (по приглашению)"), &g_lobbyType, 2);
+    ImGui::SetNextItemWidth(180); ImGui::InputText(Tr("Password (optional)", u8"Пароль (необязательно)"), g_lobbyPw, sizeof(g_lobbyPw), ImGuiInputTextFlags_Password);
+    ImGui::SetNextItemWidth(180); ImGui::SliderInt(Tr("Players", u8"Игроки"), &g_lobbyMax, 2, 5);
+    if (UiButton(Tr("Create lobby", u8"Создать лобби"))) { LobbyCreate(); g_menuOpen = 0; }
+    ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("(no map loads; the game is not restarted)", u8"(карта не загружается, игра не перезапускается)"));
 }
 
 // test commands (foc_cmd.txt): `lobby create [max]`, `lobby join <lobbyId>`, `lobby leave`, `lobby menustart <map>`
@@ -212,7 +212,7 @@ static void LobbyCommand(const char* args) {
 // Only for E:\FoC-coop\<letter>\ copies: A at the left, B to the right of it, C/D below; checked every 2 s.
 static void TickWindowSlot() {
     static int slot = -2; static DWORD last = 0;
-    if (slot == -1 || !g_gameWnd || GetTickCount() - last < 2000) return;
+    if (slot == -1 || !g_gameWnd || g_borderless || GetTickCount() - last < 2000) return;   // borderless: the window fills the monitor
     last = GetTickCount();
     if (slot == -2) {
         wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);

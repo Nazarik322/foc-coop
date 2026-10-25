@@ -62,6 +62,11 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
 - Verified: `tools/lighttest.ps1` PASS (guest 3-7 % black pixels, host 0.5-2.7 %), twin `-Twin` FAIL (guest 37-67 %);
   screenshots L01 (4 copies through f10visual, all lit), L03a, L08a (sessions/charvis: lfgrid, c3_grid, c8_grid).
   Leftover: a few small black rectangles in one L01 guest shot (not robots; not investigated).
+- Owner 2026-10-25 after the fix: "some parts are still black, different from the original, animations only half fixed".
+  Checked on L01 (lightdump command): the guest's mesh components, parents, light environments (owner = the actor,
+  same state words as on the host), material counts and the Tn* character helpers (ramp lights, material managers,
+  overriders, texture loaders) are now the same as on the host; the guest's robots still look flatter. Open - next:
+  per-material texture parameters (MIC) of the parts and the ramp light targets.
 - 2026-10-20: also in gameplay (L03a) and only on NPC robots; follows the guest role. Details in B25.
 - Owner 2026-10-20: switching off blur/post effects in the Advanced Configurator (F1) did NOT fix it (first report
   withdrawn).
@@ -659,3 +664,15 @@ crash - the crash run is in the friend's Binaries\foc_logs, not received yet), h
 - Gameplay after the opening cutscene in chapters 3a, 4a, 4b.
 - Movement in story chapters (chapter 6: both pawns exist, movement not tested).
 - Escalation waves and match end, Escalation on Gladiator, Iacon and Temple beyond "both in match".
+
+### B65. High Quality Audio Logs: audio logs ignore the volume sliders (always full volume) - FIXED 2026-10-25 (installer)
+- Owner 2026-10-25: with the mod installed the audio logs play at maximum volume whatever the sliders say.
+- Cause (unpacked both TransGame.xxx - UE3, zlib chunks - and diffed): the mod changes only one thing, the
+  CategoryName of the 76 audio log sound events, DX_AUDIO_LOG (the lo-fi audio log effect) -> None. Without a category
+  the volume sliders do not reach them. In memory the HmSoundEvent objects are the same; `soundinfo`/`namefind` test
+  commands added on the way (SoundCue has no SoundClass here: the game's own Hm audio).
+- Fix (installer/Mods.cs AudioLogFix): after copying the mod's TransGame.xxx the installer sets CategoryName to
+  DX_DRY_RADIO (the only other dialogue category in the package: dialogue volume, no reverb) and packs the file again
+  (same chunks, zlib). Verified: the C# result is byte-equal to the Python reference (tools in the job scratch), the game
+  loads L01 with it. Not verified by ear yet whether DX_DRY_RADIO adds a radio filter - owner to listen.
+
