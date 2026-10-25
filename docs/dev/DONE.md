@@ -4,6 +4,8 @@ What is implemented and verified, newest first. Every entry says how it was veri
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
 ## 2026-10-25: v1.0.0-beta - installer downloads mods, textures via TFC Installer, Russian F10 menu, borderless window
+- Released as GitHub pre-release v1.0.0-beta from main f520460 (owner: "push with a working version", "Beta 1.0.0");
+  installer SHA-256 9c740c982d7b29c64e3dfaf8d2d095299ba985579d5cdf2d412f5fdc6d20f26c (downloaded back, same).
 - Owner's requests: Russian translation ticked -> whole game + F10 menu Russian, else English (installer sets/clears
   `language` on every install; DLL `Tr()`); High Quality Audio Logs follow the volume sliders (B65); mod defaults as in
   the owner's game (configurator ini FPS 200, ReShade only AdaptiveSharpen); mods download from the owner's Google Drive
