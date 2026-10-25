@@ -3,7 +3,9 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
-## 2026-10-25 afternoon: B5 leftovers - socket parts lit, player pawns hidden in guests' scenes (not released yet)
+## 2026-10-25 afternoon: v1.0.1-beta - B5 leftovers: socket parts lit, player pawns hidden in guests' scenes
+- Released as GitHub pre-release v1.0.1-beta (owner: "make the release"); installer SHA-256
+  c9431a324ae8959fb22eac13c1b6fc45fe7b654113ac8c1319cfa932b9bcd743; silent install on copy D PASS.
 - lightfix also fixes meshes attached to sockets (Ratchet's wheels: light environment without owner on guests);
   cinehide hides player pawns on a guest while its player is in a scene (they were black stretched chests: the guest's
   matinee does not pose them). Found with new diagnostics (animstate, animseq, lecount, hideactor, micdump, ...).

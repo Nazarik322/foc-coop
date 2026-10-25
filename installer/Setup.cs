@@ -207,7 +207,7 @@ class Wizard : Form
 
     public Wizard(string mode, string path)
     {
-        Text = "Fall of Cybertron Co-op 1.0.0 beta " + T.S("Setup", "— установка");   // same as FOC_VERSION in dinput8.cpp
+        Text = "Fall of Cybertron Co-op 1.0.1 beta " + T.S("Setup", "— установка");   // same as FOC_VERSION in dinput8.cpp
         ClientSize = new Size(620, 400); FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9.5f);
         var banner = new Panel { BackColor = Color.FromArgb(28, 33, 46), Dock = DockStyle.Top, Height = 70 };
