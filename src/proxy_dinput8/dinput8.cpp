@@ -239,6 +239,7 @@ static bool g_langRu = false;
 static bool g_borderless = true;   // ini borderless: windowed game fills its monitor without a frame (overlay.inc TickBorderless)
 static const char* Tr(const char* en, const char* ru) { return g_langRu ? ru : en; }
 static bool g_lightFix = true;  // ini lightfix: part meshes use their master mesh's light environment (scene.inc, B5)
+static bool g_cineHide = true;  // ini cinehide: guests hide other players' pawns during scenes (scene.inc, B5)
 static bool g_partShow = true;  // ini partshow: show other players' body parts the game hid on this copy (scene.inc, B63)
 static bool g_sceneTp = true;   // ini scenetp: after a cutscene everybody is moved to the player who triggered it (scene.inc)
 static void SyncNoteOut(SOCKET s);
@@ -2010,6 +2011,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_cineSync = GetPrivateProfileIntW(L"foc_coop", L"cinesync", 1, ini2) != 0;
         g_sceneTp = GetPrivateProfileIntW(L"foc_coop", L"scenetp", 1, ini2) != 0;
         g_partShow = GetPrivateProfileIntW(L"foc_coop", L"partshow", 1, ini2) != 0;
+        g_cineHide = GetPrivateProfileIntW(L"foc_coop", L"cinehide", 1, ini2) != 0;
         g_lightFix = GetPrivateProfileIntW(L"foc_coop", L"lightfix", 1, ini2) != 0;
         g_borderless = GetPrivateProfileIntW(L"foc_coop", L"borderless", 1, ini2) != 0;
         { wchar_t lg[16] = L""; GetPrivateProfileStringW(L"foc_coop", L"language", L"", lg, 16, ini2); g_langRu = !_wcsnicmp(lg, L"rus", 3); }

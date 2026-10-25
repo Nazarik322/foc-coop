@@ -82,6 +82,21 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   - Next: compare part HiddenGame and bone transforms of the Bumblebee TnMeshSetActorMATs at the same matinee time
     (pause both on one frame), and find what switches their parts on the host (Kismet/matinee event, server only).
   New test commands: lightdump, lightsdump, classprops, hideowner, hidemesh, micdump, forcemips, propsat, reattach, lecount.
+- 2026-10-25 later - FIXED two causes (screenshots sessions/lf2/grid.png, ha1/grid.png):
+  - Ratchet's wheels and other parts attached to sockets (StaticMeshComponents, no ParentAnimComponent) pointed at a
+    light environment without an owner on the guest -> black wedge. lightfix now gives any scene-robot / pawn mesh
+    whose light environment is not owned by its actor the actor's master light environment ("socket part" log lines).
+  - The black stretched chest: player pawns in a scene on the guest - the host's pawn takes part in the intro on the
+    host (matinee-animated, lit), but on the guest neither its copy nor the guest's own pawn is posed by the guest's
+    matinee (and the copy's light environment drops out of the lights' lists). New cinehide (ini, default 1): while the
+    guest's local player is in cinematic mode, every player pawn's meshes are hidden; shown again after the scene;
+    partshow waits meanwhile. Side effect: the guest does not see the host's character in such scenes.
+  - Checked and the same on host and guest (not the cause): matinee groups / actors, scene robots' AnimNodeSequence
+    names and times (animseq), anim trees, MatineeActor.Position only stale on the guest (the SeqAct_Interp itself
+    plays in step, interp position within 0.06 s of the host).
+  - Still: guests' robots look slightly cooler than the host's in the intro; the host's Bumblebee is not shown in the
+    guest's intro (cinehide).
+  More test commands: animnodes, animstate (matinee + interp positions + groups), animseq, hideactor.
 - 2026-10-20: also in gameplay (L03a) and only on NPC robots; follows the guest role. Details in B25.
 - Owner 2026-10-20: switching off blur/post effects in the Advanced Configurator (F1) did NOT fix it (first report
   withdrawn).

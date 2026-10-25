@@ -3,6 +3,13 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-25 afternoon: B5 leftovers - socket parts lit, player pawns hidden in guests' scenes (not released yet)
+- lightfix also fixes meshes attached to sockets (Ratchet's wheels: light environment without owner on guests);
+  cinehide hides player pawns on a guest while its player is in a scene (they were black stretched chests: the guest's
+  matinee does not pose them). Found with new diagnostics (animstate, animseq, lecount, hideactor, micdump, ...).
+- Verified (mock): L01 intro screenshots host vs guest without black pieces (sessions/lf2); matrix L02a, L02b, L04c,
+  L06 PASS; Steam mock L03b PASS; lobbyfriend PASS; lobbycontinue PASS; lighttest PASS (fade frames now skipped).
+
 ## 2026-10-25: v1.0.0-beta - installer downloads mods, textures via TFC Installer, Russian F10 menu, borderless window
 - Released as GitHub pre-release v1.0.0-beta from main f520460 (owner: "push with a working version", "Beta 1.0.0");
   installer SHA-256 9c740c982d7b29c64e3dfaf8d2d095299ba985579d5cdf2d412f5fdc6d20f26c (downloaded back, same).

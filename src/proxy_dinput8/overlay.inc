@@ -1,4 +1,4 @@
-// In-game co-op menu: Direct3D9 overlay (Dear ImGui) + engine console command + LAN lobby beacon.
+﻿// In-game co-op menu: Direct3D9 overlay (Dear ImGui) + engine console command + LAN lobby beacon.
 // Included at the end of dinput8.cpp (shares Log / Rd / PatchIat).
 #include <d3d9.h>
 #include <ws2tcpip.h>
@@ -7,6 +7,7 @@
 #include <shellapi.h>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include "imgui.h"
 
 // ---------------------------------------------------------------- menu buttons for tests (2026-10-25, owner: "test it
@@ -58,6 +59,10 @@ static void PropsAtOffsetCommand(const char* args); // scene.inc
 static void ReattachCommand(const char* args);    // scene.inc
 static void LeCountCommand(const char* file);     // scene.inc
 static void HideMeshCommand(const char* args);    // scene.inc
+static void AnimNodesCommand(const char* args);   // scene.inc
+static void AnimStateCommand(const char* args);   // scene.inc
+static void AnimSeqCommand(const char* args);     // scene.inc
+static void HideActorCommand(const char* args);   // scene.inc
 static void SceneCommand(const TickObjs& t, const char* verb, const char* args);   // scene.inc
 static void LobbyCommand(const char* args);      // lobby.inc
 static void PcProbeCommand();                     // lobby.inc
@@ -423,6 +428,10 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("reattach ", 0) == 0) { ReattachCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("lecount ", 0) == 0) { LeCountCommand(cmd.c_str() + 8); return; }
     if (cmd.rfind("hidemesh ", 0) == 0) { HideMeshCommand(cmd.c_str() + 9); return; }
+    if (cmd.rfind("animnodes ", 0) == 0) { AnimNodesCommand(cmd.c_str() + 10); return; }
+    if (cmd.rfind("animstate ", 0) == 0) { AnimStateCommand(cmd.c_str() + 10); return; }
+    if (cmd.rfind("animseq ", 0) == 0) { AnimSeqCommand(cmd.c_str() + 8); return; }
+    if (cmd.rfind("hideactor ", 0) == 0) { HideActorCommand(cmd.c_str() + 10); return; }
     if (cmd == "lightfix") { LightFixCommand(); return; }
     if (cmd.rfind("meshinfo ", 0) == 0) { MeshInfoCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("propat ", 0) == 0) { PropAtCommand(cmd.c_str() + 7); return; }

@@ -27,7 +27,8 @@ try {
     foreach ($c in "A", "B") { Send-Cmd $c "shot $Out\s$k`_$c.bmp" }; Start-Sleep 4
     $ha = Black "$Out\s$k`_A.bmp"; $gb = Black "$Out\s$k`_B.bmp"
     Say "shot ${k}: black host $ha %, guest $gb %"
-    if ($gb -gt $ha + 8) { $fail += "shot $k guest $gb % black vs host $ha %" }
+    if ($ha -gt 40) { Say "  (host frame mostly black: a fade between scenes, pair skipped)" }
+    elseif ($gb -gt $ha + 8) { $fail += "shot $k guest $gb % black vs host $ha %" }
     foreach ($c in "A", "B") { $i = [Drawing.Image]::FromFile("$Out\s$k`_$c.bmp"); $s = New-Object Drawing.Bitmap 960, 540; $g = [Drawing.Graphics]::FromImage($s); $g.DrawImage($i, 0, 0, 960, 540); $s.Save("$Out\s$k`_$c.png"); $g.Dispose(); $s.Dispose(); $i.Dispose(); Remove-Item "$Out\s$k`_$c.bmp" }
     Start-Sleep 12
   }

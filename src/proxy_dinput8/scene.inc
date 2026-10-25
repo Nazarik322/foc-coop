@@ -390,9 +390,50 @@ static void PartShowCommand(const TickObjs& t) { int n = PartShowPass(t, true); 
 
 // B63 fix (2026-10-25): every 2 s on a story map, on host and guests, body parts of other players' pawns are shown
 // (PartShowPass). On a guest the host's copy had Chest, Head, Legs, CapL/R hidden - only the arms and the gun drew.
+// B5 leftovers (2026-10-25): in a scene the host's own pawn takes part (matinee-animated, lit - e.g. Bumblebee in the
+// chapter 1 intro), but its copy on a guest is not driven by the guest's matinee (that binds the guest's own player)
+// and its light environment drops out of the lights' lists: a dark, stretched robot (black chest polygons) in the
+// middle of the guest's scene; the guest's own pawn shows the same. While the local player is in a scene on a guest, all player pawns are hidden
+// (HiddenGame + reattach on every mesh), and shown again afterwards; partshow waits meanwhile. Ini cinehide (default 1).
+static bool g_cineHideOn = false;
+static void TickCineHide(const TickObjs& t) {
+    static DWORD next = 0; DWORD now = GetTickCount();
+    if ((LONG)(now - next) < 0 || !g_cineHide) return; next = now + 250;
+    static MirrorProp hid = {}, reat = {};
+    MirrorPropFind("PrimitiveComponent", "HiddenGame", hid); MirrorPropFind("ActorComponent", "bNeedsReattach", reat);
+    if (hid.off <= 0 || !hid.mask) return;
+    static BYTE* hidden[256]; static int nh = 0;
+    BYTE* lpc = nullptr; for (int i = 0; i < t.npc; i++) if (IsLocalPC(t.pc[i])) lpc = t.pc[i];
+    bool guest = t.ngame == 0;   // the host's own pawn is the real scene actor; only guests hide copies
+    bool cine = guest && lpc && StoryMapNow(t) && (*(unsigned*)(lpc + 0x360) & 0x20000);
+    if (cine) {
+        unsigned c1 = ClassIdByName("SkeletalMeshComponent"), c2 = ClassIdByName("StaticMeshComponent");
+        TArr* go = GObj(); int added = 0;
+        for (int i = 0; i < go->Num && nh < 256; i++) {
+            BYTE* o = (BYTE*)go->Data[i]; if (!o) continue; unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff; if (cid != c1 && cid != c2) continue;
+            BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;   // own pawn too: the guest's matinee does not pose it right either (black chest)
+            char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, "TnPlayerPawn")) continue;
+            unsigned* w = (unsigned*)(o + hid.off); if (*w & hid.mask) continue;
+            *w |= hid.mask; if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
+            hidden[nh++] = o; added++;
+        }
+        if (added) Log("cinehide: scene - %d mesh(es) of player pawns hidden on this guest", added);
+        g_cineHideOn = true;
+    } else if (g_cineHideOn) {
+        int shown = 0;
+        for (int i = 0; i < nh; i++) {
+            BYTE* o = hidden[i]; if (!IsObjFast(o)) continue;
+            *(unsigned*)(o + hid.off) &= ~hid.mask; if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask; shown++;
+        }
+        Log("cinehide: scene over - %d mesh(es) shown again", shown);
+        nh = 0; g_cineHideOn = false;
+    }
+}
+
 static void TickPartShow(const TickObjs& t) {
     static DWORD next = 0; DWORD now = GetTickCount();
     if ((LONG)(now - next) < 0 || !g_partShow) return; next = now + 2000;
+    if (g_cineHideOn) return;   // TickCineHide: other players hidden during a scene
     if (!StoryMapNow(t)) return;
     int n = PartShowPass(t, false);
     static volatile LONG logged = 0; if (n && InterlockedIncrement(&logged) <= 20) Log("partshow: %d hidden body part(s) of other players shown", n);
@@ -452,6 +493,29 @@ static int LightFixPass(bool verbose) {
         if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
         n++;
         if (verbose) { char on[64], ln[64], tn[64] = "-"; ObjLabel(o, on, sizeof(on)); ObjLabel(theirs, ln, sizeof(ln)); if (IsObjFast(mine)) ObjLabel(mine, tn, sizeof(tn)); Log("lightfix: %s light environment %s -> master's %s", on, tn, ln); }
+    }
+    // 2026-10-25: parts attached to sockets (static meshes like Ratchet's wheels) have no ParentAnimComponent; on a guest
+    // they pointed at a light environment without an owner (unlit -> black). Any mesh of a scene robot / pawn whose light
+    // environment is not owned by its actor gets the actor's master mesh light environment.
+    unsigned sid = ClassIdByName("StaticMeshComponent");
+    std::unordered_map<BYTE*, BYTE*> masterLE;   // actor -> light environment of its master skeletal mesh
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        if (IsObjFast(*(BYTE**)(o + par.off))) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); BYTE* le = *(BYTE**)(o + 0x100); if (!IsObjFast(ow) || !isLE(le) || *(BYTE**)(le + 0x3c) != ow) continue;
+        masterLE.emplace(ow, le);
+    }
+    for (int i = 0; i < go->Num && sid; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o) continue; unsigned c = *(unsigned*)(o + 0x14) & 0x1fff; if (c != sid && c != cid) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        auto it = masterLE.find(ow); if (it == masterLE.end()) continue;
+        BYTE* mine = *(BYTE**)(o + 0x100); if (mine == it->second || (mine && !isLE(mine))) continue;
+        if (isLE(mine) && *(BYTE**)(mine + 0x3c) == ow) continue;   // the actor's own (second) light environment: leave it
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, "MeshSetActor") && !strstr(oc, "Pawn")) continue;
+        *(BYTE**)(o + 0x100) = it->second;
+        if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
+        n++;
+        if (verbose) { char on[64], ln[64], tn[64] = "-"; ObjLabel(o, on, sizeof(on)); ObjLabel(it->second, ln, sizeof(ln)); if (IsObjFast(mine)) ObjLabel(mine, tn, sizeof(tn)); Log("lightfix: %s (socket part) light environment %s -> actor's %s", on, tn, ln); }
     }
     return n;
 }
@@ -749,4 +813,125 @@ static void HideMeshCommand(const char* args) {
         if (reat.off > 0) *(unsigned*)(o + reat.off) |= reat.mask; n++;
     }
     Log("hidemesh: %s %d -> %d", want, on, n);
+}
+// `animnodes <owner class substring> <file>` (B5 leftovers: a scene robot on the guest shows only a black stretched
+// chest = parts not animated): per master skeletal mesh (no ParentAnimComponent) the anim node list count (+0x224),
+// AnimTreeTemplate (+0x210) and the tree instance Animations (+0x214)
+static void AnimNodesCommand(const char* args) {
+    char want[64] = "", file[MAX_PATH] = ""; if (sscanf_s(args, "%63s %259s", want, (unsigned)sizeof(want), file, (unsigned)sizeof(file)) < 2) return;
+    static MirrorProp par = {}, skm = {}; MirrorPropFind("SkeletalMeshComponent", "ParentAnimComponent", par); MirrorPropFind("SkeletalMeshComponent", "SkeletalMesh", skm);
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    unsigned cid = ClassIdByName("SkeletalMeshComponent"); TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue;
+        if (par.off > 0 && IsObjFast(*(BYTE**)(o + par.off))) continue;
+        char on[64] = "", sn[96] = "-", tn[96] = "-", an[96] = "-"; ObjLabel(ow, on, sizeof(on));
+        BYTE* sk = skm.off > 0 ? *(BYTE**)(o + skm.off) : nullptr; if (IsObjFast(sk)) ObjLabel(sk, sn, sizeof(sn));
+        BYTE* tt = *(BYTE**)(o + 0x210); if (IsObjFast(tt)) ObjLabel(tt, tn, sizeof(tn));
+        BYTE* at = *(BYTE**)(o + 0x214); if (IsObjFast(at)) ObjLabel(at, an, sizeof(an));
+        TArr* nl = (TArr*)(o + 0x224); int nodes = Rd(nl, 12) ? nl->Num : -1;
+        fprintf(f, "%s|%s|nodes=%d|template=%s|tree=%s\n", on, sn, nodes, tn, an); n++;
+    }
+    fclose(f); Log("animnodes: %d master mesh(es) of '%s' -> %s", n, want, file);
+}
+// `animstate <owner class substring> <file>` (B5 leftovers / scene animations on guests): every AnimNodeSequence whose
+// SkelComponent belongs to a matching owner: animation name, current time, rate, playing; plus every MatineeActor's
+// position / playing. Host and guest dumps are diffed by owner + node.
+static void AnimStateCommand(const char* args) {
+    char want[64] = "", file[MAX_PATH] = ""; if (sscanf_s(args, "%63s %259s", want, (unsigned)sizeof(want), file, (unsigned)sizeof(file)) < 2) return;
+    static MirrorProp sk = {}, nm = {}, tm = {}, rt = {}, pl = {}, as = {}, mpos = {}, mplay = {}, mact = {};
+    MirrorPropFind("AnimNode", "SkelComponent", sk); MirrorPropFind("AnimNodeSequence", "AnimSeqName", nm);
+    MirrorPropFind("AnimNodeSequence", "CurrentTime", tm); MirrorPropFind("AnimNodeSequence", "Rate", rt);
+    MirrorPropFind("AnimNodeSequence", "bPlaying", pl); MirrorPropFind("AnimNodeSequence", "AnimSeq", as);
+    MirrorPropFind("MatineeActor", "Position", mpos); MirrorPropFind("MatineeActor", "bIsPlaying", mplay); MirrorPropFind("MatineeActor", "InterpAction", mact);
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    fprintf(f, "offsets SkelComponent +%x AnimSeqName +%x CurrentTime +%x Rate +%x bPlaying +%x/%x AnimSeq +%x | Matinee Position +%x bIsPlaying +%x/%x InterpAction +%x\n",
+            sk.off, nm.off, tm.off, rt.off, pl.off, pl.mask, as.off, mpos.off, mplay.off, mplay.mask, mact.off);
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char cn[64] = ""; ClassNameOf(o, cn, sizeof(cn));
+        if (!strcmp(cn, "MatineeActor")) {
+            char on[64] = "", an[64] = "-"; ObjLabel(o, on, sizeof(on)); BYTE* a = mact.off > 0 ? *(BYTE**)(o + mact.off) : nullptr; if (IsObjFast(a)) ObjLabel(a, an, sizeof(an));
+            static MirrorProp ipos = {}, iplay = {}, igi = {}, irate = {};
+            MirrorPropFind("SeqAct_Interp", "Position", ipos); MirrorPropFind("SeqAct_Interp", "bIsPlaying", iplay); MirrorPropFind("SeqAct_Interp", "GroupInst", igi); MirrorPropFind("SeqAct_Interp", "PlayRate", irate);
+            float ip = -1.f, ir = -1.f; int ipl = -1, ng = -1;
+            unsigned fb8 = 0, fbc = 0, fc0 = 0;
+            // the name lookup took MatineeActor's offsets; SeqAct_Interp (UE3 layout): flags, PlayRate +0xc4, Position +0xc8, GroupInst +0xd8
+            if (IsObjFast(a) && Rd(a, 0xe4)) { ir = *(float*)(a + 0xc4); ip = *(float*)(a + 0xc8); ng = ((TArr*)(a + 0xd8))->Num; fb8 = *(unsigned*)(a + 0xb8); fbc = *(unsigned*)(a + 0xbc); fc0 = *(unsigned*)(a + 0xc0); (void)ipl; }
+            int playingNow = (mplay.off > 0 && mplay.mask) ? ((*(unsigned*)(o + mplay.off) & mplay.mask) ? 1 : 0) : -1;
+            fprintf(f, "MATINEE %s action=%s pos=%.3f playing=%d | interp pos=%.3f rate=%.2f groups=%d flags b8=%08x bc=%08x c0=%08x\n", on, an, mpos.off > 0 ? *(float*)(o + mpos.off) : -1.f, playingNow, ip, ir, ng, fb8, fbc, fc0);
+            if (playingNow == 1 && ng > 0 && ng < 200 && Rd(((TArr*)(a + 0xd8))->Data, ng * 4)) {
+                static MirrorProp gg = {}, ga = {}, gn = {};
+                MirrorPropFind("InterpGroupInst", "Group", gg); MirrorPropFind("InterpGroupInst", "GroupActor", ga); MirrorPropFind("InterpGroup", "GroupName", gn);
+                for (int g = 0; g < ng; g++) {
+                    BYTE* gi = (BYTE*)((TArr*)(a + 0xd8))->Data[g]; if (!IsObjFast(gi)) continue;
+                    char gname[64] = "?", aname[64] = "-", gcls[48] = ""; ClassNameOf(gi, gcls, sizeof(gcls));
+                    BYTE* grp = gg.off > 0 ? *(BYTE**)(gi + gg.off) : nullptr; if (IsObjFast(grp) && gn.off > 0) NameAt((int)(*(unsigned*)(grp + gn.off) >> 14), gname, sizeof(gname));
+                    BYTE* act = ga.off > 0 ? *(BYTE**)(gi + ga.off) : nullptr; if (IsObjFast(act)) ObjLabel(act, aname, sizeof(aname));
+                    fprintf(f, "  GROUP %s %s actor=%s\n", gcls, gname, aname);
+                }
+            }
+            continue;
+        }
+        if (!strstr(cn, "AnimNodeSequence") || sk.off <= 0) continue;
+        BYTE* c = *(BYTE**)(o + sk.off); if (!IsObjFast(c)) continue;
+        BYTE* ow = *(BYTE**)(c + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue;
+        char on[64] = "", nn[64] = "", sn[96] = "-", seq[96] = "-"; ObjLabel(ow, on, sizeof(on)); ObjNameStr(o, nn, sizeof(nn));
+        if (nm.off > 0) NameAt((int)(*(unsigned*)(o + nm.off) >> 14), sn, sizeof(sn));
+        BYTE* s = as.off > 0 ? *(BYTE**)(o + as.off) : nullptr; if (IsObjFast(s)) ObjLabel(s, seq, sizeof(seq));
+        fprintf(f, "%s|%s|%s|seq=%s|obj=%s|t=%.3f|rate=%.2f|playing=%d\n", on, cn, nn, sn, seq, tm.off > 0 ? *(float*)(o + tm.off) : -1.f, rt.off > 0 ? *(float*)(o + rt.off) : -1.f,
+                (pl.off > 0 && pl.mask) ? ((*(unsigned*)(o + pl.off) & pl.mask) ? 1 : 0) : -1);
+        n++;
+    }
+    fclose(f); Log("animstate: %d node(s) of '%s' -> %s", n, want, file);
+}
+// `animseq <owner class substring> <file>`: AnimNodeSequence objects linked to master meshes of matching owners, the
+// link found by content (any word 0x20..0x100 pointing at such a mesh); animation name / time / rate / playing from
+// the AnimNodeSequence offsets found by name (logged), to diff host and guest per actor.
+static void AnimSeqCommand(const char* args) {
+    char want[64] = "", file[MAX_PATH] = ""; if (sscanf_s(args, "%63s %259s", want, (unsigned)sizeof(want), file, (unsigned)sizeof(file)) < 2) return;
+    static MirrorProp par = {}, nm = {}, tm = {}, rt = {}, pl = {}, as = {};
+    MirrorPropFind("SkeletalMeshComponent", "ParentAnimComponent", par); MirrorPropFind("AnimNodeSequence", "AnimSeqName", nm);
+    MirrorPropFind("AnimNodeSequence", "CurrentTime", tm); MirrorPropFind("AnimNodeSequence", "Rate", rt);
+    MirrorPropFind("AnimNodeSequence", "bPlaying", pl); MirrorPropFind("AnimNodeSequence", "AnimSeq", as);
+    std::unordered_set<BYTE*> masters; unsigned cid = ClassIdByName("SkeletalMeshComponent"); TArr* go = GObj();
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue;
+        if (par.off > 0 && IsObjFast(*(BYTE**)(o + par.off))) continue;
+        masters.insert(o);
+    }
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return; int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char cn[64] = ""; ClassNameOf(o, cn, sizeof(cn)); if (!strstr(cn, "AnimNodeSequence")) continue;
+        BYTE* mesh = nullptr; int moff = 0;
+        for (int w = 0x20; w <= 0x100 && !mesh; w += 4) { BYTE* q = *(BYTE**)(o + w); if (masters.count(q)) { mesh = q; moff = w; } }
+        if (!mesh) continue;
+        char on[64] = "", nn[64] = "", sn[96] = "-", seq[96] = "-"; ObjLabel(*(BYTE**)(mesh + 0x3c), on, sizeof(on)); ObjNameStr(o, nn, sizeof(nn));
+        if (nm.off > 0) NameAt((int)(*(unsigned*)(o + nm.off) >> 14), sn, sizeof(sn));
+        BYTE* s = as.off > 0 ? *(BYTE**)(o + as.off) : nullptr; if (IsObjFast(s)) ObjLabel(s, seq, sizeof(seq));
+        fprintf(f, "%s|%s|%s|link+%x|seq=%s|obj=%s|t=%.3f|rate=%.2f|playing=%d\n", on, cn, nn, moff, sn, seq, tm.off > 0 ? *(float*)(o + tm.off) : -1.f, rt.off > 0 ? *(float*)(o + rt.off) : -1.f,
+                (pl.off > 0 && pl.mask) ? ((*(unsigned*)(o + pl.off) & pl.mask) ? 1 : 0) : -1);
+        n++;
+    }
+    fclose(f); Log("animseq: %d node(s) for %d master mesh(es) of '%s' -> %s", n, (int)masters.size(), want, file);
+}
+// `hideactor <actor label> <1|0>`: HiddenGame (+ reattach) on every mesh of one actor (find which robot draws a
+// black piece)
+static void HideActorCommand(const char* args) {
+    char want[64] = ""; int on = 1; sscanf_s(args, "%63s %d", want, (unsigned)sizeof(want), &on);
+    static MirrorProp hid = {}, reat = {}; MirrorPropFind("PrimitiveComponent", "HiddenGame", hid); MirrorPropFind("ActorComponent", "bNeedsReattach", reat);
+    unsigned c1 = ClassIdByName("SkeletalMeshComponent"), c2 = ClassIdByName("StaticMeshComponent"); TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o) continue; unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff; if (cid != c1 && cid != c2) continue;
+        BYTE* ow = *(BYTE**)(o + 0x3c); if (!IsObjFast(ow)) continue; char on2[64] = ""; ObjLabel(ow, on2, sizeof(on2)); if (strcmp(on2, want)) continue;
+        unsigned* w = (unsigned*)(o + hid.off); if (on) *w |= hid.mask; else *w &= ~hid.mask; if (reat.off > 0) *(unsigned*)(o + reat.off) |= reat.mask; n++;
+    }
+    Log("hideactor: %s %d -> %d", want, on, n);
 }

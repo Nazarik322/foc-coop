@@ -138,6 +138,7 @@ static void TickTraceAll(const TickObjs& t) {
     if (g_ptrace) TickTrace(t);
     TickKismetLog(t);   // host: always (chapter title, scripted moments); logs only with ptrace
     TickScene(t);       // scene.inc: gather everybody at the activator after a cutscene
+    TickCineHide(t);    // scene.inc: other players' pawns hidden on guests during scenes (B5)
     TickPartShow(t);    // scene.inc: other players' hidden body parts (B63)
     TickLightFix(t);    // scene.inc: part meshes lit by their master's light environment (B5)
     TickScriptDown(t);
