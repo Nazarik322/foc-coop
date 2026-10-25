@@ -238,6 +238,7 @@ static bool g_cineSync = true;    // B14: the guest follows the host's cinematic
 static bool g_langRu = false;
 static bool g_borderless = true;   // ini borderless: windowed game fills its monitor without a frame (overlay.inc TickBorderless)
 static const char* Tr(const char* en, const char* ru) { return g_langRu ? ru : en; }
+static bool g_lightGuard = true;  // ini lightguard: VEH guard for the null-light draw crash (ghidra 0xd0cb1b, 1.0.2)
 static bool g_lightFix = true;  // ini lightfix: part meshes use their master mesh's light environment (scene.inc, B5)
 static bool g_cineHide = true;  // ini cinehide: guests hide other players' pawns during scenes (scene.inc, B5)
 static bool g_partShow = true;  // ini partshow: show other players' body parts the game hid on this copy (scene.inc, B63)
@@ -1666,7 +1667,7 @@ static void InstallHooks() {
 
 // ---------------------------------------------------------------- crash reporting
 static HMODULE g_self = nullptr;                 // this DLL
-static volatile LONG g_guardHits[7];             // VEH guards below, in order
+static volatile LONG g_guardHits[8];             // VEH guards below, in order
 static volatile LONG g_excExe = 0, g_excBenign = 0, g_excSelf = 0, g_dumps = 0;
 static volatile LONG g_crashTest = 0;            // set by the `crashtest` command: dump on our own test fault
 static const unsigned long kBenignFaultRva = 0x15432c;   // the game writes to null here once at startup and handles it
@@ -1867,6 +1868,17 @@ static LONG CALLBACK VehHandler(EXCEPTION_POINTERS* ep) {
         if (InterlockedIncrement(&g_guardHits[6]) <= 3) Log("guard: ServerUpdatePing with null PRI skipped");
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    // 1.0.2 (real 2-PC test on 1.0.1, guest crash in the render thread, ghidra 0xd0cb1b): FMeshLightingDrawingPolicy-
+    // Factory::DrawDynamicMesh (ghidra FUN_00d0c9c0) asks Light->GetDPGInfo (vtable +0xc) with Light == null while a
+    // skeletal mesh is drawn for a light. The fault is at "mov edx,[ecx]" right after "mov ecx,[esp+0xc]", with the same
+    // stack as the function's own "nothing drawn" exit at 0xd0cb47 (xor eax,eax; pop esi; ret): continue there, so this
+    // mesh element is not lit by the missing light for one frame instead of the game crashing.
+    if (g_lightGuard && code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord && ep->ContextRecord->Ecx == 0 &&
+        (BYTE*)ep->ExceptionRecord->ExceptionAddress == (BYTE*)GetModuleHandleW(nullptr) + 0x90cb1b) {
+        ep->ContextRecord->Eip = (DWORD)(UINT_PTR)((BYTE*)GetModuleHandleW(nullptr) + 0x90cb47);
+        if (InterlockedIncrement(&g_guardHits[7]) <= 3) Log("guard: lighting draw with a null light skipped (0xd0cb1b)");
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     // log only serious exceptions
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_STACK_OVERFLOW || code == EXCEPTION_INT_DIVIDE_BY_ZERO) {
         void* addr = ep->ExceptionRecord->ExceptionAddress;
@@ -2013,6 +2025,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_partShow = GetPrivateProfileIntW(L"foc_coop", L"partshow", 1, ini2) != 0;
         g_cineHide = GetPrivateProfileIntW(L"foc_coop", L"cinehide", 1, ini2) != 0;
         g_lightFix = GetPrivateProfileIntW(L"foc_coop", L"lightfix", 1, ini2) != 0;
+        g_lightGuard = GetPrivateProfileIntW(L"foc_coop", L"lightguard", 1, ini2) != 0;
         g_borderless = GetPrivateProfileIntW(L"foc_coop", L"borderless", 1, ini2) != 0;
         { wchar_t lg[16] = L""; GetPrivateProfileStringW(L"foc_coop", L"language", L"", lg, 16, ini2); g_langRu = !_wcsnicmp(lg, L"rus", 3); }
         g_autoRestart = GetPrivateProfileIntW(L"foc_coop", L"autorestart", 1, ini2) != 0;

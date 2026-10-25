@@ -3,6 +3,14 @@
 What is implemented and verified, newest first. Every entry says how it was verified.
 Open problems are in [BUGS.md](BUGS.md), and planned work is in [PLAN.md](PLAN.md).
 
+## 2026-10-25 late: B66 guest render-thread crash from the real 2-PC test of v1.0.1 (not released)
+- Cause found in the friend's log: lighting draw (ghidra FUN_00d0c9c0) with a null light at 0xd0cb1b.
+- VEH guard (`lightguard`, default 1) skips that draw; lightfix limited to same-actor parts, 10 s back-off, first pass
+  3 s after map load.
+- Verified (mock): `lightguardtest` PASS, twin with lightguard=0 raises c0000005; lighttest L01 guest robots lit
+  (shots 2-3 PASS, shot 1 timing only); must-pass 5/5 PASS (Ark, 2a, 2b, 4c, 6) and Steam mock L03b PASS.
+  Real 2-PC confirmation still open.
+
 ## 2026-10-25 afternoon: v1.0.1-beta - B5 leftovers: socket parts lit, player pawns hidden in guests' scenes
 - Released as GitHub pre-release v1.0.1-beta (owner: "make the release"); installer SHA-256
   c9431a324ae8959fb22eac13c1b6fc45fe7b654113ac8c1319cfa932b9bcd743; silent install on copy D PASS.

@@ -695,6 +695,27 @@ crash - the crash run is in the friend's Binaries\foc_logs, not received yet), h
 - Movement in story chapters (chapter 6: both pawns exist, movement not tested).
 - Escalation waves and match end, Escalation on Gladiator, Iacon and Temple beyond "both in match".
 
+### B66. Guest crash in the render thread on L01 (real 2-PC test of v1.0.1) - FIXED 2026-10-25 (guard, mock)
+- Owner and a friend played v1.0.1-beta (logs on the owner's desktop: host, client, client second launch). The friend
+  (guest) crashed at 804 s on L01 while walking/falling after car-form changes: render thread, ghidra 0xd0cb1b, ecx=0,
+  stack 0xbbf077 -> 0x7545e0 -> 0xb255fd (skeletal mesh section draw, FUN_00b252b0). The main thread then hit a null
+  call while the dump was written (foc_crash_2912_crash1.dmp stays on the friend's PC).
+- What 0xd0cb1b is (DecompAt FUN_00d0c9c0 = FMeshLightingDrawingPolicyFactory::DrawDynamicMesh): `Light->GetDPGInfo`
+  (vtable +0xc) with Light == null - a mesh element drawn for a light that is gone.
+- Suspected cause: lightfix (B5) writes PrimitiveComponent.LightEnvironment directly and reattaches; parts can end up
+  with light interactions that outlive the light. The second launch log ends ~1 s after the first lightfix pass on
+  map load (no exception logged there; the host had closed the connection, so unclear).
+- Tried: PrimitiveComponent.SetLightEnvironment (the engine's clean swap) - Function object not loaded in this build
+  (`namefind setlightenvironment` 0 objects; only the export in Engine.xxx), no execSetLightEnvironment string in the
+  exe. ReattachComponent: no Function object either.
+- Fix (1.0.2): VEH guard (dinput8.cpp, ini `lightguard`, default 1): fault at 0xd0cb1b with ecx == 0 continues at the
+  function's own "nothing drawn" exit 0xd0cb47 (same stack) - that element is not lit by the missing light for one
+  frame. lightfix made stricter (scene.inc): part, master and light environment must belong to the same actor; a
+  component the game sets back is given it again at most every 10 s (it was reattached every 2 s); first pass 3 s
+  after a map change. Test `lightguardtest` (TESTS.md).
+- Still open: confirm with the friend on a real 2-PC run that the crash is gone (log line "guard: lighting draw with a
+  null light skipped" shows when the guard caught one).
+
 ### B65. High Quality Audio Logs: audio logs ignore the volume sliders (always full volume) - FIXED 2026-10-25 (installer)
 - Owner 2026-10-25: with the mod installed the audio logs play at maximum volume whatever the sliders say.
 - Cause (unpacked both TransGame.xxx - UE3, zlib chunks - and diffed): the mod changes only one thing, the

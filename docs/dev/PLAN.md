@@ -3,6 +3,12 @@
 **Start of every session: read this file, then [BUGS.md](BUGS.md).** Update it when the plan changes.
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
+## Resume point 2026-10-25 late - real 2-PC test of v1.0.1: guest crash fixed (B66), 1.0.2 not released
+- Owner + friend played v1.0.1: the guest crashed in the render thread (B66, null light in the lighting draw). Fixed on
+  wip/escalation-menu (VEH guard + stricter lightfix), mock-tested; needs the owner's OK to release as 1.0.2-beta
+  and a real 2-PC rerun.
+- Next (owner's order): remaining texture issues (B5 rest below), then the ru-voice injector (branch ru-voice).
+
 ## Resume point 2026-10-25 evening - v1.0.1-beta released, owner switches to another task
 - Released: v1.0.0-beta (installer downloads mods from the owner's Google Drive, textures via TFC Installer, Russian
   F10 menu, borderless window, README for players) and v1.0.1-beta (B5 leftovers: socket parts lit, cinehide).

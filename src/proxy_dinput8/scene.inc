@@ -478,21 +478,40 @@ static void MeshInfoCommand(const char* want) {
 // black robots with only their emissive bits showing. Every 2 s on story maps (host and guests): a part whose
 // LightEnvironment (+0x100, checked to be a *LightEnvironmentComponent) differs from its master's gets the master's,
 // and is reattached (ActorComponent.bNeedsReattach) so the render proxy uses it. Ini lightfix (default 1).
+//
+// 1.0.2 (2026-10-25, real 2-PC test on 1.0.1: the guest crashed in the render thread drawing a skeletal mesh for a null
+// light, ghidra 0xd0cb1b - VEH guard in dinput8.cpp - and once ~1 s after the first pass on map load). The swap is now
+// limited to what cannot outlive each other: the part, its master and the light environment all belong to the same
+// actor (the engine's own master mesh lives with that light environment the same way). A component the game sets back
+// is given it again at most every 10 s (it was reattached every 2 s), and nothing is touched in the first 3 s after a
+// map change.
+// PrimitiveComponent.SetLightEnvironment would be the clean way but has no Function object in this build (tried).
+static std::unordered_map<BYTE*, DWORD> g_lightFixLast;   // component -> last time it was given a light environment (cleared per map)
 static int LightFixPass(bool verbose) {
     static MirrorProp par = {}, reat = {};
     MirrorPropFind("SkeletalMeshComponent", "ParentAnimComponent", par); MirrorPropFind("ActorComponent", "bNeedsReattach", reat);
     unsigned cid = ClassIdByName("SkeletalMeshComponent"); if (!cid || par.off <= 0) return 0;
     auto isLE = [](BYTE* q) { if (!IsObjFast(q)) return false; char qc[64] = ""; ClassNameOf(q, qc, sizeof(qc)); return strstr(qc, "LightEnvironmentComponent") != nullptr; };
+    DWORD now = GetTickCount();
+    auto give = [&](BYTE* o, BYTE* le) {
+        DWORD& last = g_lightFixLast[o];
+        if (last && now - last < 10000) return false;   // the game set it back right away: not again within 10 s
+        last = now;
+        *(BYTE**)(o + 0x100) = le;
+        if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
+        return true;
+    };
     TArr* go = GObj(); int n = 0;
     for (int i = 0; i < go->Num; i++) {
         BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != cid) continue;
         BYTE* pa = *(BYTE**)(o + par.off); if (!IsObjFast(pa) || pa == o) continue;
         BYTE* mine = *(BYTE**)(o + 0x100); BYTE* theirs = *(BYTE**)(pa + 0x100);
         if (mine == theirs || !isLE(theirs) || (mine && !isLE(mine))) continue;
-        *(BYTE**)(o + 0x100) = theirs;
-        if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
+        BYTE* ow = *(BYTE**)(o + 0x3c);
+        if (!IsObjFast(ow) || *(BYTE**)(pa + 0x3c) != ow || *(BYTE**)(theirs + 0x3c) != ow) continue;   // same actor only
+        if (!give(o, theirs)) continue;
         n++;
-        if (verbose) { char on[64], ln[64], tn[64] = "-"; ObjLabel(o, on, sizeof(on)); ObjLabel(theirs, ln, sizeof(ln)); if (IsObjFast(mine)) ObjLabel(mine, tn, sizeof(tn)); Log("lightfix: %s light environment %s -> master's %s", on, tn, ln); }
+        if (verbose) { char on[64], ln[64], tn[64] = "-", oc[64] = ""; ObjLabel(o, on, sizeof(on)); ObjLabel(theirs, ln, sizeof(ln)); if (IsObjFast(mine)) ObjLabel(mine, tn, sizeof(tn)); ClassNameOf(ow, oc, sizeof(oc)); Log("lightfix: %s (%s) light environment %s -> master's %s", on, oc, tn, ln); }
     }
     // 2026-10-25: parts attached to sockets (static meshes like Ratchet's wheels) have no ParentAnimComponent; on a guest
     // they pointed at a light environment without an owner (unlit -> black). Any mesh of a scene robot / pawn whose light
@@ -512,20 +531,33 @@ static int LightFixPass(bool verbose) {
         BYTE* mine = *(BYTE**)(o + 0x100); if (mine == it->second || (mine && !isLE(mine))) continue;
         if (isLE(mine) && *(BYTE**)(mine + 0x3c) == ow) continue;   // the actor's own (second) light environment: leave it
         char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, "MeshSetActor") && !strstr(oc, "Pawn")) continue;
-        *(BYTE**)(o + 0x100) = it->second;
-        if (reat.off > 0 && reat.mask) *(unsigned*)(o + reat.off) |= reat.mask;
+        if (!give(o, it->second)) continue;
         n++;
-        if (verbose) { char on[64], ln[64], tn[64] = "-"; ObjLabel(o, on, sizeof(on)); ObjLabel(it->second, ln, sizeof(ln)); if (IsObjFast(mine)) ObjLabel(mine, tn, sizeof(tn)); Log("lightfix: %s (socket part) light environment %s -> actor's %s", on, tn, ln); }
+        if (verbose) { char on[64], ln[64], tn[64] = "-"; ObjLabel(o, on, sizeof(on)); ObjLabel(it->second, ln, sizeof(ln)); if (IsObjFast(mine)) ObjLabel(mine, tn, sizeof(tn)); Log("lightfix: %s (socket part, %s) light environment %s -> actor's %s", on, oc, tn, ln); }
     }
     return n;
 }
 static void TickLightFix(const TickObjs& t) {
-    static DWORD next = 0; DWORD now = GetTickCount();
+    static DWORD next = 0, mapSince = 0; static char lastMap[96] = ""; DWORD now = GetTickCount();
     if ((LONG)(now - next) < 0 || !g_lightFix) return; next = now + 2000;
-    if (!StoryMapNow(t)) return;
+    if (!StoryMapNow(t)) { lastMap[0] = 0; return; }
+    char m[96]; MapName(t, m, sizeof(m)); if (strcmp(m, lastMap)) { strcpy_s(lastMap, m); mapSince = now; g_lightFixLast.clear(); }
+    if (now - mapSince < 3000) return;   // let the map, the pawns and their components settle first
     static volatile LONG logged = 0; bool verbose = logged < 3;
     int n = LightFixPass(verbose);
     if (n && InterlockedIncrement(&logged) <= 30) Log("lightfix: %d part mesh(es) given their master's light environment", n);
+}
+// `lightguardtest` (1.0.2 regression test for the VEH guard at ghidra 0xd0cb1b): calls the engine's lighting draw
+// (ghidra FUN_00d0c9c0, cdecl) with Light == null and a zeroed mesh element whose flags (+0xc0 = 0x2000) take the
+// "draw for this light" branch. With the guard it returns 0 and logs "guard: lighting draw ..."; with lightguard=0 the
+// fault reaches the __try here ("raised c0000005").
+static void LightGuardTestCommand() {
+    static BYTE elem[0x200]; memset(elem, 0, sizeof(elem)); *(unsigned*)(elem + 0xc0) = 0x2000;
+    typedef int(__cdecl* DrawFn)(void*, void*, void*, int, int, int, int);
+    DrawFn fn = (DrawFn)((BYTE*)GetModuleHandleW(nullptr) + (0xd0c9c0 - 0x400000));
+    int r = -1;
+    __try { r = fn(nullptr, nullptr, elem, 0, 0, 0, 0); Log("lightguardtest: returned %d (guard hits %ld)", r, g_guardHits[7]); }
+    __except (EXCEPTION_EXECUTE_HANDLER) { Log("lightguardtest: raised %08lx (no guard)", GetExceptionCode()); }
 }
 static void LightFixCommand() { int n = LightFixPass(true); Log("lightfix: %d part mesh(es) fixed (command)", n); }
 
