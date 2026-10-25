@@ -49,7 +49,7 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   (Demonware session code, TCP 3074). Blocking 3074 and spoofing foreground did not help.
 - Workaround: the menu relaunches the game with the URL on the command line (20–30 s).
 
-### B5. Guest visuals: dark silhouettes in cutscenes — FIXED 2026-10-25 (mock, `lightfix`)
+### B5. Guest visuals: dark silhouettes in cutscenes — FIXED 2026-10-25 (mock; `lightfix`, socket parts, `cinehide`; released v1.0.1-beta), small rest open
 - Cause (owner's lead "only characters in animations are dark"): scene robots (TnMeshSetActorMAT) and player pawns are
   a master SkeletalMeshComponent (RB_Iconic_SKEL) plus part meshes (RB_<Char>_CHARSKEL_<Part>, ParentAnimComponent =
   master). `meshinfo TnMeshSetActorMAT` (L01 intro): on the host every part uses the master's LightEnvironmentComponent

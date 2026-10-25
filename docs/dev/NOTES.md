@@ -247,3 +247,44 @@ targets: pc pawn rpc rpawn game pri rpri obj:Name_N. Any other text = engine con
   B. the guest runs its own single-player copy and only combat NPCs (health, death, position) are synced (owner idea):
      everything loads and plays locally, but Kismet progress, triggers and AI diverge and must be synced by hand.
   C. keep UE3 replication and add client-side runs of the cosmetic Kismet ops + the missing per-character setup.
+
+## Rendering / matinee internals found 2026-10-25 (B5, B63)
+- Character = master SkeletalMeshComponent (RB_Iconic_SKEL / RB_NpcAi_SKEL) + CHARSKEL part meshes
+  (ParentAnimComponent = master) + static parts on sockets (wheels, StaticMeshComponent). PrimitiveComponent
+  LightEnvironment pointer at +0x100; LightEnvironmentComponent is the plain class (no dynamic LE); its Owner +0x3c.
+- On guests some parts / socket parts pointed at a light environment of another actor or without an owner -> black.
+  lightfix gives them the master's (or the actor's) one.
+- LightComponent: CastShadows +0x100 mask 2, bEnabled +0x100 mask 1 (the name lookup's "largest offset" +0x310 is
+  wrong), Brightness +0xf4, LightColor +0xf8, AffectedLightEnvironments TArray at +0x104 (Num +0x108).
+- SeqAct_Interp: PlayRate +0xc4, Position +0xc8, GroupInst TArray +0xd8 (name lookup returned MatineeActor's offsets).
+  MatineeActor: InterpAction +0x1d0, bIsPlaying +0x1d4/1, Position +0x1dc - on clients MatineeActor.Position stays
+  stale, the SeqAct_Interp position is the real one (within 0.06 s of the host).
+- MaterialInstanceConstant parameter arrays: FName is 8 bytes in structs (packed index << 14, then 0); scalar element
+  28 bytes (value +8), vector 40 (colour +8), texture 28 (texture +8). Robots' MICs have no texture parameters.
+- SkeletalMesh.Materials found by content at +0x184; MeshComponent.Materials +0x1e4. AnimNode SkelComponent: not at
+  the looked-up +0x48 (found by content when needed).
+- Writing HiddenGame directly needs ActorComponent.bNeedsReattach set too, else the render proxy keeps the old state.
+- Rendering code (TickBorderless etc.) runs on the render thread: anything that sends window messages
+  (SetWindowPos/SetWindowLong) must run on the window thread (we post WM_APP+0x4F2 to GetMsgProc) or the game freezes.
+
+## Packages and installer notes (2026-10-25)
+- TransGame.xxx: UE3 package v846/181, fully chunk-compressed (zlib, 128 KB blocks); chunk table in the summary at an
+  unaligned offset; data starts at uncompressed offset 0x81. Name table entry: int length (without the 0), chars, 8
+  bytes flags. installer/Mods.cs AudioLogFix repacks it (tested byte-equal against a Python reference).
+- High Quality Audio Logs only changes CategoryName of 76 audio log events DX_AUDIO_LOG -> None.
+- Authentic High-Quality Textures = UPK Explorer texture pack for TFC Installer (WPF, .NET 6, no command line).
+  The installer runs it with a portable .NET 6 (Microsoft zips, dotnet.exe + shared/) from <game>\foc_tfc and clicks
+  it by UI Automation; the Windows folder picker is filled by Win32 (control 1152 WM_SETTEXT, WM_COMMAND IDOK, a second
+  IDOK with an empty name when it only navigated). Install ~6 min, 740 packages changed, backups in
+  <game>\TFCInstallerBackups; uninstall = its "Uninstall all" + confirm button "YES"; done when "Game folder" is enabled
+  and "Uninstall all" disabled. TFC Installer deletes empty folders in the game folder (recreate foc_backup).
+- Google Drive direct download: https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t.
+
+## More test commands (2026-10-25, scene.inc)
+`meshinfo <ownerclass|*>`, `lightdump <file>`, `lightsdump <file>`, `lecount <file>`, `micdump <owner> <file>`,
+`animnodes <owner> <file>`, `animstate <owner> <file>` (matinee + interp positions + groups), `animseq <owner> <file>`,
+`classprops <Class> <file>`, `propsat <offset>`, `hideowner <class> 1|0`, `hidemesh <mesh substr> 1|0`,
+`hideactor <label> 1|0`, `forcemips <owner> 1|0`, `reattach <class> <owner|*>` (careful: reattaching all light
+environments broke the dominant light), `soundinfo <file>`, `namefind <substr> <file>`, `lightfix`, `partshow`.
+Ini keys added: lightfix, partshow, cinehide, borderless, language (installer).
+

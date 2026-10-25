@@ -3,6 +3,21 @@
 **Start of every session: read this file, then [BUGS.md](BUGS.md).** Update it when the plan changes.
 Approved by the owner on 2026-10-19 (full text with reasoning: `%USERPROFILE%\.claude\plans\sequential-scribbling-cascade.md`).
 
+## Resume point 2026-10-25 evening - v1.0.1-beta released, owner switches to another task
+- Released: v1.0.0-beta (installer downloads mods from the owner's Google Drive, textures via TFC Installer, Russian
+  F10 menu, borderless window, README for players) and v1.0.1-beta (B5 leftovers: socket parts lit, cinehide).
+  main = f378856, work branch wip/escalation-menu = main.
+- Open, in order:
+  1. Real 2-PC test of v1.0.1-beta (story through the F10 lobby; friend's logs Binaries\foc_logs if anything breaks).
+  2. B5 rest: guests' robots a little cooler in tone than the host's in the L01 intro; the host's own character is
+     not shown in the guest's scenes (cinehide) - a proper fix would pose the host pawn copy from the host's matinee.
+  3. B65: owner to listen whether the audio logs with DX_DRY_RADIO sound clean (no radio filter) and follow the
+     dialogue volume; if not, try the other category or patch the category's effect.
+  4. Installer GUI path (pages with ticks, download bar) was not clicked through - only /silent was tested.
+  5. B52 name mix-up between guests (scene4 flaky), B53, B57-B61 (see BUGS), Escalation parked (B41-B47).
+- Test copies: E:\FoC-coop\A..D have borderless=0 (tools want small windows); copy C/D had installer tests
+  (D: nointro, configurator, audiologs, rus files; language key removed).
+
 ## Team plan (2026-10-20)
 Work runs in team mode, see [TEAM.md](TEAM.md): lead + 3 agents. Wave 1: re (B15/B14/B16/B17 recipes), infra (slot
 lease, worktree builds), title (B16). Wave 2: cine, tp, input. Wave 3: merge, must-pass, R1 sweep, release on OK.
