@@ -18,7 +18,7 @@ static const InKey kInKeys[] = {
     {"LSHIFT", 0x2A, VK_LSHIFT}, {"LCTRL", 0x1D, VK_LCONTROL}, {"LALT", 0x38, VK_LMENU},
     {"1", 0x02, '1'}, {"2", 0x03, '2'}, {"3", 0x04, '3'}, {"4", 0x05, '4'}, {"5", 0x06, '5'},
     {"UP", 0xC8, VK_UP}, {"DOWN", 0xD0, VK_DOWN}, {"LEFT", 0xCB, VK_LEFT}, {"RIGHT", 0xCD, VK_RIGHT},
-    {"F1", 0x3B, VK_F1}, {"F2", 0x3C, VK_F2}, {"F3", 0x3D, VK_F3}, {"F4", 0x3E, VK_F4},
+    {"F1", 0x3B, VK_F1}, {"F2", 0x3C, VK_F2}, {"F3", 0x3D, VK_F3}, {"F4", 0x3E, VK_F4}, {"F10", 0x44, VK_F10},
 };
 static bool InLookup(const char* s, BYTE* sc, BYTE* vk) {
     for (auto& k : kInKeys) if (!_stricmp(k.name, s)) { *sc = k.sc; *vk = k.vk; return true; }
@@ -66,6 +66,22 @@ static volatile LONG g_clickX = 0, g_clickY = 0; static volatile DWORD g_clickUn
 static BOOL WINAPI h_InGetCursorPos(LPPOINT p) {
     if (p && g_gameWnd && (LONG)(g_clickUntil - GetTickCount()) > 0) { POINT q = { g_clickX, g_clickY }; ClientToScreen(g_gameWnd, &q); *p = q; return TRUE; }
     return o_GetCursorPos(p);
+}
+static bool InjectedVk(int vk) { return vk >= 0 && vk < 256 && (LONG)(g_inVkUntil[vk] - GetTickCount()) > 0; }
+static bool UiCursorSpoof(POINT* client) {   // overlay.inc FeedInput: the F10 menu's cursor during a test click
+    if ((LONG)(g_clickUntil - GetTickCount()) <= 0) return false;
+    client->x = g_clickX; client->y = g_clickY; return true;
+}
+// `input uiclick <button label>` (2026-10-25): a mouse click on an F10 menu button found by its label (overlay.inc
+// UiNote rects): the menu's cursor moves there for 0.9 s, the left button goes down 0.3 s later for 0.15 s.
+static bool UiFind(const char* label, float* cx, float* cy);   // overlay.inc
+static DWORD WINAPI UiClickThread(LPVOID) { Sleep(300); g_inVkUntil[VK_LBUTTON] = GetTickCount() + 150; return 0; }
+static void UiClick(const char* label) {
+    float x = 0, y = 0;
+    if (!UiFind(label, &x, &y)) { Log("input: uiclick '%s' - no such button on screen", label); return; }
+    g_clickX = (LONG)x; g_clickY = (LONG)y; g_clickUntil = GetTickCount() + 900;
+    CreateThread(nullptr, 0, UiClickThread, nullptr, 0, nullptr);
+    Log("input: uiclick '%s' at %ld,%ld", label, g_clickX, g_clickY);
 }
 static void InputStart() {   // called at the end of OverlayStart (after the GetForegroundWindow import was patched there)
     o_GetAsyncKeyState = (PFN_GetKeyS)Resolve("user32.dll", "GetAsyncKeyState");
@@ -141,6 +157,7 @@ static void InputCommand(const char* args) {
     if (!strcmp(kind, "hold") && sscanf_s(args, "%*s %23s %d", name, (unsigned)sizeof(name), &a) == 2) InputHold(name, a);
     else if (!strcmp(kind, "tap") && sscanf_s(args, "%*s %23s", name, (unsigned)sizeof(name)) == 1) InputHold(name, 120);
     else if (!strcmp(kind, "mode") && sscanf_s(args, "%*s %d", &a) == 1) { g_inputMode = a; Log("input: mode now %d", a); }
+    else if (!strcmp(kind, "uiclick")) { const char* l = strchr(args, ' '); if (l) UiClick(l + 1); }
     else if (!strcmp(kind, "click") && sscanf_s(args, "%*s %d %d", &a, &b) == 2) InputClick(a, b);
     else if (!strcmp(kind, "clickmove") && sscanf_s(args, "%*s %d %d", &a, &b) == 2) InputClick(a, b, false);
     else if (!strcmp(kind, "clickscale") && sscanf_s(args, "%*s %d", &a) == 1) { g_clickScale = a; Log("input: click scale %d", a); }

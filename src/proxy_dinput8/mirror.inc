@@ -73,6 +73,24 @@ static bool MirrorPropFind(const char* owner, const char* name, MirrorProp& p) {
     return p.off > 0;
 }
 
+// `propat <hex offset> [hex mask]` (test command, 2026-10-25): every UProperty at this offset (BoolProperty: also with
+// this mask) with its class and the class/struct its header points at - to name a field seen in a `dump` diff.
+static void PropAtCommand(const char* args) {
+    unsigned want = 0, wmask = 0; if (sscanf_s(args, "%x %x", &want, &wmask) < 1) { Log("propat: usage propat <hex offset> [hex mask]"); return; }
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num && n < 60; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!o) continue;
+        char cn[80] = ""; ClassNameOf(o, cn, sizeof(cn)); if (!strstr(cn, "Property")) continue;
+        unsigned off = 0, mask = 0; __try { off = *(unsigned*)(o + 0x30) >> 20; mask = strcmp(cn, "BoolProperty") ? 0 : *(unsigned*)(o + 0x40); } __except (EXCEPTION_EXECUTE_HANDLER) { continue; }
+        if (off != want || (wmask && mask != wmask)) continue;
+        char nm[80] = ""; ObjNameStr(o, nm, sizeof(nm));
+        char outer[80] = "?";
+        for (int h = 0x10; h <= 0x3c; h += 4) { BYTE* q = nullptr; __try { q = *(BYTE**)(o + h); } __except (EXCEPTION_EXECUTE_HANDLER) { break; } if (IsObjFast(q)) { char qc[80] = ""; ClassNameOf(q, qc, sizeof(qc)); if (!strcmp(qc, "Class") || !strcmp(qc, "ScriptStruct") || !strcmp(qc, "State")) { ObjNameStr(q, outer, sizeof(outer)); break; } } }
+        Log("propat: +0x%x %s %s mask 0x%x outer %s", off, cn, nm, mask, outer); n++;
+    }
+    Log("propat: %d propert(ies) at +0x%x", n, want);
+}
+
 static void TickAllPlayers(const TickObjs& t) {
     static unsigned cid = 0; static DWORD cidRetry = 0; static int scanPos = 0, total = 0; static char lastMap[96] = "";
     DWORD now = GetTickCount();

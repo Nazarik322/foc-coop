@@ -1092,13 +1092,14 @@ static void TickCoopDeath(const TickObjs& t) {
 // death) is raised to 1e9, so neither the bleed-out drain nor enemy fire kills it; self-destruct (2.1e9 damage) still
 // does. downedsec > 0 sets the drain so that bleeding out takes that many seconds. Revive heals by -Health +
 // RevivalHealth, so a deep negative health does not matter. Applied to every player pawn on host and guest (HUD bar).
+static bool g_allDown = false;   // TickDowned: every player is down (scene.inc: no protection then, so they can bleed out)
 static void TickDowned(const TickObjs& t) {
     if (!StoryMapNow(t)) return;
     if (!g_coopDeath || t.npc < 1 || (t.ngame >= 1 && t.npc < 2)) return;
     const float big = 1.0e9f, rate = g_downedSec > 0 ? big / (float)g_downedSec : 0.0f;
     // host: everybody down (downed or dead) for 5 s -> nobody can revive; let them bleed out within a second so the game
     // shows its normal MISSION FAILED / restart-from-checkpoint menu
-    static DWORD allDownSince = 0; static bool allDown = false;
+    static DWORD allDownSince = 0; bool& allDown = g_allDown;
     if (t.ngame >= 1) {
         int up = 0, downed = 0;
         for (int a = 0; a < t.npc; a++) { if (PawnAlive(t.pc[a])) up++; else if (PawnDowned(PawnOf(t.pc[a]))) downed++; }

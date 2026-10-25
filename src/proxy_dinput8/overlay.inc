@@ -6,7 +6,28 @@
 #include <algorithm>
 #include <shellapi.h>
 #include <string>
+#include <unordered_set>
 #include "imgui.h"
+
+// ---------------------------------------------------------------- menu buttons for tests (2026-10-25, owner: "test it
+// like real people: one creates the lobby in F10, the others press Join") - every button of the F10 menu remembers where
+// it was drawn last frame (client pixels), so `input uiclick <label>` can click it like a mouse (input.inc).
+struct UiRect { char label[48]; float x0, y0, x1, y1; DWORD at; };
+static UiRect g_uiRects[48]; static int g_nUiRects = 0;
+static void UiNote(const char* label) {
+    char key[48]; strncpy_s(key, label, _TRUNCATE); char* h = strstr(key, "##"); if (h) *h = 0;
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax(); DWORD now = GetTickCount();
+    for (int i = 0; i < g_nUiRects; i++) if (!strcmp(g_uiRects[i].label, key)) { if (now - g_uiRects[i].at < 5) return; g_uiRects[i] = {}; strcpy_s(g_uiRects[i].label, key); g_uiRects[i].x0 = a.x; g_uiRects[i].y0 = a.y; g_uiRects[i].x1 = b.x; g_uiRects[i].y1 = b.y; g_uiRects[i].at = now; return; }
+    if (g_nUiRects < 48) { UiRect& r = g_uiRects[g_nUiRects++]; strcpy_s(r.label, key); r.x0 = a.x; r.y0 = a.y; r.x1 = b.x; r.y1 = b.y; r.at = now; }
+}
+static bool UiFind(const char* label, float* cx, float* cy) {
+    for (int i = 0; i < g_nUiRects; i++) if (!_stricmp(g_uiRects[i].label, label) && GetTickCount() - g_uiRects[i].at < 2000) { *cx = (g_uiRects[i].x0 + g_uiRects[i].x1) / 2; *cy = (g_uiRects[i].y0 + g_uiRects[i].y1) / 2; return true; }
+    return false;
+}
+static bool UiButton(const char* label, const ImVec2& size = ImVec2(0, 0)) { bool r = ImGui::Button(label, size); UiNote(label); return r; }
+static bool UiSmallButton(const char* label) { bool r = ImGui::SmallButton(label); UiNote(label); return r; }
+static bool InjectedVk(int vk);            // input.inc: a test key held by `input hold`
+static bool UiCursorSpoof(POINT* client);  // input.inc: the cursor of a test click
 #include "backends/imgui_impl_dx9.h"
 
 // ---------------------------------------------------------------- engine: run a console command
@@ -18,6 +39,9 @@ static void* g_outVtbl[32];
 static void* g_outDev[2] = {g_outVtbl, nullptr};
 static volatile LONG g_gfxDiagReq = 0;   // `gfxdiag` command -> trace.inc GfxDiagWrite on the next tick
 static void KImpulseCommand(const char* args);   // kmirror.inc
+static void PropAtCommand(const char* args);     // mirror.inc
+static void PawnVisCommand(const TickObjs& t);  // scene.inc
+static void AnimFixCommand(const TickObjs& t);  // scene.inc
 static void SceneCommand(const TickObjs& t, const char* verb, const char* args);   // scene.inc
 static void LobbyCommand(const char* args);      // lobby.inc
 static void PcProbeCommand();                     // lobby.inc
@@ -367,6 +391,9 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd.rfind("tpg", 0) == 0) { TpGuestCommand(cmd.size() > 4 ? cmd.c_str() + 4 : ""); return; }
     if (cmd.rfind("tph ", 0) == 0) { TpHostCommand(cmd.c_str() + 4); return; }
     if (cmd.rfind("hdrprobe ", 0) == 0) { HdrProbeCommand(cmd.c_str() + 9); return; }
+    if (cmd == "pawnvis") { PawnVisCommand(g_to); return; }
+    if (cmd == "animfix") { AnimFixCommand(g_to); return; }
+    if (cmd.rfind("propat ", 0) == 0) { PropAtCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("kimpulse ", 0) == 0) { KImpulseCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("sceneact ", 0) == 0) { SceneCommand(g_to, "sceneact", cmd.c_str() + 9); return; }
     if (cmd.rfind("scenemove ", 0) == 0) { SceneCommand(g_to, "scenemove", cmd.c_str() + 10); return; }
@@ -661,10 +688,11 @@ static void RelayDir(wchar_t* out) { GetModuleFileNameW(nullptr, out, MAX_PATH);
 static HANDLE g_storyRelayProc = nullptr;
 static bool StoryRelayLive() { return g_storyRelayProc && WaitForSingleObject(g_storyRelayProc, 0) == WAIT_TIMEOUT; }
 static void SnStopSvc(const char* why);   // steamnet.inc
+static void ListRelayWaitGone();         // below: the lobby browser relay must be gone first
 static bool StartRelay(const char* args) {
     wchar_t dir[MAX_PATH]; RelayDir(dir);
     bool story = !strncmp(args, "host", 4) || !strncmp(args, "join", 4);
-    if (story) SnStopSvc("a story relay starts");
+    if (story) { SnStopSvc("a story relay starts"); ListRelayWaitGone(); }
     wchar_t st[MAX_PATH]; _snwprintf_s(st, _TRUNCATE, L"%s\\relay.status", dir); DeleteFileW(st);
     _snwprintf_s(st, _TRUNCATE, L"%s\\relay.cmd", dir); DeleteFileW(st);   // a leftover "quit" stopped the next relay at once
     wchar_t wa[128]; MultiByteToWideChar(CP_ACP, 0, args, -1, wa, 128);
@@ -755,7 +783,19 @@ static void JoinViaSteam() { CreateThread(nullptr, 0, JoinSteamThread, nullptr, 
 struct SteamLobby { char id[24]; char name[64]; char mode[24]; char map[96]; int members, maxp; bool isFriend; char pwHash[24]; bool inGame; };
 static std::vector<SteamLobby> g_steamLobbies;
 static DWORD g_listStarted = 0, g_listRead = 0;
+static HANDLE g_listProc = nullptr;   // the lobby browser relay (FoCRelay list)
 static void ListRelayStop() { wchar_t dir[MAX_PATH]; RelayDir(dir); wchar_t p[MAX_PATH]; _snwprintf_s(p, _TRUNCATE, L"%s\\list.cmd", dir); FILE* f = nullptr; _wfopen_s(&f, p, L"w"); if (f) { fputs("quit", f); fclose(f); } g_listStarted = 0; }
+// 2026-10-25 (visual 2-copy test): the Join page's browser relay was still running when the join relay started - one
+// more process of the same Steam user - and the host's messages never reached the join relay ("host silent for 20 s").
+// Before a host/join relay starts the browser is stopped and waited for (quit, killed after 4 s).
+static void ListRelayWaitGone() {
+    HANDLE h = (HANDLE)InterlockedExchangePointer((void**)&g_listProc, nullptr); if (!h) return;
+    ListRelayStop();
+    bool quit = WaitForSingleObject(h, 4000) == WAIT_OBJECT_0;
+    if (!quit) TerminateProcess(h, 0);
+    CloseHandle(h);
+    Log("relay: lobby search relay %s before the lobby relay", quit ? "quit" : "killed");
+}
 static const char* MapTitle(const char* map) {
     for (auto& m : kChapters) if (!_stricmp(m.map, map)) return m.title;
     for (auto& m : kEscalation) if (!_stricmp(m.map, map)) return m.title;
@@ -769,7 +809,7 @@ static void ListRelayTick() {   // called while the Join page is open
         {
             wchar_t cmd[MAX_PATH + 40]; _snwprintf_s(cmd, _TRUNCATE, L"\"%s\\FoCRelay.exe\" list", dir);
             STARTUPINFOW si = {sizeof(si)}; PROCESS_INFORMATION pi = {};
-            if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, dir, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); Log("relay: lobby search started"); }
+            if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, dir, &si, &pi)) { CloseHandle(pi.hThread); HANDLE old = (HANDLE)InterlockedExchangePointer((void**)&g_listProc, pi.hProcess); if (old) CloseHandle(old); Log("relay: lobby search started"); }
         }
         g_listStarted = now;
     }
@@ -822,16 +862,24 @@ static void JoinServer(const char* ip, int port) {
 
 // ---------------------------------------------------------------- input helpers
 static bool KeyDown(int vk) {
+    if (InjectedVk(vk)) return true;   // test input (input hold / uiclick), no focus needed
     if (!g_gameWnd || GetForegroundWindow() != g_gameWnd) return false;   // only react while this game window is focused
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
+// The game renders into a back buffer of its own resolution (ResX/ResY) that Windows stretches onto the window; the menu
+// used the window's client size, so with a window larger than the back buffer (2026-10-25: 1920x1071 window, 800x450
+// buffer) everything below the buffer's height was cut off - "Create lobby" could not be seen or clicked. The menu now
+// lays out in back-buffer pixels and the mouse is scaled from window to buffer.
+static UINT g_bbW = 0, g_bbH = 0;   // RenderOverlay: the game's back buffer
 static void FeedInput(ImGuiIO& io) {
     RECT rc = {}; POINT pt = {};
     if (g_gameWnd && GetClientRect(g_gameWnd, &rc)) {
-        io.DisplaySize = ImVec2((float)(rc.right - rc.left), (float)(rc.bottom - rc.top));
-        GetCursorPos(&pt); ScreenToClient(g_gameWnd, &pt);
-        io.AddMousePosEvent((float)pt.x, (float)pt.y);
+        float cw = (float)(rc.right - rc.left), ch = (float)(rc.bottom - rc.top);
+        float dw = g_bbW ? (float)g_bbW : cw, dh = g_bbH ? (float)g_bbH : ch;
+        io.DisplaySize = ImVec2(dw, dh);
+        if (UiCursorSpoof(&pt)) io.AddMousePosEvent((float)pt.x, (float)pt.y);   // test click: already in menu pixels
+        else { GetCursorPos(&pt); ScreenToClient(g_gameWnd, &pt); io.AddMousePosEvent(cw > 0 ? pt.x * dw / cw : (float)pt.x, ch > 0 ? pt.y * dh / ch : (float)pt.y); }
     }
     io.AddMouseButtonEvent(0, KeyDown(VK_LBUTTON));
     io.AddMouseButtonEvent(1, KeyDown(VK_RBUTTON));
@@ -866,6 +914,11 @@ static void Tooltip(const char* t) { if (ImGui::IsItemHovered()) ImGui::SetToolt
 static void DrawHostPage() {
     ImGui::TextUnformatted("HOST A GAME");
     ImGui::Separator();
+    // 2026-10-25: the lobby (friends join, then the mission starts from the game's menu) is the main way now - first,
+    // so "Create lobby" is visible without scrolling even in a small window; the direct chapter start follows
+    DrawLobbyHostPart();
+    ImGui::Spacing(); ImGui::Separator();
+    ImGui::TextDisabled("Or start a chapter directly (friends join the running game):");
     if (ImGui::RadioButton("Story (co-op campaign)", g_hostMode == 0)) g_hostMode = 0;
     ImGui::SameLine();
     if (ImGui::RadioButton("Escalation", g_hostMode == 1)) g_hostMode = 1;
@@ -885,11 +938,10 @@ static void DrawHostPage() {
     ImGui::TextDisabled("%s", g_hostMode == 0 ? "Story co-op: chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9 tested." : "Escalation: wave survival, up to 5 players.");
     ImGui::TextWrapped("Your game appears in your friends' Join list through Steam (no IP addresses, no port forwarding). Steam must be running.");
     ImGui::Spacing();
-    if (ImGui::Button("Start hosting", ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
+    if (UiButton("Start hosting", ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
     ImGui::SameLine(); ImGui::TextDisabled("(loads the chapter now)");
     ImGui::SameLine();
-    if (ImGui::Button("Back")) g_page = 0;
-    DrawLobbyHostPart();
+    if (UiButton("Back")) g_page = 0;
 }
 
 static void DrawJoinPage() {
@@ -916,7 +968,7 @@ static void DrawJoinPage() {
             // 2026-10-24 real test: the host pressed Join while hosting, which closed its own lobby (Steam gave it to the
             // friend) - no joining while we host one
             ImGui::BeginDisabled(g_lobbyRole == 1);
-            if (ImGui::SmallButton(b)) { strncpy_s(g_joinLobby, l.id, _TRUNCATE); if (LobbyJoin(l.id, l.pwHash, g_joinPw)) g_menuOpen = 0; }
+            if (UiSmallButton(b)) { strncpy_s(g_joinLobby, l.id, _TRUNCATE); if (LobbyJoin(l.id, l.pwHash, g_joinPw)) g_menuOpen = 0; }
             ImGui::EndDisabled();
         }
         if (g_steamLobbies.empty()) { ImGui::TableNextRow(); ImGui::TableNextColumn(); ImGui::TextDisabled(g_listStarted && GetTickCount() - g_listStarted > 8000 ? "no games found yet - ask your friend to host" : "searching..."); }
@@ -927,10 +979,10 @@ static void DrawJoinPage() {
     ImGui::SetNextItemWidth(180); ImGui::InputText("Lobby password", g_joinPw, sizeof(g_joinPw), ImGuiInputTextFlags_Password);
     if (g_relayState[0] && !strcmp(g_relayRole, "join")) ImGui::TextDisabled("Steam: %s", g_relayState);
     if (g_lobbyStatus[0]) ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s", g_lobbyStatus);
-    if (g_lobbyRole == 2 && ImGui::Button("Leave lobby")) LobbyLeave();
+    if (g_lobbyRole == 2 && UiButton("Leave lobby")) LobbyLeave();
     ImGui::TextDisabled("You wait in the main menu; when the host starts the mission you join it (no restart).");
     ImGui::Spacing();
-    if (ImGui::Button("Back")) { ListRelayStop(); g_page = 0; }
+    if (UiButton("Back")) { ListRelayStop(); g_page = 0; }
 }
 
 static void DrawMainPage() {
@@ -938,9 +990,9 @@ static void DrawMainPage() {
     ImGui::Separator();
     ImGui::Spacing();
     ImVec2 bs(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeight() * 2.4f);
-    if (ImGui::Button("Host a game", bs)) g_page = 1;
+    if (UiButton("Host a game", bs)) g_page = 1;
     Tooltip("Pick story chapter or Escalation map and let friends join you");
-    if (ImGui::Button("Join a game", bs)) g_page = 2;
+    if (UiButton("Join a game", bs)) g_page = 2;
     Tooltip("Choose a lobby from the list or type an IP address");
     if (g_hosting) {
         ImGui::Spacing();
@@ -953,10 +1005,10 @@ static void DrawMainPage() {
         // no window), so it only showed the overlay; friends find the game in their Join list instead
         if (!strcmp(g_relayRole, "host")) ImGui::TextDisabled("Friends see your game in F10 > Join a game.");
     }
-    if (ImGui::Button(InProcessTravel() ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; g_hostUrl[0] = 0; if (InProcessTravel()) { QueueCommand("disconnect"); CreateThread(nullptr, 0, LobbyRelayQuitLater, nullptr, 0, nullptr); g_lobbyRole = 0; } else RelaunchWithUrl(""); }
-    if (ImGui::Button("Settings", bs)) g_page = 4;
+    if (UiButton(InProcessTravel() ? "Disconnect / stop" : "Leave to main menu (restarts the game)", bs)) { g_hosting = 0; g_menuOpen = 0; g_hostUrl[0] = 0; if (InProcessTravel()) { QueueCommand("disconnect"); CreateThread(nullptr, 0, LobbyRelayQuitLater, nullptr, 0, nullptr); g_lobbyRole = 0; } else RelaunchWithUrl(""); }
+    if (UiButton("Settings", bs)) g_page = 4;
     Tooltip("Co-op options; most apply at once, also during a game");
-    if (ImGui::Button("About / status", bs)) g_page = 3;
+    if (UiButton("About / status", bs)) g_page = 3;
     ImGui::Spacing();
     ImGui::SetNextItemWidth(200); ImGui::InputText("Your name", g_playerName, sizeof(g_playerName));
 }
@@ -994,7 +1046,7 @@ static void DrawSettingsPage() {
     ImGui::Spacing();
     if (changed) SaveSettings();
     ImGui::TextDisabled("Saved to foc_coop.ini next to TFOC.exe.");
-    if (ImGui::Button("Back")) g_page = 0;
+    if (UiButton("Back")) g_page = 0;
 }
 
 static void DrawAboutPage() {
@@ -1007,7 +1059,7 @@ static void DrawAboutPage() {
     ImGui::Text("Instance: %s", g_suffix[0] ? g_suffix : "(default)");
     ImGui::Checkbox("Fast travel without restart (experimental, usually fails)", &g_fastTravel);
     ImGui::Spacing();
-    if (ImGui::Button("Back")) g_page = 0;
+    if (UiButton("Back")) g_page = 0;
 }
 
 static void DrawMenu(ImGuiIO& io) {
@@ -1015,6 +1067,7 @@ static void DrawMenu(ImGuiIO& io) {
     io.FontGlobalScale = s;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, io.DisplaySize.y * 0.96f));   // taller than the screen -> scroll
     ImGui::SetNextWindowBgAlpha(0.92f);
     ImGui::Begin("foc-coop", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
     switch (g_page) { case 1: DrawHostPage(); break; case 2: DrawJoinPage(); break; case 3: DrawAboutPage(); break; case 4: DrawSettingsPage(); break; default: DrawMainPage(); }
@@ -1078,6 +1131,7 @@ static void RenderOverlay(IDirect3DDevice9* dev) {
     if (f10 && !f10prev) { g_menuOpen = !g_menuOpen; if (g_menuOpen) { g_page = 0; ClipCursor(nullptr); } }
     f10prev = f10;
     if (g_menuOpen && KeyDown(VK_ESCAPE)) { g_menuOpen = 0; }
+    { static DWORD bbAt = 0; if (GetTickCount() - bbAt > 1000) { bbAt = GetTickCount(); IDirect3DSurface9* bb = nullptr; if (SUCCEEDED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) { D3DSURFACE_DESC d = {}; if (SUCCEEDED(bb->GetDesc(&d))) { g_bbW = d.Width; g_bbH = d.Height; } bb->Release(); } } }
     FeedInput(io);
     ImGui_ImplDX9_NewFrame();
     ImGui::NewFrame();

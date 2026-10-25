@@ -499,9 +499,105 @@ Status values: **open** (not worked on yet), **investigating**, **blocked** (nee
   apply when the ini has no tcpdriver key.
 
 ### B52. 4 players: a guest briefly carries another guest's name on the host - open (flaky)
+- 2026-10-25 run `fix25b_4`: B and C swap names every 5 s (B's log "names: 'Ironhide' -> SetName Bumblebee", C's
+  "names: 'Bumblebee' -> SetName Ironhide") - one guest's rename lands on the other's PRI. Frequent with 4 copies.
 - 2026-10-25 release run `rel_4`: copy D (Ratchet) showed as "Ironhide" (C's name) on the host; D's log: "names:
   'Ironhide' -> SetName Ratchet (ok)", so D got C's name and renamed itself back. scene4 found no Ratchet and failed;
   the rerun `rel_4b` PASS. Check the name path (B32 code, TickNames / ServerChangeName) with 4 copies.
+
+### Real test 2026-10-25 (v0.9.0-dev, owner hosts + friend, chapters 1-2) - list and state
+Logs: sessions/real_20261025/host.log (host session from 00:37), friend_restart.log (only the friend's restart after his
+crash - the crash run is in the friend's Binaries\foc_logs, not received yet), host_relay.log.
+
+### B53. A guest triggers a scripted moment ("Shift" walk in chapter 1) and the host is left behind a door - mitigated
+- Owner: "the friend triggered the Shift moment, everything broke and we stayed behind the door"; he asks that only the
+  host can activate triggers. The level script runs the moment for its Instigator (the guest).
+- Done: a scripted moment now also means a controller in InputDisabled or AnimControl (TnSeqEvent_WalkToLocation runs
+  without cinematic mode); after it everybody is moved to its activator (scene.inc), so the host is brought to the guest.
+- Open: host-only triggers. Needs USequenceEvent::CheckActivate (or the Touch path) to refuse guest instigators; it has
+  no Function object (`fnprobe CheckActivate`: 0) and no exec name strings in TFOC.exe (ghidra NativeTable / StrRefs
+  empty), so the native must be found another way (callers of TriggerEventClass, SeqEvent_Touch vtable).
+
+### B54. Abilities (transform, shoot, weapon) only for the host - FIXED 2026-10-25 (mock)
+- Owner: the friend could transform at the start before the host was allowed; after the weapon pickup in chapter 2 the
+  host could shoot and transform, the friend could not.
+- Cause: TnSeqAct_TogglePlayerActions.Activated uses only Targets[0] (the host's pawn, hostfirst). Its flags are
+  replicated TnPawn bools (_TransformingEnabled, _JumpingEnabled, _MeleeEnabled, _ShootingEnabled, _Ability0/1Enabled,
+  _WeaponEquipEnabled, _HandednessEnabled). Fix (scene.inc TickAbilities, host): every change of the host pawn's flags
+  is copied to each guest pawn (a new guest pawn gets all of them), bForceNetUpdate set. Not while the host is downed.
+- Verified: L01 "6 flag(s) copied from the host (TransformingEnabled=0 ...)", L02a "2 flag(s) copied (new guest pawn)".
+  Not verified on the guest's screen (transform/shoot allowed at the same moments as the host): real test.
+- Found on the way: MirrorPropFind("Actor","bNetDirty") gives +0x30 (inside the UObject header - another class' field):
+  not used.
+
+### B55. Walk through the fire (chapter 2): the guest burns and dies, the checkpoint restarts - FIXED 2026-10-25 (mock)
+- Host log 806-815 s: TnSeqEvent_WalkToLocation by the host (InputDisabled, no damage), the guest walked through the
+  fire by itself (hp 200 -> 118 -> downed -> -344 -> dead); the game went InProgressOver and restarted the checkpoint
+  5 s later (also at 852 s and 883 s). coopdeath never saw it (no "game over requested": another path than 0x7eb060).
+- Fix (scene.inc TickProtect, host): Controller._bGodMode (+0x1e0 mask 2; GameInfo.ReduceDamage zeroes damage when
+  InGodMode, TnPlayerPawn.TakeDamageHealthBelowZero returns) for every other player while one player is in a scripted
+  moment. Verified: "invulnerable (another player's scripted moment)" during the host's intro, "vulnerable again" after.
+
+### B56. A downed player who is not revived quickly ends the game - FIXED 2026-10-25 (mock)
+- Owner: the game must end only when everybody is down; otherwise a downed player lies without a time limit.
+- The bleed-out was already off (DownedHealth 1e9), but environment damage (TnDamageTypeEnvironmentNoDowned), instant
+  kills and the "Health < -DownedHealth" check still killed a downed pawn, and each death restarted the checkpoint.
+- Fix: TickProtect also sets _bGodMode on every downed player while somebody is still up (g_allDown from TickDowned:
+  when everybody is down the protection goes and the existing bleed-out -> MISSION FAILED path runs). Verified on L02a:
+  TestDowned -> "invulnerable (downed, waiting for a revive)", 30 s down, TestRevive -> "vulnerable again".
+- Not checked: KillZ (falling out of the world) still kills (rescue moves players back first).
+
+### B57. Picking up the heavy weapon removed the first weapon - open
+- Owner: when the second (heavy) weapon was picked up the first one vanished, for host and guest alike. Check whether it is
+  the original game (one heavy slot replaces the carried weapon) or the co-op (ctrlshare / inventory).
+
+### B58. Host does not see some prompts (button hints, what to do) - open
+- Owner: in chapters 1 and 2 many prompts were missing on the host. TnSeqAct_DisplayMessage registers the tutorial module
+  on every target's controller (no Targets[0] problem). Next: compare host and guest screenshots at a tutorial prompt; check
+  the TnInputOverrideManager on the host (ctrlshare copies interact/command objects between controllers).
+
+### B59. End-of-chapter video: the guest stops watching and starts loading long before the host - open
+- Owner: after chapter 1 the friend's video ended early and his loading started much earlier. Check movie sync (Bink hooks,
+  movie: lines) on both sides with logs from both.
+
+### B60. Weapon pickup sound plays at the guest's position - open
+- Owner: the host picked up the weapon, the sound came from the friend's side. A sound action probably targets the
+  Instigator / the first player; check the Kismet ops around the pickup.
+
+### B61. Guest crash in chapter 2 - open, needs the friend's log
+- The friend crashed with an error after the weapon pickup. The crashed run is in the friend's Binaries\foc_logs (and a
+  foc_crash_*.dmp next to the exe); ask the owner for them.
+
+### B62. Guest sees periodic lags (host capped at 60 fps) - partly fixed 2026-10-25
+- Host log: "slow: TickTraceAll took 74-85 ms" 33 times - our Kismet tracker compared every op it found with all collected
+  ops (up to 12000) one by one; the host froze for that long and the guest saw it as lag. Now a hash set (trace.inc).
+- Still to check with the friend's log: his own long frames and the relay's receive gaps.
+
+### B63. Guests do not see the host's character (only the hands / weapon) - every chapter - open, investigated
+- Owner 2026-10-25: "chapter 3: at the start the client sees only the host's hands; the host sees everything ... same in
+  chapter 8, in every chapter". Reproduced with 2 copies on L03b (sessions/charvis: near_*, xm_B, fix0_B): from 900 uu
+  behind the host the guest sees only the host's gun floating where its hand is; the host sees the guest fully.
+- What is the same on the guest for its own pawn and the host's copy (`pawnvis`, scene.inc): replicated character data
+  (_CurrentCharacterCompressed +0x6b8), TnCharacterApplier, TnRobotForm, one SkeletalMeshComponent with
+  RB_Iconic_SKEL, AnimTreeTemplate Robot_ANIMTREE, HiddenGame/bOwnerNoSee 0, the same Actor.Components list, bHidden 0.
+- The only difference found in the mesh object: the list at SkeletalMeshComponent +0x224 (animation nodes:
+  TnAnimNodeWeaponSlot, AnimNodeSequence) has 2 entries on every pawn on the host and on the guest's own pawn, 0 on the
+  host's copy on the guest -> the host copy's animation tree never got its nodes. Theory: the characters share one
+  skeleton and the tree hides the parts of other characters, so without it only the unhidden bits (hands) draw.
+- Tried (`animfix` test command): SetAnimTreeTemplate - no Function object (also none for InitAnimTree,
+  ForceSkelUpdate, UpdateAnimations, SetSkeletalMesh); dropping the tree instance (+0x214 Animations) + ActorComponent
+  bNeedsReattach (+0x38/2) -> no change, still 0 nodes and invisible.
+- Next: find the native USkeletalMeshComponent::InitAnimTree (ghidra: callers of the AnimTreeTemplate copy, or the
+  SkeletalMeshComponent vtable) and call it for remote player meshes with 0 nodes; check whether B5 (dark silhouettes on
+  guests) is the same missing-tree problem. New test commands: `pawnvis`, `propat <off> [mask]`, `animfix`.
+
+### B64. F10 menu cut off and guests "host silent" after Join - FIXED 2026-10-25 (mock, visual test)
+- The menu laid out in window pixels while the game renders into a smaller back buffer stretched onto the window
+  (1920x1071 window, 800x450 buffer): everything below the buffer height was cut - "Create lobby" invisible. Now the
+  menu uses back-buffer pixels (mouse scaled), its height is capped (scrolls), and the lobby part is first on Host.
+- The Join page's browser relay (FoCRelay list) was still alive when the join relay started: one more process of the
+  same Steam user, the host's messages did not reach the join relay ("host silent for 20 s"). StartRelay now waits
+  for the browser to quit (killed after 4 s). Probably also hit real friends who joined through the Join page.
 
 ### B32. Escalation: names (Default, then three guests with one name) - fixed 2026-10-21
 - Owner: TAB showed his name and "Default", later mock_*; with 4 players the three guests counted as one. Cause:

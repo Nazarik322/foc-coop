@@ -182,7 +182,7 @@ static void DrawLobbyHostPart() {
     if (g_lobbyRole == 1) {
         ImGui::TextColored(ImVec4(0.5f, 1.f, 0.5f, 1.f), "%s", g_lobbyStatus);
         ImGui::Text("Steam: %s   players in lobby: %d", g_relayState, g_relayPeers + 1);
-        if (ImGui::Button("Close lobby")) LobbyLeave();
+        if (UiButton("Close lobby")) LobbyLeave();
         return;
     }
     ImGui::RadioButton("Friends only", &g_lobbyType, 1); ImGui::SameLine();
@@ -190,7 +190,7 @@ static void DrawLobbyHostPart() {
     ImGui::RadioButton("Private (invite)", &g_lobbyType, 2);
     ImGui::SetNextItemWidth(180); ImGui::InputText("Password (optional)", g_lobbyPw, sizeof(g_lobbyPw), ImGuiInputTextFlags_Password);
     ImGui::SetNextItemWidth(180); ImGui::SliderInt("Players", &g_lobbyMax, 2, 5);
-    if (ImGui::Button("Create lobby")) { LobbyCreate(); g_menuOpen = 0; }
+    if (UiButton("Create lobby")) { LobbyCreate(); g_menuOpen = 0; }
     ImGui::SameLine(); ImGui::TextDisabled("(no map loads; the game is not restarted)");
 }
 

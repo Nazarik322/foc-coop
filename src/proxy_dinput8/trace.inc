@@ -65,25 +65,27 @@ static int TraceCount(BYTE* o) { unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff;
 static void TickKismetLog(const TickObjs& t) {
     static BYTE* ops[12000]; static int cnt[12000]; static int nops = 0; static int scanPos = 0; static char lastMap[96] = "";
     static DWORD lastCheck = 0;
+    // 2026-10-25 real test: the host hitched 74-85 ms (slow: TickTraceAll, 33 times) - every op found was compared with
+    // all collected ops (up to 12000) one by one; a hash set now
+    static std::unordered_set<BYTE*> have;
     if (t.ngame < 1) return;
     TArr* go = GObj();
     char map[96]; MapName(t, map, sizeof(map));
-    if (strcmp(map, lastMap)) { strncpy_s(lastMap, map, _TRUNCATE); nops = 0; scanPos = 0; Log("kismet: new map %s, collecting ops", map); }
+    if (strcmp(map, lastMap)) { strncpy_s(lastMap, map, _TRUNCATE); nops = 0; scanPos = 0; have.clear(); Log("kismet: new map %s, collecting ops", map); }
     // collect: 20000 objects per tick; drop entries whose slot was freed
     int to = scanPos + 20000; if (to > go->Num) to = go->Num;
     for (int i = scanPos; i < to && nops < 12000; i++) {
         BYTE* o = (BYTE*)go->Data[i];
         if (!o || !TraceIsSeqOp(o)) continue;
-        bool have = false; for (int k = 0; k < nops && !have; k++) have = ops[k] == o;
-        if (have) continue;
+        if (have.count(o)) continue;
         char nm[80]; if (!ObjNameStr(o, nm, sizeof(nm)) || !strncmp(nm, "Default__", 9)) continue;
-        ops[nops] = o; cnt[nops] = TraceCount(o); nops++;
+        ops[nops] = o; cnt[nops] = TraceCount(o); nops++; have.insert(o);
     }
     scanPos = to >= go->Num ? 0 : to;
     DWORD now = GetTickCount(); if (now - lastCheck < 200) return; lastCheck = now;
     for (int k = 0; k < nops; k++) {
         BYTE* o = ops[k];
-        if (!IsObjFast(o) || !TraceIsSeqOp(o)) { ops[k] = ops[--nops]; cnt[k] = cnt[nops]; k--; continue; }
+        if (!IsObjFast(o) || !TraceIsSeqOp(o)) { have.erase(o); ops[k] = ops[--nops]; cnt[k] = cnt[nops]; k--; continue; }
         int c = TraceCount(o);
         if (c == cnt[k]) continue;
         int was = cnt[k]; cnt[k] = c;
