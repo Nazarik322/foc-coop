@@ -24,9 +24,10 @@ static volatile DWORD g_gposAt = 0; static float g_gpos[3]; static char g_gposSt
 // 2026-10-24, 4 players: one g_gpos for every guest compared guest 1's server pawn with whichever guest reported last
 // ("the guest sees its pawn 8707 uu from the server copy", reconcile could move a pawn to another guest's spot). Each
 // report now carries the guest's PlayerReplicationInfo.PlayerID; the host keeps one entry per guest (tp.inc TpGuestReport).
-struct GuestPos { int pid; float p[3]; char st[48]; int cine; DWORD at; };
+struct GuestPos { int pid; float p[3]; char st[48]; char nm[64]; int cine; DWORD at; };
 static GuestPos g_gp[8]; static CRITICAL_SECTION g_gpCs; static bool g_gpCsInit = false;
 static int PriPlayerId(BYTE* pc);   // scene.inc
+static bool WantName(char* want, size_t n);   // player-name source (ini > relay persona > ?Name=), sync.inc below
 
 static void SyncInit() { InitializeCriticalSection(&g_syncCs); InitializeCriticalSection(&g_gpCs); g_gpCsInit = true; }
 
@@ -41,8 +42,8 @@ static bool SyncFilterIn(const char* buf, int len, const sockaddr* from) {
     if (len >= 6 && !memcmp(buf, "FOCT1\n", 6)) { TexSyncQueue(buf, len); return true; }   // host -> guest: forced texture names (gfxsync.inc)
     if (len >= 6 && !memcmp(buf, "FOCK1\n", 6)) { KMirrorQueue(buf, len); return true; }   // host -> guest: Kismet op to run (kmirror.inc)
     if (len >= 6 && len < 200 && !memcmp(buf, "FOCP1\n", 6)) {   // guest -> host: its own pawn position
-        char tmp[200]; memcpy(tmp, buf, len); tmp[len] = 0; float x, y, z; char st[48] = ""; int c = 0, pid = -1;
-        int got = sscanf_s(tmp + 6, "%f %f %f %47s %d %d", &x, &y, &z, st, (unsigned)sizeof(st), &c, &pid);
+        char tmp[200]; memcpy(tmp, buf, len); tmp[len] = 0; float x, y, z; char st[48] = ""; char nm7[64] = ""; int c = 0, pid = -1;
+        int got = sscanf_s(tmp + 6, "%f %f %f %47s %d %d %63s", &x, &y, &z, st, (unsigned)sizeof(st), &c, &pid, nm7, (unsigned)sizeof(nm7));
         if (got >= 4) {
             g_gpos[0] = x; g_gpos[1] = y; g_gpos[2] = z; strncpy_s(g_gposState, st, _TRUNCATE); g_gposCine = c; g_gposAt = GetTickCount();
             if (got >= 6 && pid >= 0 && g_gpCsInit) {
@@ -50,6 +51,7 @@ static bool SyncFilterIn(const char* buf, int len, const sockaddr* from) {
                 int k = -1, old = 0; for (int i = 0; i < 8; i++) { if (g_gp[i].at && g_gp[i].pid == pid) k = i; if (g_gp[i].at < g_gp[old].at) old = i; }
                 if (k < 0) k = old;
                 GuestPos& e = g_gp[k]; e.pid = pid; e.p[0] = x; e.p[1] = y; e.p[2] = z; strncpy_s(e.st, st, _TRUNCATE); e.cine = c; e.at = GetTickCount();
+                if (got >= 7 && nm7[0] && strcmp(nm7, "-")) strncpy_s(e.nm, nm7, _TRUNCATE);
                 LeaveCriticalSection(&g_gpCs);
             }
         }
@@ -290,8 +292,9 @@ static void SendPos(const TickObjs& t) {
     BYTE* pw = pc ? PawnOf(pc) : nullptr; if (!pw) return;
     last = GetTickCount();
     char st[48] = "-"; StateName(pc, st, sizeof(st)); if (!st[0]) strcpy_s(st, "-");
-    float* l = LocOf(pw); char msg[160];
-    int n = _snprintf_s(msg, _TRUNCATE, "FOCP1\n%.0f %.0f %.0f %s %d %d\n", l[0], l[1], l[2], st, (*(unsigned*)(pc + 0x360) & 0x20000) ? 1 : 0, PriPlayerId(pc));
+    float* l = LocOf(pw); char msg[224];
+    char nm[64] = "-"; WantName(nm, sizeof(nm)); if (!nm[0]) strcpy_s(nm, "-");
+    int n = _snprintf_s(msg, _TRUNCATE, "FOCP1\n%.0f %.0f %.0f %s %d %d %s\n", l[0], l[1], l[2], st, (*(unsigned*)(pc + 0x360) & 0x20000) ? 1 : 0, PriPlayerId(pc), nm);
     EnterCriticalSection(&g_syncCs);
     for (int i = 0; i < g_syncNPeers; i++) if (GetTickCount() - g_syncPeers[i].seen < 10000) o_sendto(g_syncSock, msg, n, 0, (const sockaddr*)&g_syncPeers[i].addr, sizeof(sockaddr_in));
     LeaveCriticalSection(&g_syncCs);
@@ -530,30 +533,79 @@ static void* g_sceVt[32];
 // ini `playername` (test copies get invented names) > the Steam name (relay persona) > ?Name= of the command line.
 // SetName as soon as the controller has its PlayerReplicationInfo (Escalation spawns the pawn only after the character
 // pick), and again whenever the game puts another name back (checked every 5 s, no try limit).
+static bool WantName(char* want, size_t n) {   // shared: local SetName and the FOCP1 want-name field
+    want[0] = 0;
+    if (g_pendingPlayerName[0]) strncpy_s(want, n, g_pendingPlayerName, _TRUNCATE);   // ini playername
+    else if (g_relayPersona[0]) strncpy_s(want, n, g_relayPersona, _TRUNCATE);
+    else {
+        const char* url = CmdlineUrl(); const char* p = strstr(url, "?Name=");
+        if (p) { p += 6; size_t i = 0; while (p[i] && p[i] != '?' && i + 1 < n) { want[i] = p[i]; i++; } want[i] = 0; }
+    }
+    for (char* c = want; *c; c++) if (*c == ' ' || *c == '"' || *c == '?' || *c == '=' || *c == ',' || (unsigned char)*c < 0x20) *c = '_';
+    return want[0] != 0;
+}
 static void TickNames(const TickObjs& t) {
     static DWORD last = 0;
     if (t.nuworld < 1 || GetTickCount() - last < 5000) return;
     char want[64] = "";
-    if (g_pendingPlayerName[0]) strncpy_s(want, g_pendingPlayerName, _TRUNCATE);   // ini playername
-    else if (g_relayPersona[0]) strncpy_s(want, g_relayPersona, _TRUNCATE);
-    else {
-        const char* url = CmdlineUrl(); const char* n = strstr(url, "?Name=");
-        if (n) { n += 6; size_t i = 0; while (n[i] && n[i] != '?' && i + 1 < sizeof(want)) { want[i] = n[i]; i++; } want[i] = 0; }
-    }
-    for (char* c = want; *c; c++) if (*c == ' ' || *c == '"' || *c == '?' || *c == '=' || *c == ',' || (unsigned char)*c < 0x20) *c = '_';
-    if (!want[0]) return;
-    BYTE* pc = nullptr; for (int a = 0; a < t.npc; a++) if (IsLocalPC(t.pc[a])) pc = t.pc[a];
-    if (!pc) return;
-    BYTE* pri = *(BYTE**)(pc + 0x1d4); if (!IsObjFast(pri)) return;
-    char have[64] = ""; FStrAscii(pri + 0x1e0, have, sizeof(have));
-    if (!strcmp(have, want)) return;
-    last = GetTickCount();
+    if (!WantName(want, sizeof(want))) return;
     if (!g_sceVt[0]) { for (int i = 0; i < 32; i++) g_sceVt[i] = (void*)SceOutStub; g_sceOut[0] = g_sceVt; }
     wchar_t cmd[96]; _snwprintf_s(cmd, _TRUNCATE, L"SetName %hs", want);
     PFN_SCE fn = (PFN_SCE)((BYTE*)GetModuleHandleW(nullptr) + (0xbf1f70 - 0x400000));
-    BOOL r = FALSE;
-    __try { r = fn(pc, nullptr, cmd, g_sceOut, nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("names: SetName raised %08lx", GetExceptionCode()); last = GetTickCount() + 55000; return; }
-    Log("names: '%s' -> SetName %s (%s)", have, want, r ? "ok" : "not handled");
+    // B52 (2026-11-15): rename EVERY local controller whose PRI still differs - not just the first. A guest's front-end
+    // controller lingers after `open ip` (B24), was picked first, consumed the rename and then then matched `want` forever,
+    // so the real game controller stayed 'Default' (host saw Optimus, Default, Default, Default; D never renamed at all).
+    bool any = false;
+    for (int a = 0; a < t.npc && !any; a++) {
+        BYTE* pc = t.pc[a];
+        if (!IsLocalPC(pc)) continue;
+        BYTE* pri = *(BYTE**)(pc + 0x1d4); if (!IsObjFast(pri)) continue;
+        char have[64] = ""; FStrAscii(pri + 0x1e0, have, sizeof(have));
+        if (!strcmp(have, want)) continue;
+        any = true;
+        last = GetTickCount();
+        BOOL r = FALSE;
+        __try { r = fn(pc, nullptr, cmd, g_sceOut, nullptr); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("names: SetName raised %08lx", GetExceptionCode()); last = GetTickCount() + 55000; return; }
+        char pn[96]; ObjLabel(pc, pn, sizeof(pn));
+        Log("names: %s '%s' -> SetName %s (%s)", pn, have, want, r ? "ok" : "not handled");
+    }
+    // B52 second half: the guest's own SetName reaches the server only as ServerChangeName, and something on the server
+    // (the login-time PRI name from the profile) kept putting a wrong name back every 5 s ("Ratchet" <-> "Ironhide"
+    // ping-pong on C and D). So each guest now also sends its want-name in FOCP1 (field after PlayerID), and the host
+    // writes it straight into the server-side PRI (SetFStr on PlayerReplicationInfo+0x1e0 PlayerName, the write already
+    // used for objectives). The server's replication then settles every copy on the same name.
+    if (t.ngame < 1 || !g_gpCsInit) return;   // guests do not touch other players' PRIs
+    {   // B52 diagnosis: the server-side roster with PlayerIDs, to match against the pids the guests report
+        static DWORD rosterAt = 0;
+        if (GetTickCount() - rosterAt > 30000) {
+            rosterAt = GetTickCount();
+            for (int a = 0; a < t.npc; a++) {
+                BYTE* pc = t.pc[a]; if (!IsObjFast(pc) || IsLocalPC(pc)) continue;
+                BYTE* pri = *(BYTE**)(pc + 0x1d4); if (!IsObjFast(pri)) continue;
+                char have[64] = ""; FStrAscii(pri + 0x1e0, have, sizeof(have));
+                char pn[96]; ObjLabel(pc, pn, sizeof(pn));
+                Log("names: roster %s pid=%d name='%s'", pn, PriPlayerId(pc), have);
+            }
+        }
+    }
+    EnterCriticalSection(&g_gpCs);
+    for (int i = 0; i < 8; i++) {
+        GuestPos& e = g_gp[i];
+        if (!e.at || GetTickCount() - e.at > 10000 || !e.nm[0]) continue;
+        for (int a = 0; a < t.npc; a++) {
+            BYTE* pc = t.pc[a];
+            if (!IsObjFast(pc) || IsLocalPC(pc) || PriPlayerId(pc) != e.pid) continue;
+            BYTE* pri = *(BYTE**)(pc + 0x1d4); if (!IsObjFast(pri)) continue;
+            char have[64] = ""; FStrAscii(pri + 0x1e0, have, sizeof(have));
+            if (!strcmp(have, e.nm)) continue;
+            wchar_t w[64]; MultiByteToWideChar(CP_UTF8, 0, e.nm, -1, w, 64);
+            if (!SetFStr(pri + 0x1e0, w)) continue;
+            last = GetTickCount();
+            char pn[96]; ObjLabel(pc, pn, sizeof(pn));
+            Log("names: host-side %s '%s' -> %s (pid %d)", pn, have, e.nm, e.pid);
+        }
+    }
+    LeaveCriticalSection(&g_gpCs);
 }
 
 // ---------------------------------------------------------------- tick (game thread)

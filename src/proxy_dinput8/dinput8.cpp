@@ -1,4 +1,4 @@
-﻿// dinput8.dll proxy for Transformers: Fall of Cybertron (32-bit, UE3 / High Moon).
+// dinput8.dll proxy for Transformers: Fall of Cybertron (32-bit, UE3 / High Moon).
 // Phase 1 goal: see what the game does (log file next to the exe) and let several copies run on one PC.
 //
 // What it does:
@@ -2045,6 +2045,11 @@ static void LoadConfig(const wchar_t* dir) {
     }
 }
 
+#ifndef FOC_MIRRORPROP_EARLY
+#define FOC_MIRRORPROP_EARLY
+struct MirrorProp { int off; unsigned mask; bool done; };   // also defined in mirror.inc; declared early for gametick.inc (state pid)
+static bool MirrorPropFind(const char* owner, const char* name, MirrorProp& p);
+#endif
 #include "gametick.inc"
 #include "sync.inc"
 #include "tp.inc"
