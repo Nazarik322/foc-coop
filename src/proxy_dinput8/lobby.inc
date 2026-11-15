@@ -134,9 +134,12 @@ static void TickLobby(const TickObjs& t) {
         g_lobbyRole = 0; g_lobbyClosedAt = GetTickCount();
     }
     g_lobbyGuest = g_lobbyRole == 2;
-    if (!g_lobbyRole) return;
+    // 2026-11-16: also when hosting directly (F10 Host page > Start hosting - no Create lobby): the host relay still owns
+    // a Steam lobby (the Join list row), and a guest who clicked "Join lobby" while the host was loading never got "go"
+    // (the stage machine below was keyed on g_lobbyRole == 1 only) and sat in the main menu forever.
+    if (!g_lobbyRole && !g_hosting) return;
     DWORD now = GetTickCount();
-    if (g_lobbyRole == 1) {
+    if (g_lobbyRole == 1 || g_hosting) {
         // keyed on the GameInfo object (a new one per load), not on the map name: the map name was not reliable after a
         // travel inside the running game (B29). Solo game (the menu's CHAPTER / CONTINUE) -> reopen as a session; the
         // session game with its listen port -> "port", then "go".

@@ -1,4 +1,4 @@
-﻿// In-game co-op menu: Direct3D9 overlay (Dear ImGui) + engine console command + LAN lobby beacon.
+// In-game co-op menu: Direct3D9 overlay (Dear ImGui) + engine console command + LAN lobby beacon.
 // Included at the end of dinput8.cpp (shares Log / Rd / PatchIat).
 #include <d3d9.h>
 #include <ws2tcpip.h>
@@ -988,28 +988,37 @@ static void DrawHostPage() {
     ImGui::Spacing(); ImGui::Separator();
     ImGui::TextDisabled("%s", Tr("Or start a chapter directly (friends join the running game):", u8"Или сразу запустите главу (друзья зайдут в идущую игру):"));
     if (ImGui::RadioButton(Tr("Story (co-op campaign)", u8"Сюжет (кооп-кампания)"), g_hostMode == 0)) g_hostMode = 0;
+    UiNote(Tr("Story (co-op campaign)", u8"Сюжет (кооп-кампания)"));
     ImGui::SameLine();
     if (ImGui::RadioButton(Tr("Escalation", u8"Эскалация"), g_hostMode == 1)) g_hostMode = 1;
+    UiNote(Tr("Escalation", u8"Эскалация"));
+    ImGui::Spacing();
+    // 2026-11-16: the button sits ABOVE the chapter list - in a small back buffer (640x480) the window caps at 0.96 of
+    // the height and the list scrolls, so a button under the fold could never be clicked (input uiclick missed it;
+    // real users on 720p had to scroll too). The list below only picks the chapter for the next Start hosting.
+    if (UiButton(Tr("Start hosting", u8"Запустить"), ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
+    ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("(loads the chapter now)", u8"(глава загрузится сразу)"));
+    ImGui::SameLine();
+    if (UiButton(Tr("Back", u8"Назад"))) g_page = 0;
     ImGui::Spacing();
     ImGui::TextUnformatted(g_hostMode == 0 ? Tr("Chapter:", u8"Глава:") : Tr("Map:", u8"Карта:"));
     ImGui::BeginChild("maps", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 8.5f), true);
     if (g_hostMode == 0) {
-        for (int i = 0; i < (int)(sizeof(kChapters) / sizeof(kChapters[0])); i++)
+        for (int i = 0; i < (int)(sizeof(kChapters) / sizeof(kChapters[0])); i++) {
             if (ImGui::Selectable(kChapters[i].title, g_hostMapStory == i)) g_hostMapStory = i;
+            UiNote(kChapters[i].title);   // tests click the chapter by title (input uiclick), 2026-11-16
+        }
     } else {
-        for (int i = 0; i < (int)(sizeof(kEscalation) / sizeof(kEscalation[0])); i++)
+        for (int i = 0; i < (int)(sizeof(kEscalation) / sizeof(kEscalation[0])); i++) {
             if (ImGui::Selectable(kEscalation[i].title, g_hostMapEsc == i)) g_hostMapEsc = i;
+            UiNote(kEscalation[i].title);
+        }
     }
     ImGui::EndChild();
     ImGui::SliderInt(Tr("Max players", u8"Макс. игроков"), &g_hostPlayers, 2, 5);
     ImGui::Spacing();
     ImGui::TextDisabled("%s", g_hostMode == 0 ? Tr("Story co-op: chapters 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9 tested.", u8"Кооп-сюжет: проверены главы 1, 2a, 2b, 3b, 4c, 5, 6, 8a, 8b, 9.") : Tr("Escalation: wave survival, up to 5 players.", u8"Эскалация: выживание против волн, до 5 игроков."));
     ImGui::TextWrapped("%s", Tr("Your game appears in your friends' Join list through Steam (no IP addresses, no port forwarding). Steam must be running.", u8"Ваша игра появится у друзей в списке «Присоединиться к игре» через Steam (без IP-адресов и проброса портов). Steam должен быть запущен."));
-    ImGui::Spacing();
-    if (UiButton(Tr("Start hosting", u8"Запустить"), ImVec2(ImGui::GetFontSize() * 11.f, 0))) StartHosting();
-    ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("(loads the chapter now)", u8"(глава загрузится сразу)"));
-    ImGui::SameLine();
-    if (UiButton(Tr("Back", u8"Назад"))) g_page = 0;
 }
 
 static void DrawJoinPage() {
