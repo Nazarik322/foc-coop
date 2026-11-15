@@ -8,8 +8,9 @@
 #   weapons     : NextWeapon
 #   downed      : TestDowned -> downed=1 on the host, TestRevive -> up again (host and guest)
 #   lives       : downed + DownedSuicide on both -> team lives spent, match end screen after the last life
-param([string]$Map = "ESC_Ark_BASE_m", [string]$Out = "", [string]$SlotOwner = "", [switch]$NoSlot)
+param([string]$Map = "ESC_Ark_BASE_m", [string]$Out = "", [string]$SlotOwner = "", [switch]$NoSlot, [switch]$Background)
 . "$PSScriptRoot\dev.ps1"
+if ($Background) { Enable-FocBackground }
 $slotOwnerName = Get-FocSlotOwner $SlotOwner
 if (-not $NoSlot) { Enter-FocSlot -Owner $slotOwnerName }
 try {
@@ -23,9 +24,10 @@ function LastLog($c, $pattern) { (Select-String -Path "E:\FoC-coop\$c\Binaries\f
 function Shot($tag, [switch]$Tab) {
   foreach ($c in "A", "B") {
     $f = Join-Path $Out "$tag`_$c.bmp"
-    if ($Tab) { $h = [W]::Find([uint32](Find-CopyProc $c).Id); FocusWin $h | Out-Null; [W]::keybd_event(0, 0x0F, 8, [UIntPtr]::Zero); Start-Sleep 1 }
+    if ($Tab -and $script:FocBackground) { Send-Cmd $c "input hold TAB 2500"; Start-Sleep 1 }   # no focus: the mod holds TAB through the shot
+    elseif ($Tab) { $h = [W]::Find([uint32](Find-CopyProc $c).Id); FocusWin $h | Out-Null; [W]::keybd_event(0, 0x0F, 8, [UIntPtr]::Zero); Start-Sleep 1 }
     Send-Cmd $c "shot $f"; Start-Sleep 1.5
-    if ($Tab) { [W]::keybd_event(0, 0x0F, 10, [UIntPtr]::Zero) }
+    if ($Tab -and -not $script:FocBackground) { [W]::keybd_event(0, 0x0F, 10, [UIntPtr]::Zero) }
     if (Test-Path $f) { try { $im = [Drawing.Image]::FromFile($f); $b = New-Object Drawing.Bitmap 960, 540; $g = [Drawing.Graphics]::FromImage($b); $g.DrawImage($im, 0, 0, 960, 540); $b.Save(($f -replace '\.bmp$', '.jpg'), [Drawing.Imaging.ImageFormat]::Jpeg); $g.Dispose(); $b.Dispose(); $im.Dispose(); Remove-Item $f } catch { } }
   }
 }
@@ -85,4 +87,4 @@ foreach ($c in "A", "B") { Copy-Item "E:\FoC-coop\$c\Binaries\foc_coop.log" (Joi
 foreach ($k in $results.Keys) { Say ("RESULT {0}: {1}" -f $k, $results[$k]) }
 Say "screenshots: $Out (1_score, 2_money: TAB board on both; 8_lives_*: lives and match end)"
 Stop-Foc; Stop-Relay
-} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }
+} finally { Disable-FocBackground; if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }

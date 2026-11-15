@@ -2,8 +2,9 @@
 # (`lobby create`), B joins it (`lobby join <id>`, id from A's relay.status) and stays in the main menu, then A starts the
 # mission the way the game's own menu does (`lobby menustart <map>` through the hooked console Exec). PASS when B
 # follows into the map by itself and both stay there 30 s, with the same processes (no relaunch). Mock Steam (test copies).
-param([string]$Map = "L01_TheExodus_BASE_m", [string]$Out = "E:\FoC-coop\sessions\lobby", [switch]$Keep)
+param([string]$Map = "L01_TheExodus_BASE_m", [string]$Out = "E:\FoC-coop\sessions\lobby", [switch]$Keep, [switch]$Background)
 . "$PSScriptRoot\dev.ps1"
+if ($Background) { Enable-FocBackground }
 Enter-FocSlot -Owner (Get-FocSlotOwner "")
 New-Item -ItemType Directory -Force $Out | Out-Null
 function Say($s) { $l = "$(Get-Date -Format HH:mm:ss) $s"; Add-Content (Join-Path $Out "lobby.txt") $l; $l }
@@ -42,6 +43,7 @@ try {
   if ($same -and $a.map -eq $Map -and $b.map -eq $Map -and @($a.players).Count -ge 2) { Say "RESULT: PASS lobby -> mission start -> guest followed, no relaunch ($(@($a.players).Count) players)" }
   else { Say "RESULT: FAIL after 30 s host $($a.map)/$(@($a.players).Count) guest $($b.map) same processes $same" }
 } finally {
+  Disable-FocBackground
   if (-not $Keep) { Stop-Foc; Stop-Relay }
   Exit-FocSlot -Owner (Get-FocSlotOwner "")
 }

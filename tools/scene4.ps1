@@ -3,8 +3,9 @@
 # triggered it (scene.inc). Steps: A creates a lobby, B/C/D join, A starts the map through the hooked menu Exec, all 4
 # must be on the map; the intro cutscene must not move anybody (level script, no activator); D walks away (W held),
 # then `scenegather <D>` on the host must bring A, B, C within 1200 uu of D. Screenshots of all copies (2x2 grids).
-param([string]$Map = "L02a_DefendTheArk_BASE_m", [string]$Out = "E:\FoC-coop\sessions\scene4", [switch]$Keep, [string]$CineOp = "SeqAct_ToggleCinematicMode_1740")
+param([string]$Map = "L02a_DefendTheArk_BASE_m", [string]$Out = "E:\FoC-coop\sessions\scene4", [switch]$Keep, [string]$CineOp = "SeqAct_ToggleCinematicMode_1740", [switch]$Background)
 . "$PSScriptRoot\dev.ps1"
+if ($Background) { Enable-FocBackground }
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
 $copies = @("A", "B", "C", "D"); $names = @{ A = "Optimus"; B = "Bumblebee"; C = "Ironhide"; D = "Ratchet" }
@@ -115,6 +116,7 @@ try {
   foreach ($c in $copies) { Copy-Item (Log $c) "$Out\$c.log" -ErrorAction SilentlyContinue }
   if ($fail.Count) { Say "RESULT: FAIL $($fail -join '; ')" } else { Say "RESULT: PASS 4 players on $Map through the F10 lobby, everybody gathered at the activator" }
 } finally {
+  Disable-FocBackground
   if (-not $Keep) { Stop-Foc; Stop-Relay }
   Exit-FocSlot -Owner (Get-FocSlotOwner "")
 }

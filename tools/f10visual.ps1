@@ -4,8 +4,9 @@
 #   host: F10 -> Host a game -> Create lobby;  guests: F10 -> Join a game -> Join lobby (first row);
 #   host: CONTINUE in the game menu (UP, ENTER); everybody must end up in the host's mission.
 # Screenshots with the overlay (shotui) of every copy after each step, as 2x2 grids in $Out.
-param([string[]]$Copies = @("A", "B"), [string]$Out = "E:\FoC-coop\sessions\f10visual", [switch]$Keep, [string]$HostKeys = "UP,ENTER")
+param([string[]]$Copies = @("A", "B"), [string]$Out = "E:\FoC-coop\sessions\f10visual", [switch]$Keep, [string]$HostKeys = "UP,ENTER", [switch]$Background)
 . "$PSScriptRoot\dev.ps1"
+if ($Background) { Enable-FocBackground }
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
 $names = @{ A = "Optimus"; B = "Bumblebee"; C = "Ironhide"; D = "Ratchet" }
@@ -63,6 +64,7 @@ try {
   foreach ($c in $Copies) { Copy-Item (Log $c) "$Out\$c.log" -ErrorAction SilentlyContinue }
   if ($fail.Count) { Say "RESULT: FAIL $($fail -join '; ')" } else { Say "RESULT: PASS $($Copies.Count) players joined through the F10 menu by clicks and started the mission" }
 } finally {
+  Disable-FocBackground
   if (-not $Keep) { Stop-Foc; Stop-Relay }
   Exit-FocSlot -Owner (Get-FocSlotOwner "")
 }

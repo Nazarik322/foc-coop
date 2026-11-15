@@ -3,8 +3,9 @@
 # once, ini escautoaccept=1 in B/C/D); A: Private Match -> Create Game (everyone in the game lobby) -> Start Game
 # (everyone loads the map through the Steam relay). No player actions. Windows 800x450 in a 2x2 grid; screenshots of
 # all copies after each step in $Out. Invented names (ini playername) so the lobby lists are readable.
-param([string[]]$Copies = @("A", "B", "C", "D"), [string]$Out = "E:\FoC-coop\sessions\esc4menu", [switch]$NoBuild, [switch]$Keep, [switch]$Probe, [int]$LobbyWait = 0, [switch]$Play, [int]$Rounds = 3, [int]$MapSteps = 0, [switch]$MenuInvite, [switch]$Dump, [string]$MemberCmd = "")
+param([string[]]$Copies = @("A", "B", "C", "D"), [string]$Out = "E:\FoC-coop\sessions\esc4menu", [switch]$NoBuild, [switch]$Keep, [switch]$Probe, [int]$LobbyWait = 0, [switch]$Play, [int]$Rounds = 3, [int]$MapSteps = 0, [switch]$MenuInvite, [switch]$Dump, [string]$MemberCmd = "", [switch]$Background)
 . "$PSScriptRoot\dev.ps1"
+if ($Background) { Enable-FocBackground }
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
 function Say($s) { $l = "$(Get-Date -Format HH:mm:ss) $s"; Add-Content (Join-Path $Out "esc4menu.txt") $l; $l }
@@ -88,6 +89,7 @@ try {
   Say "host sees $npc player controller(s)"
   if ($npc -ge $Copies.Count) { Say "RESULT: PASS $($Copies.Count) players through the Escalation menus" } else { Say "RESULT: FAIL host sees $npc of $($Copies.Count) players" }
 } finally {
+  Disable-FocBackground
   if (-not $Keep) { Stop-Foc; Stop-Relay }
   Exit-FocSlot -Owner (Get-FocSlotOwner "")
 }

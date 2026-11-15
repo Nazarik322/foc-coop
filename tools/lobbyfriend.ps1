@@ -5,8 +5,9 @@
 #  4. B (the guest) presses CONTINUE itself: B must not wait for guests (no pause),
 #  5. A presses CONTINUE: B must end up as A's client on the same map,
 #  6. A closes the lobby: B's relay must stop with "host left the lobby" and B's lobby role is cleared.
-param([string]$Out = "E:\FoC-coop\sessions\lobbyfriend", [switch]$Keep)
+param([string]$Out = "E:\FoC-coop\sessions\lobbyfriend", [switch]$Keep, [switch]$Background)
 . "$PSScriptRoot\dev.ps1"
+if ($Background) { Enable-FocBackground }
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $Out | Out-Null
 function Say($s) { $l = "$(Get-Date -Format HH:mm:ss) $s"; Add-Content (Join-Path $Out "run.txt") $l; $l }
@@ -75,6 +76,7 @@ try {
   foreach ($c in "A", "B") { Copy-Item (Log $c) "$Out\$c.log" -ErrorAction SilentlyContinue; Copy-Item "E:\FoC-coop\$c\Binaries\foc_relay\relay.log" "$Out\${c}_relay.log" -ErrorAction SilentlyContinue }
   if ($fail.Count) { Say "RESULT: FAIL $($fail -join '; ')" } else { Say "RESULT: PASS lobby, own lobby hidden, guest CONTINUE no wait, guest follows host CONTINUE, host leave closes guest lobby" }
 } finally {
+  Disable-FocBackground
   if (-not $Keep) { Stop-Foc; Stop-Relay }
   Exit-FocSlot -Owner (Get-FocSlotOwner "")
 }
