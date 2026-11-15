@@ -75,6 +75,7 @@ function ImgDiff($p1, $p2) {   # mean absolute difference of 32x18 grayscale thu
 function Look-Both($map, $pidA, $pidB) {
   Shot-Both $map "1before"
   $a0 = LocalPos $HostCopy; $b0 = LocalPos $GuestCopy
+  $logA = "E:\FoC-coop\$HostCopy\Binaries\foc_coop.log"
   $hB = Wait-FocWindow $pidB 5; HoldKey $hB 0x11 3000 -Copy $GuestCopy; Start-Sleep 2
   $a1 = LocalPos $HostCopy; $b1 = LocalPos $GuestCopy
   Shot-Both $map "2after"
@@ -84,7 +85,25 @@ function Look-Both($map, $pidA, $pidB) {
   $script:detail += " hostMoved=$hm guestMoved=$gm hostImgDiff=$da guestImgDiff=$db"
   if ($map -notlike "L*") { return "" }   # Escalation: moving enemies and effects, the state file has no stable guest position; screenshots only
   if ($gm -lt 200) { return "guest did not move ($gm uu)" }
-  if ($hm -lt 50 -and $da -gt [math]::Max(12, $db / 2)) { return "host picture changed ($da) although only the guest moved: host camera follows the guest (B10)" }
+  if ($hm -lt 50 -and $da -gt [math]::Max(12, $db / 2)) {
+    # The host picture changed although only the guest walked. Decide by the host's camera itself, not by pixels:
+    # camdiag2 (2026-11-15) dumps which pawn the host's TnCameraStrategyManager references - a remote pawn means the
+    # camera rides the guest (B10). Pixel heuristics fail here: mirrored scripted camera ops (kmirror, BUGS B14) shake
+    # both screens, and a narrow corridor looks identical from two spots (L04c: views matched at 16 with 2k+ uu apart).
+    Send-Cmd $HostCopy "camdiag2"; Start-Sleep 3
+    $line = $null
+    if (Test-Path $logA) { $line = (Select-String -Path $logA -Pattern 'camdiag2: PC\+\d+ TnCameraStrategyManager_\d+ ' | Select-Object -Last 1).Line }
+    $ab = ImgDiff "$Out\$map`_${HostCopy}_2after.png" "$Out\$map`_${GuestCopy}_2after.png"
+    $script:detail += " hostViewVsGuest=$ab cam='$line'"
+    if ($line -and $line -match 'pawn refs:\s*(.+)$') {
+      $refs = $Matches[1]
+      if ($refs -match 'TnPlayerPawn' -and $refs -notmatch '\(own\)') { return "host camera strategy references a remote pawn: host camera follows the guest (B10)" }
+      return ""   # host camera on its own pawn: the picture change is scripted/combat noise
+    }
+    Write-Host "note: camdiag2 line not found, B10 asserted by pixels"
+    if ($ab -ge 0 -and $ab -lt 30) { return "host picture changed ($da) and now matches the guest's view ($ab): host camera follows the guest (B10)" }
+    return ""
+  }
   return ""
 }
 function PawnSummary($s) { ($s.players | ForEach-Object { "$(if ($_.local) {'host'} else {'guest'}):$(if ($_.pawn) {'pawn'} else {'nopawn'})/spawn=$($_.spawn)" }) -join ' ' }

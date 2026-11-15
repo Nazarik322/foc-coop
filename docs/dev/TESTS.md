@@ -14,7 +14,7 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 ## Fixes and their tests
 | Bug / feature | Fix (ini key) | Test | Twin (must FAIL) | Verified |
 |---|---|---|---|---|
-| B10 host camera follows the guest's pawn | ctrlshare skips camera objects (`ctrlskip`, default `Camera`) | matrix `-Look` on 2b: hostImgDiff small while only the guest walks | `ctrlskip=` (empty) in A's ini: FAIL "host camera follows the guest (B10)" | 2026-10-19: twin FAIL (diff 27), fix PASS (diff 4) |
+| B10 host camera follows the guest's pawn | ctrlshare skips camera objects (`ctrlskip`, default `Camera`) | matrix `-Look`: the B10 assertion (2026-11-15) asks the host's camera itself - `camdiag2` after the guest walked; PASS = TnCameraStrategyManager references its own pawn. Pixel checks alone are unusable: mirrored scripted camera ops shake both screens and corridors look identical from two spots | twin does not reproduce on 7f8c708: with `ctrlskip=` (empty) the camera still stays on the host's pawn (B10 likely fixed incidentally by later ctrlshare/ctrlallow changes); 2026-10-19 twin FAIL (diff 27) | 2026-11-15 must-pass: own pawn referenced on L02a/L02b/L04c/L06 (L04c hostImgDiff 144 by a mirrored camera shake, camera still own) |
 | B1 guest without pawn in 2a, 2b | game-thread tick (all engine writes on the game thread) | matrix on 2a, 2b: guest spawn=3, pawn | none (old DLL: `launcher/payload/dinput8.dll` from 10:40) | 2026-10-19: 2b PASS 4/4; **2a PASS 2/3, one run FAIL (guest spawn=2): not fixed, flaky** |
 | B1 guest without pawn (spawn collides with the host) | `spawnshift` (default on) | matrix on 1, 2a, 3b, 4c, 5, 9: guest spawn=3 | `spawnshift=0`: guest stays in spawn state 2 (all six chapters, run 14:14-14:23) | 2026-10-19: all six PASS, 4c twice |
 | B1 chapter 8b: host crash in the guest's Possess | guard 0x641e10 (`tutguard`) | matrix 8b `-AliveSec 120`: PASS except movement | `tutguard=0` or old build: host crash ~20 s (dump 2026-10-19 14:47) | 2026-10-19: guest pawn, 120 s alive |
@@ -73,6 +73,8 @@ displayed window crashes D3D9 at start, B7 - virtual desktops that are not shown
 Verified: `matrix -Background -Look` PASS on L02a (guest moved 370 uu) and ESC_Ark (pick via input tap), both unfocused.
 
 ## Known flaky
+- L06 2026-11-15 (bg must-pass): the guest copy crashed 2 s into startup (c0000005 in ntdll heap + in dinput8.dll during
+  the VEH report, ports 7777/7778 busy from the previous map's teardown). The immediate rerun PASSed. Watch for repeats.
 - ESC_Ark: the host's character pick uses real key presses; one run of 3 failed (host spawn=0). Needs in-game input.
 - Any run while the remote desktop is not shown: SKIP (B7).
 - ESC_Ark, second mode (2026-10-20, build 490c313): the guest connected and got the package list but stayed on
