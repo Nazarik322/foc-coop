@@ -64,6 +64,14 @@ Expected: 5 x `RESULT: PASS`. Plus the Steam relay: `matrix.ps1 -Steam -Look -Ma
 | Escalation lobby lists the same on every copy (B37, B40) | steamnet.inc status whisper/forward/replay, invite.inc TickPhantomPri, free relay port | `tools/esc4menu.ps1 -MenuInvite -LobbyWait 30` (4 copies), compare 2_party_together_* and 3_game_lobby_* of all copies (no spinner, one list, same order); `-Dump` writes PRI bytes, `sessions` lines show registrant status at +0x4d | twin: real 2-PC test | 2026-10-23 PASS 4/4 `esc4_phantom4` |
 | Slot lease (team mode) | `Enter-FocSlot` etc. in dev.ps1 | `tools/slottest.ps1` (no game): 5/5 PASS | - | 2026-10-20: 5/5 PASS (lead rerun) |
 
+## Background mode (2026-11-15)
+`matrix.ps1 -Background` (dev.ps1 `Enable-FocBackground`, env `FOC_BACKGROUND=1` for other tools): the owner works at
+the PC during tests - no `SetForegroundWindow`, no real key/mouse events. `HoldKey -Copy <copy>` sends the mod's
+`input hold <name> <ms>` (focus spoof armed for the hold; the raw `input key 0x..` form has no spoof and the game
+ignores it unfocused), Escalation's character pick uses `input tap`. Windows stay visible but bottom-left (a never
+displayed window crashes D3D9 at start, B7 - virtual desktops that are not shown count as not displayed).
+Verified: `matrix -Background -Look` PASS on L02a (guest moved 370 uu) and ESC_Ark (pick via input tap), both unfocused.
+
 ## Known flaky
 - ESC_Ark: the host's character pick uses real key presses; one run of 3 failed (host spawn=0). Needs in-game input.
 - Any run while the remote desktop is not shown: SKIP (B7).

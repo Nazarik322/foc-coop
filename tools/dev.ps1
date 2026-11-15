@@ -52,8 +52,38 @@ public class W {
   }
   public static void Move(IntPtr h, int x, int y) { POINT p; p.X = x; p.Y = y; ClientToScreen(h, ref p); SetCursorPos(p.X, p.Y); }
   public static void Key(byte vk) { keybd_event(vk, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(120); keybd_event(vk, 0, 2, UIntPtr.Zero); }
+  [DllImport("user32.dll")] public static extern bool LockSetForegroundWindow(uint uLockCode);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
 }
 "@ -ReferencedAssemblies System.Drawing
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Background mode (owner 2026-11-15: tests must run while the owner uses the PC; no focus stealing, no real input):
+#   Enable-FocBackground   no SetForegroundWindow, no keybd_event/mouse_event; HoldKey sends the mod's `input` command
+#                          through foc_cmd.txt instead (works unfocused, see input.inc; inputtest PASS with focus elsewhere)
+#   FOC_BACKGROUND=1       the same, for tools that have no -Background switch yet
+# The game windows stay normal visible windows (a never-displayed window crashes D3D9 at start, BUGS B7 - a virtual
+# desktop that is not shown counts as not displayed, so the games must stay on the owner's desktop).
+# ---------------------------------------------------------------------------------------------------------------------
+$script:FocBackground = $false
+# DIK scancode -> `input hold` key name (input.inc kInKeys). `input hold` (unlike the raw `input key` form) also arms the
+# focus spoof for the hold duration - without it UE3 discards the input of a non-foreground window.
+$script:FocKeyNames = @{
+  0x11='W'; 0x1E='A'; 0x1F='S'; 0x20='D'; 0x12='E'; 0x10='Q'; 0x21='F'; 0x13='R'; 0x2E='C'; 0x2F='V'; 0x2D='X'; 0x2C='Z'
+  0x22='G'; 0x14='T'; 0x23='H'; 0x30='B'; 0x31='N'; 0x32='M'; 0x39='SPACE'; 0x1C='ENTER'; 0x01='ESC'; 0x0F='TAB'
+  0x2A='LSHIFT'; 0x1D='LCTRL'; 0x38='LALT'; 0x02='1'; 0x03='2'; 0x04='3'; 0x05='4'; 0x06='5'
+  0xC8='UP'; 0xD0='DOWN'; 0xCB='LEFT'; 0xCD='RIGHT'; 0x3B='F1'; 0x3C='F2'; 0x3D='F3'; 0x3E='F4'; 0x44='F10'
+}
+function Enable-FocBackground {
+  $script:FocBackground = $true
+  try { [void][W]::LockSetForegroundWindow(1) } catch {}   # best effort: new game windows should not grab activation
+  Write-Host 'background mode: no focus, no real input (mod `input` commands through foc_cmd.txt)'
+}
+function Disable-FocBackground {
+  $script:FocBackground = $false
+  try { [void][W]::LockSetForegroundWindow(2) } catch {}
+}
+if ($env:FOC_BACKGROUND -eq '1') { Enable-FocBackground }
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Game slot lease (team rules, docs/dev/TEAM.md): the test copies, ports, foc_cmd.txt files, focus and the RDP display
@@ -207,6 +237,14 @@ function Set-FocWindowSlot([int]$ProcId, $h) {
     if ($path -notmatch '\\FoC-coop\\([A-Z])\\') { return }
     $slot = [int][char]$Matches[1] - [int][char]'A'
     $x = ($slot % 2) * 980; $y = [math]::Floor($slot / 2) * 590
+    if ($script:FocBackground) {
+      # 2026-11-15: the owner works at the PC during tests - tuck the copies into the bottom-left corner, above the taskbar
+      $sh = [W]::GetSystemMetrics(1)
+      $rows = [math]::Max(1, [math]::Min(2, [math]::Floor(($sh - 40) / 590)))
+      $x = ($slot % 2) * 980
+      $y = $sh - 40 - ([math]::Floor($slot / 2) % $rows + 1) * 590
+      if ($y -lt 0) { $y = 0 }
+    }
     [void][W]::SetWindowPos($h, [IntPtr]::Zero, $x, $y, 0, 0, 0x0015)   # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
   } catch {}
 }
@@ -217,6 +255,7 @@ function Shot($h, [string]$out) {
   try { [W]::Shot($h, $out) } catch { Write-Host "note: window screenshot failed ($($_.Exception.Message)): $out" }
 }
 function FocusWin($h) {
+  if ($script:FocBackground) { Write-Host 'note: background mode, focus skipped'; return }
   if (-not (Test-FocWin $h)) { Write-Host 'note: no window to focus'; return }
   $ok = [W]::Focus($h); if (-not $ok) { Write-Host 'WARNING: could not focus window' }; Start-Sleep -Milliseconds 300
 }
@@ -319,4 +358,14 @@ function Wait-CopyWindow([string]$Copy, [int]$Timeout = 120, [int]$NotPid = 0) {
   }
   return [IntPtr]::Zero
 }
-function HoldKey($h, [byte]$sc, [int]$ms) { if (-not (Test-FocWin $h)) { Write-Host 'note: no window, key skipped'; return }; FocusWin $h; [W]::keybd_event(0,$sc,8,[UIntPtr]::Zero); Start-Sleep -Milliseconds $ms; [W]::keybd_event(0,$sc,10,[UIntPtr]::Zero) }
+# -Copy names the test copy that owns the window; required in background mode (the `input` command goes to that copy).
+function HoldKey($h, [byte]$sc, [int]$ms, [string]$Copy = "") {
+  if ($script:FocBackground) {
+    if (-not $Copy) { Write-Host 'note: background HoldKey needs -Copy, key skipped'; return }
+    $name = $script:FocKeyNames[[int]$sc]
+    if ($name) { Send-Cmd $Copy "input hold $name $ms" } else { Send-Cmd $Copy ("input key 0x{0:x2} {1}" -f $sc, $ms) }
+    for ($i = 0; $i -lt 40 -and (Test-Path "E:\FoC-coop\$Copy\Binaries\foc_cmd.txt"); $i++) { Start-Sleep -Milliseconds 250 }
+    return
+  }
+  if (-not (Test-FocWin $h)) { Write-Host 'note: no window, key skipped'; return }; FocusWin $h; [W]::keybd_event(0,$sc,8,[UIntPtr]::Zero); Start-Sleep -Milliseconds $ms; [W]::keybd_event(0,$sc,10,[UIntPtr]::Zero)
+}

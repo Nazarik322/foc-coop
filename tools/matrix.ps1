@@ -12,12 +12,14 @@ param(
   [switch]$Look,            # in-game screenshots of host and guest before/after both walk forward (injected input, no focus)
   [switch]$Keep,            # leave both games running after the last map
   [switch]$Steam,           # through FoCRelay (Steam Spacewar; test copies use the mock steam_api.dll)
+  [switch]$Background,      # no focus, no real input: keys go through the mod's `input` commands (owner uses the PC)
   [string]$HostCopy = "A",  # test copy that hosts
   [string]$GuestCopy = "B", # test copy that joins
   [string]$SlotOwner = "",  # slot lease owner (default $env:FOC_LANE, else "manual")
   [switch]$NoSlot           # nested call: the caller already holds the slot lease
 )
 . "$PSScriptRoot\dev.ps1"
+if ($Background) { Enable-FocBackground }
 New-Item -ItemType Directory -Force $Out | Out-Null
 $report = Join-Path $Out "report.txt"
 $pass = 0; $fail = 0
@@ -73,7 +75,7 @@ function ImgDiff($p1, $p2) {   # mean absolute difference of 32x18 grayscale thu
 function Look-Both($map, $pidA, $pidB) {
   Shot-Both $map "1before"
   $a0 = LocalPos $HostCopy; $b0 = LocalPos $GuestCopy
-  $hB = Wait-FocWindow $pidB 5; HoldKey $hB 0x11 3000; Start-Sleep 2
+  $hB = Wait-FocWindow $pidB 5; HoldKey $hB 0x11 3000 -Copy $GuestCopy; Start-Sleep 2
   $a1 = LocalPos $HostCopy; $b1 = LocalPos $GuestCopy
   Shot-Both $map "2after"
   $hm = Dist $a0 $a1; $gm = Dist $b0 $b1
@@ -140,9 +142,16 @@ foreach ($map in $Maps) {
   $pickChars = {
     # Escalation: both pick a character (host: Right then Enter, the default one is locked, see BUGS B3).
     # The guest's character screen needs time after joining: an early Enter there drops it back to the main menu.
-    $hB = Wait-FocWindow $pidB 30
-    FocusWin $hB; [W]::Key(0x0D); Start-Sleep 2
-    FocusWin $hA; [W]::Key(0x27); Start-Sleep -Milliseconds 700; [W]::Key(0x0D)
+    if ($Background) {
+      # no focus: the mod's injected keys drive the pick (same scan codes as the real keys below)
+      Send-CmdWait $GuestCopy "input tap ENTER"; Start-Sleep 2
+      Send-CmdWait $HostCopy "input tap RIGHT"; Start-Sleep -Milliseconds 700
+      Send-CmdWait $HostCopy "input tap ENTER"
+    } else {
+      $hB = Wait-FocWindow $pidB 30
+      FocusWin $hB; [W]::Key(0x0D); Start-Sleep 2
+      FocusWin $hA; [W]::Key(0x27); Start-Sleep -Milliseconds 700; [W]::Key(0x0D)
+    }
   }
   if (-not $reason -and -not $isStory) { Start-Sleep 25; & $pickChars }
   if (-not $reason) {
@@ -158,7 +167,7 @@ foreach ($map in $Maps) {
     # 4. both pawns move (real key presses; DirectInput needs scan codes)
     $before = Read-FocState $HostCopy
     $hA = Wait-FocWindow $pidA 5; $hB = Wait-FocWindow $pidB 5
-    HoldKey $hA 0x11 1500; HoldKey $hB 0x11 1500; Start-Sleep 2
+    HoldKey $hA 0x11 1500 -Copy $HostCopy; HoldKey $hB 0x11 1500 -Copy $GuestCopy; Start-Sleep 2
     $after = Read-FocState $HostCopy
     foreach ($i in 0..($after.players.Count - 1)) {
       $p0 = $before.players | Where-Object { $_.pc -eq $after.players[$i].pc }
@@ -195,5 +204,5 @@ foreach ($map in $Maps) {
   $line
   if (-not $Keep) { Stop-Foc @stopArgs }
 }
-} finally { if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }
+} finally { Disable-FocBackground; if (-not $NoSlot) { Exit-FocSlot -Owner $slotOwnerName } }
 "SUMMARY: pass=$pass fail=$fail (logs in $Out)"
