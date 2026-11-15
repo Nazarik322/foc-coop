@@ -141,6 +141,7 @@ static void TickTraceAll(const TickObjs& t) {
     TickCineHide(t);    // scene.inc: other players' pawns hidden on guests during scenes (B5)
     TickPartShow(t);    // scene.inc: other players' hidden body parts (B63)
     TickCubeFix();      // scene.inc: reflection cube map actors kept on clients (B5)
+    TickAnimRebind(t);  // scene.inc: scene robots' animations bound again (Ratchet T-pose)
     TickLightFix(t);    // scene.inc: part meshes lit by their master's light environment (B5)
     TickScriptDown(t);
     TickGfxDiag(t);

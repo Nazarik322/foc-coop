@@ -50,6 +50,8 @@ static void LightFixCommand();                  // scene.inc
 static void LightGuardTestCommand();            // scene.inc
 static void FullDumpCommand(const char* file);  // scene.inc
 static void GroupSwapCommand(const char* args); // scene.inc
+static void AnimBindCommand(const char* args);  // scene.inc
+static void AnimUnbindCommand(const char* label); // scene.inc
 static void SoundInfoCommand(const char* file);  // scene.inc
 static void NameFindCommand(const char* args);    // scene.inc
 static void LightDumpCommand(const char* file);   // scene.inc
@@ -439,6 +441,8 @@ static void RunCommandNow(const std::string& cmd) {
     if (cmd == "lightguardtest") { LightGuardTestCommand(); return; }
     if (cmd.rfind("fulldump ", 0) == 0) { FullDumpCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("groupswap ", 0) == 0) { GroupSwapCommand(cmd.c_str() + 10); return; }
+    if (cmd.rfind("animbind ", 0) == 0) { AnimBindCommand(cmd.c_str() + 9); return; }
+    if (cmd.rfind("animunbind ", 0) == 0) { AnimUnbindCommand(cmd.c_str() + 11); return; }
     if (cmd.rfind("meshinfo ", 0) == 0) { MeshInfoCommand(cmd.c_str() + 9); return; }
     if (cmd.rfind("propat ", 0) == 0) { PropAtCommand(cmd.c_str() + 7); return; }
     if (cmd.rfind("kimpulse ", 0) == 0) { KImpulseCommand(cmd.c_str() + 9); return; }

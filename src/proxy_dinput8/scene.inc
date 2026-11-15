@@ -626,13 +626,113 @@ static void GroupSwapCommand(const char* args) {
     static MirrorProp ga = {}; FieldPropFind("InterpGroupInst", "GroupActor", ga); if (ga.off <= 0) { Log("groupswap: GroupActor not found"); return; }
     BYTE* from = FindActorByLabel(a); BYTE* to = FindActorByLabel(b);
     if (!IsObjFast(from) || !IsObjFast(to)) { Log("groupswap: %s or %s not found", a, b); return; }
-    unsigned sid = ClassIdByName("SeqAct_Interp"); TArr* go = GObj(); int n = 0;
-    for (int i = 0; i < go->Num && sid; i++) {
-        BYTE* o = (BYTE*)go->Data[i]; if (!o || (*(unsigned*)(o + 0x14) & 0x1fff) != sid || !Rd(o, 0xe4)) continue;
+    static MirrorProp mact = {}; FieldPropFind("MatineeActor", "InterpAction", mact);
+    unsigned mid = ClassIdByName("MatineeActor"); TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num && mid && mact.off > 0; i++) {
+        BYTE* m = (BYTE*)go->Data[i]; if (!m || (*(unsigned*)(m + 0x14) & 0x1fff) != mid) continue;
+        BYTE* o = *(BYTE**)(m + mact.off); if (!IsObjFast(o) || !Rd(o, 0xe4)) continue;
         TArr* gi = (TArr*)(o + 0xd8); if (gi->Num <= 0 || gi->Num > 200 || !Rd(gi->Data, gi->Num * 4)) continue;
-        for (int g = 0; g < gi->Num; g++) { BYTE* x = (BYTE*)gi->Data[g]; if (IsObjFast(x) && *(BYTE**)(x + ga.off) == from) { *(BYTE**)(x + ga.off) = to; n++; } }
+        for (int g = 0; g < gi->Num; g++) {
+            BYTE* x = (BYTE*)gi->Data[g]; if (!IsObjFast(x)) continue; BYTE* act = *(BYTE**)(x + ga.off);
+            if (act == from) { *(BYTE**)(x + ga.off) = to; n++; }
+            else if (IsObjFast(act)) { char cn[48] = ""; ClassNameOf(act, cn, sizeof(cn)); if (strstr(cn, "Pawn")) { char an[64] = ""; ObjLabel(act, an, sizeof(an)); Log("groupswap: group actor %s (%s) left as is", an, cn); } }
+        }
     }
     Log("groupswap: %s -> %s in %d group instance(s) (GroupActor +0x%x)", a, b, n, ga.off);
+}
+// `animbind <owner class substring> <file>` (Ratchet T-pose on guests, 2026-10-26): every AnimNodeSequence of matching
+// owners' meshes with its AnimSeqName and AnimSeq; the mesh's AnimSets (labels); for nodes with a name but no AnimSeq,
+// which loaded AnimSet holds a sequence of that name.
+static void AnimBindCommand(const char* args) {
+    char want[64] = "", file[MAX_PATH] = ""; if (sscanf_s(args, "%63s %259s", want, (unsigned)sizeof(want), file, (unsigned)sizeof(file)) < 2) return;
+    static MirrorProp sk = {}, nm = {}, as = {}, sets = {}, seqs = {}, sname = {};
+    FieldPropFind("AnimNode", "SkelComponent", sk); FieldPropFind("AnimNodeSequence", "AnimSeqName", nm); FieldPropFind("AnimNodeSequence", "AnimSeq", as);
+    FieldPropFind("SkeletalMeshComponent", "AnimSets", sets); FieldPropFind("AnimSet", "Sequences", seqs); FieldPropFind("AnimSequence", "SequenceName", sname);
+    FILE* f = nullptr; fopen_s(&f, file, "w"); if (!f) return;
+    fprintf(f, "offsets SkelComponent +%x AnimSeqName +%x AnimSeq +%x AnimSets +%x Sequences +%x SequenceName +%x\n", sk.off, nm.off, as.off, sets.off, seqs.off, sname.off);
+    TArr* go = GObj(); unsigned setId = ClassIdByName("AnimSet"); int n = 0;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char cn[64] = ""; ClassNameOf(o, cn, sizeof(cn)); if (!strstr(cn, "AnimNodeSequence") || sk.off <= 0) continue;
+        BYTE* c = *(BYTE**)(o + sk.off); if (!IsObjFast(c)) continue;
+        BYTE* ow = *(BYTE**)(c + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, want)) continue;
+        char on[64] = "", sn[96] = "None", sq[64] = "-"; ObjLabel(ow, on, sizeof(on));
+        if (nm.off > 0) NameAt((int)(*(unsigned*)(o + nm.off) >> 14), sn, sizeof(sn));
+        BYTE* q = as.off > 0 ? *(BYTE**)(o + as.off) : nullptr; if (IsObjFast(q)) ObjLabel(q, sq, sizeof(sq));
+        if (!strcmp(sn, "None")) continue;
+        fprintf(f, "NODE %s seq=%s obj=%s vt=%lx node=%p", on, sn, sq, (unsigned long)ExeVa(*(void**)o), o);
+        TArr* ms = sets.off > 0 ? (TArr*)(c + sets.off) : nullptr;
+        if (ms && Rd(ms, 12) && ms->Num >= 0 && ms->Num < 64 && Rd(ms->Data, ms->Num * 4)) { fprintf(f, " meshsets=%d:", ms->Num); for (int k = 0; k < ms->Num; k++) { char l[64] = "?"; if (IsObjFast((BYTE*)ms->Data[k])) ObjLabel((BYTE*)ms->Data[k], l, sizeof(l)); fprintf(f, " %s", l); } }
+        if (!IsObjFast(q) && setId && seqs.off > 0 && sname.off > 0) {
+            int want_idx = (int)(*(unsigned*)(o + nm.off) >> 14);
+            for (int j = 0; j < go->Num; j++) {
+                BYTE* st = (BYTE*)go->Data[j]; if (!st || (*(unsigned*)(st + 0x14) & 0x1fff) != setId) continue;
+                TArr* sa = (TArr*)(st + seqs.off); if (!Rd(sa, 12) || sa->Num <= 0 || sa->Num > 2000 || !Rd(sa->Data, sa->Num * 4)) continue;
+                for (int k = 0; k < sa->Num; k++) { BYTE* a = (BYTE*)sa->Data[k]; if (IsObjFast(a) && (int)(*(unsigned*)(a + sname.off) >> 14) == want_idx) { char l[64] = "", al[64] = ""; ObjLabel(st, l, sizeof(l)); ObjLabel(a, al, sizeof(al)); fprintf(f, " FOUND-IN %s (%s)", l, al); } }
+            }
+        }
+        fprintf(f, "\n"); n++;
+    }
+    fclose(f); Log("animbind: %d node(s) of '%s' -> %s", n, want, file);
+}
+// Ratchet in T-pose at the start of L01 on guests (owner 2026-10-26; seen in sessions/gs3): the scene robot's
+// AnimNodeSequence has its AnimSeqName (L_01_WakingUp_RatchetLookat_idle_RB_Ratchet) but AnimSeq (+0xa4) stayed null on
+// the guest, while the host has the AnimSequence. UAnimNodeSequence::SetAnim (vtable +0x190, ghidra 0x8a6c40, thiscall
+// with the packed FName) looks the sequence up only if the component already has its SkeletalMesh (+0x208); on a guest
+// the node can be set before that and is never set again. Fix (ini `animrebind`, default 1): every 2 s on story maps,
+// nodes of scene robots (MeshSetActor) with a name but no sequence get SetAnim(name) again (each at most 15 times per map).
+static std::unordered_map<BYTE*, int> g_rebindTries;
+static int AnimRebindPass(bool verbose) {
+    static MirrorProp sk = {}, nm = {}, as = {};
+    FieldPropFind("AnimNode", "SkelComponent", sk); FieldPropFind("AnimNodeSequence", "AnimSeqName", nm); FieldPropFind("AnimNodeSequence", "AnimSeq", as);
+    if (sk.off <= 0 || nm.off <= 0 || as.off <= 0) return 0;
+    TArr* go = GObj(); int fixed = 0; BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    static void* setAnimVt = nullptr;
+    for (int i = 0; i < go->Num; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        static signed char isSeq[8192]; unsigned cid = *(unsigned*)(o + 0x14) & 0x1fff;
+        if (!isSeq[cid]) { char c0[48] = ""; ClassNameOf(o, c0, sizeof(c0)); isSeq[cid] = c0[0] ? (strstr(c0, "AnimNodeSequence") ? 1 : -1) : 0; }
+        if (isSeq[cid] != 1) continue;
+        unsigned name = *(unsigned*)(o + nm.off); if (!name || *(BYTE**)(o + as.off)) continue;
+        char cn[48] = ""; ClassNameOf(o, cn, sizeof(cn));
+        BYTE* c = *(BYTE**)(o + sk.off); if (!IsObjFast(c) || !Rd(c + 0x208, 4) || !*(BYTE**)(c + 0x208)) continue;
+        BYTE* ow = *(BYTE**)(c + 0x3c); if (!IsObjFast(ow)) continue;
+        char oc[64] = ""; ClassNameOf(ow, oc, sizeof(oc)); if (!strstr(oc, "MeshSetActor")) continue;
+        void* fn = (*(void***)o)[0x190 / 4];
+        if (ExeVa(fn) != 0x8a6c40) { static int warned = 0; if (!warned++) Log("animrebind: vtable +0x190 of %s is %lx, not SetAnim - off", cn, (unsigned long)ExeVa(fn)); continue; }
+        int& tries = g_rebindTries[o]; if (tries >= 15) continue; tries++;
+        __try { CallThis3(fn, o, name, 0, 0); } __except (EXCEPTION_EXECUTE_HANDLER) { Log("animrebind: SetAnim raised %08lx", GetExceptionCode()); continue; }
+        if (*(BYTE**)(o + as.off)) {
+            fixed++;
+            if (verbose) { char on[64] = "", sn[96] = ""; ObjLabel(ow, on, sizeof(on)); NameAt((int)(name >> 14), sn, sizeof(sn)); Log("animrebind: %s animation %s bound again", on, sn); }
+        }
+    }
+    (void)base; (void)setAnimVt;
+    return fixed;
+}
+static void TickAnimRebind(const TickObjs& t) {
+    static DWORD next = 0; static char lastMap[96] = ""; DWORD now = GetTickCount();
+    if ((LONG)(now - next) < 0 || !g_animRebind) return; next = now + 2000;
+    if (!StoryMapNow(t)) { lastMap[0] = 0; return; }
+    char m[96]; MapName(t, m, sizeof(m)); if (strcmp(m, lastMap)) { strcpy_s(lastMap, m); g_rebindTries.clear(); }
+    static int logged = 0; int n = AnimRebindPass(logged < 20);
+    if (n && logged++ < 20) Log("animrebind: %d scene robot animation(s) bound again", n);
+}
+// `animunbind <actor label>` (test for animrebind): clears AnimSeq of that actor's sequence nodes that have a name
+static void AnimUnbindCommand(const char* label) {
+    static MirrorProp sk = {}, nm = {}, as = {};
+    FieldPropFind("AnimNode", "SkelComponent", sk); FieldPropFind("AnimNodeSequence", "AnimSeqName", nm); FieldPropFind("AnimNodeSequence", "AnimSeq", as);
+    TArr* go = GObj(); int n = 0;
+    for (int i = 0; i < go->Num && sk.off > 0; i++) {
+        BYTE* o = (BYTE*)go->Data[i]; if (!IsObjFast(o)) continue;
+        char cn[48] = ""; ClassNameOf(o, cn, sizeof(cn)); if (!strstr(cn, "AnimNodeSequence")) continue;
+        if (!*(unsigned*)(o + nm.off) || !*(BYTE**)(o + as.off)) continue;
+        BYTE* c = *(BYTE**)(o + sk.off); if (!IsObjFast(c)) continue; BYTE* ow = *(BYTE**)(c + 0x3c); if (!IsObjFast(ow)) continue;
+        char on[64] = ""; ObjLabel(ow, on, sizeof(on)); if (strcmp(on, label)) continue;
+        *(BYTE**)(o + as.off) = nullptr; g_rebindTries.erase(o); n++;
+    }
+    Log("animunbind: %s -> %d node(s) cleared", label, n);
 }
 struct FullDumpProp { char n[64]; char t[24]; int off; unsigned mask; };
 struct FullDumpCtx { FILE* f; int sup; std::unordered_map<BYTE*, std::vector<FullDumpProp>>* props; std::unordered_map<std::string, int>* seen; MirrorProp* skm; MirrorProp* stm; const char* only; };

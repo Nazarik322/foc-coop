@@ -734,6 +734,19 @@ crash - the crash run is in the friend's Binaries\foc_logs, not received yet), h
 - Still open: confirm with the friend on a real 2-PC run that the crash is gone (log line "guard: lighting draw with a
   null light skipped" shows when the guard caught one).
 
+### B67. Ratchet in T-pose at the start of L01 on the guest - FIXED 2026-10-26 (mock, `animrebind`)
+- Owner 2026-10-26: "Ratchet is in T-pose at the start when you first aim at the drone".
+- Seen in sessions/gs3 (guest: Ratchet with arms spread in front, host: kneeling). `animbind` (new): Ratchet's scene
+  actor TnMeshSetActorMAT_15804 has an AnimNodeSequence with AnimSeqName L_01_WakingUp_RatchetLookat_idle_RB_Ratchet;
+  host AnimSeq = AnimSequence_4577, guest null in that run (bound in other runs - a race). Same AnimSequence / AnimSet
+  counts on both sides.
+- UAnimNodeSequence::SetAnim = vtable +0x190 (ghidra 0x8a6c40, thiscall, packed FName): it looks the sequence up only if
+  the component already has its SkeletalMesh (+0x208); a node set before that keeps AnimSeq null for good.
+- Fix (scene.inc TickAnimRebind, ini `animrebind`, default 1): every 2 s on story maps, scene-robot (MeshSetActor)
+  nodes with a name but no sequence get SetAnim(name) again (at most 15 tries per node and map; checks the slot holds
+  0x8a6c40). Test `tools/animtest.ps1` (animunbind clears Ratchet's nodes, animbind checks): PASS bound again within
+  a tick; twin animrebind=0 stays unbound.
+
 ### B65. High Quality Audio Logs: audio logs ignore the volume sliders (always full volume) - FIXED 2026-10-25 (installer)
 - Owner 2026-10-25: with the mod installed the audio logs play at maximum volume whatever the sliders say.
 - Cause (unpacked both TransGame.xxx - UE3, zlib chunks - and diffed): the mod changes only one thing, the

@@ -239,6 +239,7 @@ static bool g_langRu = false;
 static bool g_borderless = true;   // ini borderless: windowed game fills its monitor without a frame (overlay.inc TickBorderless)
 static const char* Tr(const char* en, const char* ru) { return g_langRu ? ru : en; }
 static bool g_lightGuard = true;  // ini lightguard: VEH guard for the null-light draw crash (ghidra 0xd0cb1b, 1.0.2)
+static bool g_animRebind = true; // ini animrebind: scene robots' animations bound again on clients (scene.inc)
 static bool g_cubeFix = true;   // ini cubefix: level reflection cube map actors kept on clients (scene.inc, B5)
 static bool g_lightFix = true;  // ini lightfix: part meshes use their master mesh's light environment (scene.inc, B5)
 static bool g_cineHide = true;  // ini cinehide: guests hide other players' pawns during scenes (scene.inc, B5)
@@ -2028,6 +2029,7 @@ static void LoadConfig(const wchar_t* dir) {
         g_lightFix = GetPrivateProfileIntW(L"foc_coop", L"lightfix", 1, ini2) != 0;
         g_lightGuard = GetPrivateProfileIntW(L"foc_coop", L"lightguard", 1, ini2) != 0;
         g_cubeFix = GetPrivateProfileIntW(L"foc_coop", L"cubefix", 1, ini2) != 0;
+        g_animRebind = GetPrivateProfileIntW(L"foc_coop", L"animrebind", 1, ini2) != 0;
         g_borderless = GetPrivateProfileIntW(L"foc_coop", L"borderless", 1, ini2) != 0;
         { wchar_t lg[16] = L""; GetPrivateProfileStringW(L"foc_coop", L"language", L"", lg, 16, ini2); g_langRu = !_wcsnicmp(lg, L"rus", 3); }
         g_autoRestart = GetPrivateProfileIntW(L"foc_coop", L"autorestart", 1, ini2) != 0;

@@ -277,6 +277,10 @@ targets: pc pawn rpc rpawn game pri rpri obj:Name_N. Any other text = engine con
   array lists the meshes it reflects into.
 - `fulldump <file> [class substring]` + `python tools/fulldiff.py <host> <guest>` = class counts, objects on one side
   only, property differences grouped. Commands to the game go through a one-entry queue: wait ~2 s between them.
+- AnimNodeSequence: SkelComponent +0x28, AnimSeqName +0x90, AnimSeq +0xa4, AnimLinkupIndex +0xa8; SetAnim = vtable
+  +0x190 (ghidra 0x8a6c40); vtable of AnimNodeSequence ghidra 0x1749898. SkeletalMeshComponent.SkeletalMesh +0x208.
+- Matinee groups: MatineeActor.InterpAction (FieldPropFind), SeqAct_Interp GroupInst +0xd8, InterpGroupInst.GroupActor
+  +0x2c. Pawn in a group on the guest = the guest's own pawn (host: the host's); BeginAnimControl has no Function object.
 
 ## Packages and installer notes (2026-10-25)
 - TransGame.xxx: UE3 package v846/181, fully chunk-compressed (zlib, 128 KB blocks); chunk table in the summary at an
